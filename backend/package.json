@@ -27,6 +27,7 @@
     "pdf-lib": "^1.17.1",
     "pdf-parse": "^1.1.1",
     "pg": "^8.20.0",
+    "@anthropic-ai/sdk": "^0.56.0",
     "web-push": "^3.6.7"
   }
 }

@@ -1,5 +1,7 @@
-const GROQ_API_URL = 'https://api.groq.com/openai/v1/chat/completions'
-const MODEL = 'llama-3.3-70b-versatile'
+const Anthropic = require('@anthropic-ai/sdk')
+
+const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY })
+const MODEL = 'claude-haiku-4-5'
 
 const SYSTEM_PROMPT = `Ты — система анализа кинопроизводственных документов.
 Разбери КПП или сценарий и верни строго JSON по схеме ниже.
@@ -25,44 +27,29 @@ const SYSTEM_PROMPT = `Ты — система анализа кинопроиз
 }`
 
 async function parseDocument(text) {
-  const resp = await fetch(GROQ_API_URL, {
-    method: 'POST',
-    headers: {
-      'Authorization': `Bearer ${process.env.GROQ_API_KEY}`,
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify({
-      model: MODEL,
-      messages: [
-        { role: 'system', content: SYSTEM_PROMPT },
-        { role: 'user',   content: `Документ для анализа:\n\n${text.slice(0, 12000)}` },
-      ],
-      temperature: 0.1,
-      max_tokens: 8192,
-    }),
+  const response = await client.messages.create({
+    model: MODEL,
+    max_tokens: 8192,
+    system: SYSTEM_PROMPT,
+    messages: [
+      { role: 'user', content: `Документ для анализа:\n\n${text.slice(0, 12000)}` },
+    ],
   })
 
-  if (!resp.ok) {
-    const err = await resp.text()
-    throw new Error(`Groq error: ${err}`)
-  }
-
-  const data = await resp.json()
-  const content = data.choices?.[0]?.message?.content || ''
-  const finishReason = data.choices?.[0]?.finish_reason
+  const content = response.content.find(b => b.type === 'text')?.text || ''
+  const stopReason = response.stop_reason
 
   if (!content) {
-    console.error('Groq returned empty content, finish_reason:', finishReason)
-    throw new Error('Groq returned empty response')
+    console.error('Claude returned empty content, stop_reason:', stopReason)
+    throw new Error('Claude returned empty response')
   }
 
-  // Strip any accidental markdown fences
+  // Убрать случайные markdown-фенсы
   let clean = content.replace(/^```(?:json)?/m, '').replace(/```$/m, '').trim()
 
-  // If response was truncated (length limit), try to fix JSON
-  if (finishReason === 'length') {
-    console.warn('Groq response truncated, attempting JSON repair')
-    // Close any open arrays/objects
+  // Если ответ обрезан по лимиту токенов — починить JSON
+  if (stopReason === 'max_tokens') {
+    console.warn('Claude response truncated, attempting JSON repair')
     let opens = 0, openArr = 0
     for (const ch of clean) {
       if (ch === '{') opens++
@@ -77,13 +64,13 @@ async function parseDocument(text) {
   try {
     return JSON.parse(clean)
   } catch (err) {
-    console.error('Groq JSON parse failed, first 500 chars:', clean.substring(0, 500))
+    console.error('Claude JSON parse failed, first 500 chars:', clean.substring(0, 500))
     console.error('Last 200 chars:', clean.substring(clean.length - 200))
     throw err
   }
 }
 
-// Compute delta between two parsed_data JSONs
+// Вычислить дельту между двумя версиями parsed_data
 function computeDelta(oldData, newData) {
   const delta = { added: [], changed: [], removed: [] }
   const categories = ['props', 'costumes', 'decoration', 'makeup', 'stunts', 'pyrotechnics', 'auto']
