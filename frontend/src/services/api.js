@@ -7,7 +7,7 @@ function getToken() {
 async function request(method, path, body, opts = {}) {
   const headers = { 'Content-Type': 'application/json' }
   const token = getToken()
-  if (token) headers['Authorization'] = `Bearer ${token}`
+  if (token) headers['X-Auth-Token'] = token
 
   const config = {
     method,
@@ -19,7 +19,7 @@ async function request(method, path, body, opts = {}) {
     config.body = JSON.stringify(body)
   } else if (body instanceof FormData) {
     delete config.headers['Content-Type'] // browser sets multipart boundary
-    config.headers = { Authorization: `Bearer ${token}` }
+    config.headers = { 'X-Auth-Token': token }
     config.body = body
   }
 

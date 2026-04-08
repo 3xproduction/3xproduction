@@ -178,8 +178,11 @@ router.post('/recover/reset', async (req, res) => {
 })
 
 // POST /auth/seed-test — create test accounts for all roles (idempotent, skips existing)
+// Temporarily allow in production for initial setup (protected by secret header)
 router.post('/seed-test', (req, res, next) => {
-  if (process.env.NODE_ENV === 'production') return res.status(404).json({ error: 'Not found' })
+  if (process.env.NODE_ENV === 'production' && req.headers['x-seed-key'] !== process.env.JWT_SECRET) {
+    return res.status(404).json({ error: 'Not found' })
+  }
   next()
 }, async (req, res) => {
   try {

@@ -2,11 +2,9 @@ const jwt = require('jsonwebtoken')
 const db  = require('../db')
 
 async function verifyJWT(req, res, next) {
-  const header = req.headers.authorization
-  if (!header || !header.startsWith('Bearer ')) {
-    return res.status(401).json({ error: 'Unauthorized' })
-  }
-  const token = header.slice(7)
+  const header = req.headers['x-auth-token'] || req.headers.authorization
+  if (!header) return res.status(401).json({ error: 'Unauthorized' })
+  const token = header.startsWith('Bearer ') ? header.slice(7) : header
   try {
     const payload = jwt.verify(token, process.env.JWT_SECRET)
 
