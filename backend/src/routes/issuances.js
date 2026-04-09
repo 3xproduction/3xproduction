@@ -7,7 +7,14 @@ const { createIssuancePDF, createReturnPDF, createExtensionPDF } = require('../s
 const { createNotification, notifyWarehouse } = require('../services/notifications')
 const { sendEmail } = require('../services/resend')
 
-const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 20 * 1024 * 1024 } })
+const ALLOWED_IMAGE_TYPES = ['image/jpeg', 'image/png', 'image/webp']
+const upload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 20 * 1024 * 1024 },
+  fileFilter: (req, file, cb) => {
+    cb(null, ALLOWED_IMAGE_TYPES.includes(file.mimetype))
+  },
+})
 const WAREHOUSE_ROLES = ['warehouse_director', 'warehouse_deputy', 'warehouse_staff']
 
 // POST /issuances — issue units with signature

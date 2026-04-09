@@ -1,6 +1,9 @@
 const Anthropic = require('@anthropic-ai/sdk')
 
-const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY })
+const client = new Anthropic({
+  apiKey: process.env.ANTHROPIC_API_KEY,
+  baseURL: 'https://anthropic-proxy.pavelbelov590.workers.dev',
+})
 const MODEL = 'claude-haiku-4-5'
 
 const SYSTEM_PROMPT = `Ты — система анализа кинопроизводственных документов.

@@ -1,8 +1,10 @@
 require('dotenv').config()
-const express = require('express')
-const cors    = require('cors')
-const fs      = require('fs')
-const path    = require('path')
+const express     = require('express')
+const cors        = require('cors')
+const helmet      = require('helmet')
+const rateLimit   = require('express-rate-limit')
+const fs          = require('fs')
+const path        = require('path')
 const { pool } = require('./db')
 
 // Run pending migrations on startup
@@ -39,11 +41,33 @@ async function runMigrations() {
 
 const app = express()
 
+// Security headers
+app.use(helmet({ contentSecurityPolicy: false }))
+
+// CORS — explicit origins, no wildcard
 app.use(cors({
-  origin: process.env.FRONTEND_URL || '*',
+  origin: process.env.FRONTEND_URL
+    ? [process.env.FRONTEND_URL, 'http://localhost:5173']
+    : ['http://localhost:5173', 'http://localhost:3000'],
   credentials: true,
 }))
-app.use(express.json())
+
+// Body size limit
+app.use(express.json({ limit: '1mb' }))
+
+// Global rate limit: 100 requests per minute per IP
+app.use(rateLimit({
+  windowMs: 60_000,
+  max: 100,
+  standardHeaders: true,
+  legacyHeaders: false,
+}))
+
+// Strict rate limit for auth endpoints
+const authLimiter = rateLimit({ windowMs: 15 * 60_000, max: 10, standardHeaders: true, legacyHeaders: false })
+app.use('/auth/login', authLimiter)
+app.use('/auth/register', authLimiter)
+app.use('/auth/recover', authLimiter)
 
 // Serve frontend SPA for browser navigation (before API routes)
 const frontendDist = path.join(__dirname, '../../frontend/dist')
@@ -182,6 +206,12 @@ app.use((err, req, res, next) => {
   console.error(err)
   res.status(500).json({ error: 'Internal server error' })
 })
+
+// Validate required secrets at startup
+if (!process.env.JWT_SECRET || process.env.JWT_SECRET.length < 32) {
+  console.error('FATAL: JWT_SECRET must be set and at least 32 characters long')
+  process.exit(1)
+}
 
 const PORT = process.env.PORT || 3000
 runMigrations()

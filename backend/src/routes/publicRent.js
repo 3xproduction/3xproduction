@@ -1,7 +1,12 @@
-const router = require('express').Router()
-const crypto = require('crypto')
-const db     = require('../db')
+const router    = require('express').Router()
+const crypto    = require('crypto')
+const rateLimit = require('express-rate-limit')
+const db        = require('../db')
 const { uploadFile } = require('../services/r2')
+
+// Rate limit for all public endpoints: 20 requests per minute per IP
+const publicLimiter = rateLimit({ windowMs: 60_000, max: 20, standardHeaders: true, legacyHeaders: false })
+router.use(publicLimiter)
 
 // GET /public/warehouse/:token — public catalog
 router.get('/warehouse/:token', async (req, res) => {

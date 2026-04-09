@@ -1,10 +1,24 @@
 const router = require('express').Router()
 const multer = require('multer')
+const Anthropic = require('@anthropic-ai/sdk')
+const sharp = require('sharp')
 const db     = require('../db')
 const { verifyJWT, checkRole } = require('../middleware/auth')
 const { uploadFile, deleteFile } = require('../services/r2')
 
-const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 20 * 1024 * 1024 } })
+const ALLOWED_IMAGE_TYPES = ['image/jpeg', 'image/png', 'image/webp']
+const upload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 20 * 1024 * 1024 },
+  fileFilter: (req, file, cb) => {
+    cb(null, ALLOWED_IMAGE_TYPES.includes(file.mimetype))
+  },
+})
+
+const anthropic = new Anthropic({
+  apiKey: process.env.ANTHROPIC_API_KEY,
+  baseURL: 'https://anthropic-proxy.pavelbelov590.workers.dev',
+})
 
 const DIRECTOR_ROLES = ['warehouse_director', 'warehouse_deputy']
 
@@ -38,6 +52,73 @@ router.get('/', verifyJWT, async (req, res) => {
   } catch (err) {
     console.error(err)
     res.status(500).json({ error: 'Server error' })
+  }
+})
+
+// GET /units/ai-test — test Anthropic API connectivity (public for debugging)
+router.get('/ai-test', async (req, res) => {
+  const start = Date.now()
+  try {
+    console.log('ai-test: starting, API key present:', !!process.env.ANTHROPIC_API_KEY)
+    const response = await anthropic.messages.create({
+      model: 'claude-haiku-4-5',
+      max_tokens: 20,
+      messages: [{ role: 'user', content: 'say ok' }],
+    })
+    console.log('ai-test: success in', Date.now() - start, 'ms')
+    res.json({ ok: true, text: response.content[0]?.text, ms: Date.now() - start })
+  } catch (err) {
+    console.error('ai-test: error in', Date.now() - start, 'ms:', err.message)
+    res.status(500).json({ error: err.message, code: err.status, ms: Date.now() - start })
+  }
+})
+
+// POST /units/recognize — AI photo recognition to auto-fill unit fields
+router.post('/recognize', verifyJWT, upload.single('photo'), async (req, res) => {
+  if (!req.file) return res.status(400).json({ error: 'No photo provided' })
+  if (!process.env.ANTHROPIC_API_KEY) return res.status(500).json({ error: 'AI not configured' })
+
+  const resized = await sharp(req.file.buffer)
+    .resize(800, 800, { fit: 'inside', withoutEnlargement: true })
+    .jpeg({ quality: 70 })
+    .toBuffer()
+  const base64 = resized.toString('base64')
+  const mediaType = 'image/jpeg'
+
+  try {
+    const response = await anthropic.messages.create({
+      model: 'claude-haiku-4-5',
+      max_tokens: 1024,
+      messages: [{
+        role: 'user',
+        content: [
+          {
+            type: 'image',
+            source: { type: 'base64', media_type: mediaType, data: base64 },
+          },
+          {
+            type: 'text',
+            text: `Ты — система распознавания предметов для склада кинопроизводства.
+Проанализируй фото и верни JSON с полями:
+- name: название предмета (кратко, по-русски)
+- category: одна из категорий: costumes, props, art_fill, dummy, auto, furniture, decor, scenery, tech, lighting, sound, camera, makeup, clothing, jewelry, other
+- period: временная эпоха/стиль — ОБЯЗАТЕЛЬНО заполни это поле. Примеры: "Современное", "Советское (1970-е)", "XVIII век", "Средневековье", "1960-е", "Античность". Если предмет современный — напиши "Современное"
+- description: краткое описание (цвет, состояние, материал, особенности)
+
+Все 4 поля обязательны, ни одно не может быть пустым. Отвечай ТОЛЬКО JSON, без markdown, без пояснений.`,
+          },
+        ],
+      }],
+    })
+
+    const text = response.content.find(b => b.type === 'text')?.text || ''
+    console.log('recognize: Claude response:', text.substring(0, 300))
+    const clean = text.replace(/^```(?:json)?/m, '').replace(/```$/m, '').trim()
+    const result = JSON.parse(clean)
+    res.json(result)
+  } catch (err) {
+    console.error('Photo recognition error:', err.message, err.status, err.error)
+    res.status(500).json({ error: err.message || 'Recognition failed' })
   }
 })
 

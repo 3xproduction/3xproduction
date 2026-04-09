@@ -6,7 +6,19 @@ const { parseDocumentFile } = require('../services/docParser')
 const { matchUnits } = require('../services/unitMatcher')
 const { parseDocument, computeDelta } = require('../services/groq')
 
-const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 50 * 1024 * 1024 } })
+const ALLOWED_DOC_TYPES = [
+  'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',       // .xlsx
+  'application/vnd.openxmlformats-officedocument.wordprocessingml.document', // .docx
+  'application/vnd.ms-excel',                                                // .xls
+  'application/pdf',
+]
+const upload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 15 * 1024 * 1024 },
+  fileFilter: (req, file, cb) => {
+    cb(null, ALLOWED_DOC_TYPES.includes(file.mimetype))
+  },
+})
 
 // Roles that can upload
 const UPLOAD_KPP_ROLES = [

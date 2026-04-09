@@ -73,6 +73,7 @@ export const units = {
   writeoff: (id, reason) => request('POST', `/units/${id}/writeoff`, { reason }),
   requestWriteoff: (id, reason) => request('POST', `/units/${id}/request-writeoff`, { reason }),
   uploadPhoto: (id, formData) => request('POST', `/units/${id}/photos`, formData),
+  recognize:   (formData) => request('POST', '/units/recognize', formData),
   deletePhoto: (id, photoId) => request('DELETE', `/units/${id}/photos/${photoId}`),
   history:  (id)   => request('GET', `/units/${id}/history`),
 }

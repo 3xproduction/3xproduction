@@ -178,7 +178,7 @@ export default function DashboardPage() {
                 Публичная ссылка
               </Button>
             )}
-            <Button variant="primary" onClick={() => navigate('/units')}>
+            <Button variant="primary" onClick={() => navigate('/units?add=1')}>
               <Plus size={15} />
               Новое
             </Button>

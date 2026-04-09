@@ -155,7 +155,7 @@ router.post('/recover/verify', async (req, res) => {
 router.post('/recover/reset', async (req, res) => {
   const { email, code, password } = req.body
   if (!email || !code || !password) return res.status(400).json({ error: 'Missing fields' })
-  if (password.length < 6) return res.status(400).json({ error: 'Password too short' })
+  if (password.length < 8) return res.status(400).json({ error: 'Password must be at least 8 characters' })
 
   try {
     const { rows } = await db.query(
@@ -177,10 +177,9 @@ router.post('/recover/reset', async (req, res) => {
   }
 })
 
-// POST /auth/seed-test — create test accounts for all roles (idempotent, skips existing)
-// Temporarily allow in production for initial setup (protected by secret header)
+// POST /auth/seed-test — create test accounts (disabled in production)
 router.post('/seed-test', (req, res, next) => {
-  if (process.env.NODE_ENV === 'production' && req.headers['x-seed-key'] !== process.env.JWT_SECRET) {
+  if (process.env.NODE_ENV === 'production') {
     return res.status(404).json({ error: 'Not found' })
   }
   next()
@@ -354,7 +353,7 @@ const { verifyJWT, checkRole } = require('../middleware/auth')
 router.patch('/password', verifyJWT, async (req, res) => {
   const { current, next } = req.body
   if (!current || !next) return res.status(400).json({ error: 'Missing fields' })
-  if (next.length < 6) return res.status(400).json({ error: 'Password too short' })
+  if (next.length < 8) return res.status(400).json({ error: 'Password must be at least 8 characters' })
   try {
     const { rows } = await db.query(`SELECT password_hash FROM users WHERE id=$1`, [req.user.id])
     if (!rows.length) return res.status(404).json({ error: 'User not found' })
