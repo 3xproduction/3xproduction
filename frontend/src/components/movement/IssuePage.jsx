@@ -32,6 +32,7 @@ export default function IssuePage() {
   const [selected, setSelected] = useState(new Set())
   const [photos, setPhotos] = useState({})
   const [deadline, setDeadline] = useState('')
+  const [issueDate, setIssueDate] = useState(new Date().toISOString().split('T')[0])
   const [receiverName, setReceiverName] = useState('')
   const [receiverId, setReceiverId] = useState('')
   const [gathered, setGathered] = useState({})
@@ -186,10 +187,17 @@ export default function IssuePage() {
               </div>
             ))}
 
-            <div style={{ marginTop: 16, marginBottom: 16 }}>
-              <div style={{ fontSize: 13, fontWeight: 500, marginBottom: 6 }}>Срок возврата</div>
-              <input type="date" value={deadline} onChange={e => setDeadline(e.target.value)}
-                style={{ width: '100%', height: 40, padding: '0 10px', border: '1px solid var(--border)', borderRadius: 'var(--radius-btn)', fontSize: 13, outline: 'none' }} />
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10, marginTop: 16, marginBottom: 16 }}>
+              <div>
+                <div style={{ fontSize: 13, fontWeight: 500, marginBottom: 6 }}>Дата выдачи</div>
+                <input type="date" value={issueDate} onChange={e => setIssueDate(e.target.value)}
+                  style={{ width: '100%', height: 40, padding: '0 10px', border: '1px solid var(--border)', borderRadius: 'var(--radius-btn)', fontSize: 13, outline: 'none' }} />
+              </div>
+              <div>
+                <div style={{ fontSize: 13, fontWeight: 500, marginBottom: 6 }}>Срок возврата</div>
+                <input type="date" value={deadline} onChange={e => setDeadline(e.target.value)}
+                  style={{ width: '100%', height: 40, padding: '0 10px', border: '1px solid var(--border)', borderRadius: 'var(--radius-btn)', fontSize: 13, outline: 'none' }} />
+              </div>
             </div>
 
             <Button fullWidth disabled={selected.size === 0 || !deadline} style={{ marginTop: 8 }}

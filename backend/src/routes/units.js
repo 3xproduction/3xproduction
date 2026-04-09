@@ -131,10 +131,19 @@ router.post('/', verifyJWT, async (req, res) => {
   const finalStatus = isDirector ? 'on_stock' : 'pending'
 
   try {
+    // Auto-generate inventory number if not provided
+    let inventorySerial = serial
+    if (!inventorySerial) {
+      const catPrefix = (category || 'XX').slice(0, 3).toUpperCase()
+      const { rows: countRows } = await db.query(`SELECT COUNT(*)::int AS cnt FROM units`)
+      const nextNum = (countRows[0]?.cnt || 0) + 1
+      inventorySerial = `${catPrefix}-${String(nextNum).padStart(5, '0')}`
+    }
+
     const { rows } = await db.query(
       `INSERT INTO units (name, category, serial, warehouse_id, cell_id, description, qty, condition, valuation, source, dimensions, status, period)
        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13) RETURNING *`,
-      [name, category, serial || null, warehouse_id || null, cell_id || null,
+      [name, category, inventorySerial, warehouse_id || null, cell_id || null,
        description || null, qty || 1, condition || null, valuation || null,
        source || null, dimensions || null, finalStatus, period || null]
     )

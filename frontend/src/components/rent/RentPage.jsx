@@ -160,7 +160,7 @@ const CONDITIONS = [
   { value: 'damaged', label: 'Повреждено', color: 'var(--red)' },
 ]
 
-const RETURN_STEPS = ['Детали сделки', 'Фото и состояние', 'Подпись арендатора', 'Подпись принимающего']
+const RETURN_STEPS = ['Детали сделки', 'Фото и состояние', 'Подпись арендатора', 'Штамп принимающего']
 
 function RentReturnModal({ deal, onClose, onDone }) {
   const [step, setStep] = useState(0)
@@ -169,6 +169,8 @@ function RentReturnModal({ deal, onClose, onDone }) {
   const [damages, setDamages] = useState({})
   const [photos, setPhotos] = useState({})
   const [renterSignature, setRenterSignature] = useState(null)
+  const [acceptorStamped, setAcceptorStamped] = useState(false)
+  const [returnSuccess, setReturnSuccess] = useState(false)
   const [loading, setLoading] = useState(false)
   const [unitsLoading, setUnitsLoading] = useState(true)
 
@@ -202,7 +204,8 @@ function RentReturnModal({ deal, onClose, onDone }) {
         })
         .join('; ')
       await rentApi.return(deal.id, { condition_notes: allNotes || undefined })
-      onDone()
+      setReturnSuccess(true)
+      setTimeout(() => onDone(), 2000)
     } catch (err) {
       alert(err.message || 'Ошибка возврата')
     } finally {
@@ -329,15 +332,39 @@ function RentReturnModal({ deal, onClose, onDone }) {
           </div>
         )}
 
-        {/* Step 3 — acceptor signature */}
-        {step === 3 && (
+        {/* Step 3 — acceptor stamp */}
+        {step === 3 && !returnSuccess && (
           <div>
             <div style={{ fontWeight: 600, marginBottom: 4 }}>Подпись принимающего</div>
-            <div style={{ fontSize: 13, color: 'var(--muted)', marginBottom: 16 }}>Сотрудник склада</div>
-            <SignatureCanvas onSave={data => handleReturn(data)} />
-            {loading && <div style={{ textAlign: 'center', marginTop: 12, color: 'var(--muted)', fontSize: 13 }}>Оформление возврата...</div>}
-            <div style={{ fontSize: 11, color: 'var(--muted)', marginTop: 10, textAlign: 'center' }}>После подписи сделка будет завершена, единицы вернутся на склад</div>
-            <Button variant="secondary" fullWidth style={{ marginTop: 12 }} onClick={() => setStep(2)}>Назад</Button>
+            <div style={{ fontSize: 13, color: 'var(--muted)', marginBottom: 16 }}>Нажмите на поле чтобы поставить штамп сотрудника склада</div>
+            <div onClick={() => setAcceptorStamped(true)} style={{
+              width: '100%', height: 100, border: '2px dashed var(--border)',
+              borderRadius: 'var(--radius-card)', display: 'flex', alignItems: 'center',
+              justifyContent: 'center', cursor: 'pointer', marginBottom: 16,
+              background: acceptorStamped ? 'var(--accent-dim)' : 'var(--bg)',
+              borderColor: acceptorStamped ? 'var(--accent)' : 'var(--border)',
+            }}>
+              {acceptorStamped ? (
+                <div style={{ textAlign: 'center' }}>
+                  <div style={{ fontSize: 14, fontWeight: 600, color: 'var(--accent)' }}>Штамп / Подпись</div>
+                  <div style={{ fontSize: 12, color: 'var(--accent)', marginTop: 4 }}>Сотрудник склада</div>
+                </div>
+              ) : (
+                <div style={{ color: 'var(--muted)', fontSize: 13 }}>Нажмите для подтверждения</div>
+              )}
+            </div>
+            <Button fullWidth disabled={!acceptorStamped || loading} onClick={() => handleReturn('stamp')}>
+              {loading ? 'Оформление...' : 'Оформить возврат'}
+            </Button>
+            <Button variant="secondary" fullWidth style={{ marginTop: 8 }} onClick={() => setStep(2)}>Назад</Button>
+          </div>
+        )}
+
+        {returnSuccess && (
+          <div style={{ textAlign: 'center', padding: '40px 0' }}>
+            <div style={{ fontSize: 40, marginBottom: 12 }}>✅</div>
+            <div style={{ fontWeight: 600, fontSize: 18, marginBottom: 6, color: 'var(--green)' }}>Успешно</div>
+            <div style={{ fontSize: 13, color: 'var(--muted)' }}>Возврат оформлен, подписан обеими сторонами</div>
           </div>
         )}
       </div>
@@ -363,6 +390,8 @@ function NewDeal({ onDone }) {
   const [unitSearch, setUnitSearch] = useState('')
   const [unitCat, setUnitCat] = useState('all')
   const [dealPhotos, setDealPhotos] = useState([null, null])
+  const [renterSig, setRenterSig] = useState(null)
+  const [issuerStamped, setIssuerStamped] = useState(false)
 
   useEffect(() => {
     unitsApi.list({ status: 'on_stock' }).then(data => setAvailableUnits(data.units || []))
@@ -423,7 +452,7 @@ function NewDeal({ onDone }) {
           }
         }
       }
-      setStep(5)
+      setStep(6)
     } catch (err) {
       alert(err.message || 'Ошибка создания сделки')
     } finally {
@@ -592,20 +621,43 @@ function NewDeal({ onDone }) {
         <div>
           <div style={{ fontWeight: 600, marginBottom: 4 }}>Подпись арендатора</div>
           <div style={{ fontSize: 13, color: 'var(--muted)', marginBottom: 16 }}>{form.name}</div>
-          <SignatureCanvas onSave={data => handleSign(data)} />
-          {loading && <div style={{ textAlign: 'center', marginTop: 12, color: 'var(--muted)', fontSize: 13 }}>Создание сделки...</div>}
-          <div style={{ fontSize: 12, color: 'var(--muted)', marginTop: 12, textAlign: 'center' }}>
-            После подписи будет сформирован договор аренды{form.email ? ` и отправлен на ${form.email}` : ''}
-          </div>
+          <SignatureCanvas onSave={data => { setRenterSig(data); setStep(5) }} />
           <Button variant="secondary" fullWidth style={{ marginTop: 12 }} onClick={() => setStep(3)}>Назад</Button>
         </div>
       )}
 
       {step === 5 && (
+        <div>
+          <div style={{ fontWeight: 600, marginBottom: 4 }}>Подпись выдавшего</div>
+          <div style={{ fontSize: 13, color: 'var(--muted)', marginBottom: 16 }}>Нажмите на поле чтобы поставить штамп сотрудника склада</div>
+          <div onClick={() => setIssuerStamped(true)} style={{
+            width: '100%', height: 100, border: '2px dashed var(--border)',
+            borderRadius: 'var(--radius-card)', display: 'flex', alignItems: 'center',
+            justifyContent: 'center', cursor: 'pointer', marginBottom: 16,
+            background: issuerStamped ? 'var(--accent-dim)' : 'var(--bg)',
+            borderColor: issuerStamped ? 'var(--accent)' : 'var(--border)',
+          }}>
+            {issuerStamped ? (
+              <div style={{ textAlign: 'center' }}>
+                <div style={{ fontSize: 14, fontWeight: 600, color: 'var(--accent)' }}>Штамп / Подпись</div>
+                <div style={{ fontSize: 12, color: 'var(--accent)', marginTop: 4 }}>Сотрудник склада</div>
+              </div>
+            ) : (
+              <div style={{ color: 'var(--muted)', fontSize: 13 }}>Нажмите для подтверждения</div>
+            )}
+          </div>
+          <Button fullWidth disabled={!issuerStamped || loading} onClick={() => handleSign(renterSig)}>
+            {loading ? 'Создание сделки...' : 'Оформить сделку'}
+          </Button>
+          <Button variant="secondary" fullWidth style={{ marginTop: 8 }} onClick={() => setStep(4)}>Назад</Button>
+        </div>
+      )}
+
+      {step === 6 && (
         <div style={{ textAlign: 'center', padding: '40px 0' }}>
-          <div style={{ fontSize: 40, marginBottom: 12 }}>✓</div>
-          <div style={{ fontWeight: 600, fontSize: 16, marginBottom: 6 }}>Сделка оформлена</div>
-          <div style={{ fontSize: 13, color: 'var(--muted)', marginBottom: 24 }}>Договор аренды подписан и сформирован</div>
+          <div style={{ fontSize: 40, marginBottom: 12 }}>✅</div>
+          <div style={{ fontWeight: 600, fontSize: 18, marginBottom: 6, color: 'var(--green)' }}>Успешно</div>
+          <div style={{ fontSize: 13, color: 'var(--muted)', marginBottom: 24 }}>Договор аренды подписан обеими сторонами и сформирован</div>
           <Button fullWidth onClick={onDone}>К списку сделок</Button>
         </div>
       )}

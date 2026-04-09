@@ -2,7 +2,7 @@ const router = require('express').Router()
 const crypto = require('crypto')
 const db     = require('../db')
 const { verifyJWT, checkRole } = require('../middleware/auth')
-const { createIssuancePDF } = require('../services/pdf')
+const { createIssuancePDF, createReturnPDF } = require('../services/pdf')
 const { uploadFile } = require('../services/r2')
 const { sendEmail } = require('../services/resend')
 
@@ -164,13 +164,27 @@ router.post('/:id/return', verifyJWT, checkRole(...RENT_ROLES), async (req, res)
   try {
     const { rows } = await db.query(`SELECT * FROM rent_deals WHERE id=$1`, [req.params.id])
     if (!rows.length) return res.status(404).json({ error: 'Deal not found' })
+    const deal = rows[0]
+
+    // Get units and user for PDF
+    const { rows: units } = await db.query(`SELECT * FROM units WHERE id = ANY($1)`, [deal.unit_ids])
+    const { rows: acceptor } = await db.query(`SELECT name FROM users WHERE id=$1`, [req.user.id])
+
+    // Generate return PDF
+    const pdfBytes = await createReturnPDF({
+      items: units,
+      returnedBy: deal.counterparty_name || 'Контрагент',
+      acceptedBy: acceptor[0]?.name || 'Склад',
+      conditionNotes: condition_notes,
+    })
+    const return_pdf_url = await uploadFile(Buffer.from(pdfBytes), 'act_rent_return.pdf', 'acts')
 
     await db.query(`UPDATE rent_deals SET status='done' WHERE id=$1`, [req.params.id])
-    for (const uid of rows[0].unit_ids) {
+    for (const uid of deal.unit_ids) {
       await db.query(`UPDATE units SET status='on_stock' WHERE id=$1`, [uid])
     }
 
-    res.json({ ok: true })
+    res.json({ ok: true, return_pdf_url })
   } catch (err) {
     console.error(err)
     res.status(500).json({ error: 'Server error' })
