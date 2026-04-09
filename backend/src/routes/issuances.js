@@ -305,7 +305,17 @@ router.get('/acts', verifyJWT, async (req, res) => {
       ORDER BY rt.returned_at DESC
     `)
 
-    res.json({ issuances, returns })
+    const { rows: rentDeals } = await db.query(`
+      SELECT rd.id, rd.created_at, rd.type, rd.period_start, rd.period_end,
+             rd.counterparty_name, rd.price_total, rd.contract_pdf_url,
+             rd.sign_status, rd.unit_ids,
+             u.name AS created_by_name
+      FROM rent_deals rd
+      LEFT JOIN users u ON u.id = rd.created_by
+      ORDER BY rd.created_at DESC
+    `)
+
+    res.json({ issuances, returns, rentDeals })
   } catch (err) {
     console.error(err)
     res.status(500).json({ error: 'Server error' })

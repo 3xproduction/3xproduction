@@ -13,6 +13,13 @@ async function embedFonts(doc) {
   return { font, bold }
 }
 
+function drawStamp(page, font, bold, x, y, name) {
+  // Blue bordered stamp with name
+  page.drawRectangle({ x, y, width: 200, height: 50, borderColor: rgb(0.2, 0.4, 0.7), borderWidth: 1.5, color: rgb(0.95, 0.97, 1) })
+  page.drawText(String(name || 'Склад'), { x: x + 10, y: y + 30, size: 10, font: bold, color: rgb(0.2, 0.4, 0.7) })
+  page.drawText('Подпись / Штамп', { x: x + 10, y: y + 12, size: 8, font, color: rgb(0.5, 0.6, 0.7) })
+}
+
 async function embedSig(doc, page, dataUrl, x, y, w = 220, h = 60) {
   if (!dataUrl) return
   try {
@@ -92,7 +99,12 @@ async function createIssuancePDF({ issuedTo, issuedBy, deadline, signatureDataUr
   text('Подпись получателя:', 50, y + 5, { size: 9, color: rgb(0.5, 0.5, 0.5) })
   text('Подпись выдавшего:', 310, y + 5, { size: 9, color: rgb(0.5, 0.5, 0.5) })
   await embedSig(doc, page, signatureDataUrl, 50, y, 240, 70)
-  await embedSig(doc, page, issuerSignatureDataUrl, 310, y, 240, 70)
+  if (issuerSignatureDataUrl) {
+    await embedSig(doc, page, issuerSignatureDataUrl, 310, y, 240, 70)
+  } else {
+    // Stamp placeholder — issuer name as text signature
+    drawStamp(page, font, bold, 310, y - 50, issuedBy)
+  }
 
   return doc.save()
 }
@@ -154,8 +166,16 @@ async function createReturnPDF({ items, returnedBy, acceptedBy, conditionNotes, 
   // Signatures — both parties
   text('Подпись сдавшего:', 50, y + 5, { size: 9, color: rgb(0.5, 0.5, 0.5) })
   text('Подпись принимающего:', 310, y + 5, { size: 9, color: rgb(0.5, 0.5, 0.5) })
-  await embedSig(doc, page, returnerSignatureDataUrl, 50, y, 240, 70)
-  await embedSig(doc, page, signatureDataUrl, 310, y, 240, 70)
+  if (returnerSignatureDataUrl) {
+    await embedSig(doc, page, returnerSignatureDataUrl, 50, y, 240, 70)
+  } else {
+    drawStamp(page, font, bold, 50, y - 50, returnedBy)
+  }
+  if (signatureDataUrl) {
+    await embedSig(doc, page, signatureDataUrl, 310, y, 240, 70)
+  } else {
+    drawStamp(page, font, bold, 310, y - 50, acceptedBy)
+  }
 
   return doc.save()
 }

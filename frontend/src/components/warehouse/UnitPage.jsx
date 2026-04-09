@@ -76,7 +76,7 @@ export default function UnitPage() {
                 <span style={{ color: 'var(--muted)', fontSize: 13 }}>📷 Нет фото</span>
               )}
             </div>
-            {photos.length > 0 && (
+            {photos.length > 1 && (
               <div style={{ display: 'flex', gap: 8 }}>
                 {photos.map((p, i) => (
                   <div key={i} onClick={() => setActivePhoto(i)} style={{

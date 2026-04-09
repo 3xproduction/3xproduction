@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { FileText, FileCheck } from 'lucide-react'
+import { FileText, FileCheck, Handshake } from 'lucide-react'
 import WarehouseLayout from './WarehouseLayout'
 import { issuances as issuancesApi } from '../../services/api'
 
@@ -67,7 +67,7 @@ function formatDate(str) {
 
 export default function ActsPage() {
   const [tab, setTab] = useState('issue')
-  const [data, setData] = useState({ issuances: [], returns: [] })
+  const [data, setData] = useState({ issuances: [], returns: [], rentDeals: [] })
   const [loading, setLoading] = useState(true)
 
   useEffect(() => {
@@ -82,7 +82,7 @@ export default function ActsPage() {
       <style>{css}</style>
       <div className="acts-page">
         <h1 className="acts-title">Акты</h1>
-        <p className="acts-sub">Акты выдачи и возврата оборудования</p>
+        <p className="acts-sub">Акты выдачи, возврата и аренды</p>
 
         <div className="acts-tabs">
           <button className={`acts-tab${tab === 'issue' ? ' active' : ''}`} onClick={() => setTab('issue')}>
@@ -94,6 +94,11 @@ export default function ActsPage() {
             <FileCheck size={15} strokeWidth={1.8} />
             Вернули
             <span className="acts-tab-count">{data.returns.length}</span>
+          </button>
+          <button className={`acts-tab${tab === 'rent' ? ' active' : ''}`} onClick={() => setTab('rent')}>
+            <Handshake size={15} strokeWidth={1.8} />
+            Аренда
+            <span className="acts-tab-count">{(data.rentDeals || []).length}</span>
           </button>
         </div>
 
@@ -122,7 +127,7 @@ export default function ActsPage() {
                   </div>
                 ))}
               </div>
-        ) : (
+        ) : tab === 'return' ? (
           data.returns.length === 0
             ? <div className="acts-empty">Нет актов возврата</div>
             : <div className="acts-list">
@@ -146,7 +151,35 @@ export default function ActsPage() {
                   </div>
                 ))}
               </div>
-        )}
+        ) : tab === 'rent' ? (
+          (data.rentDeals || []).length === 0
+            ? <div className="acts-empty">Нет актов аренды</div>
+            : <div className="acts-list">
+                {(data.rentDeals || []).map(d => (
+                  <div key={d.id} className="acts-item">
+                    <div className="acts-icon" style={{ background: 'var(--amber-dim)', color: 'var(--amber)' }}>
+                      <Handshake size={18} strokeWidth={1.8} />
+                    </div>
+                    <div className="acts-item-body">
+                      <div className="acts-item-title">
+                        {d.type === 'out' ? 'Сдача в аренду' : 'Аренда'} · {formatDate(d.created_at)}
+                      </div>
+                      <div className="acts-item-meta">
+                        <span>Контрагент: {d.counterparty_name || '—'}</span>
+                        {d.created_by_name && <span>Создал: {d.created_by_name}</span>}
+                        <span>{(d.unit_ids || []).length} ед.</span>
+                        <span>{formatDate(d.period_start)} — {formatDate(d.period_end)}</span>
+                        {d.sign_status === 'signed' && <span className="acts-returned">✓ Подписано</span>}
+                        {d.sign_status === 'pending' && <span style={{ color: 'var(--amber)' }}>⏳ Ожидает подписи</span>}
+                      </div>
+                    </div>
+                    {d.contract_pdf_url
+                      ? <a href={d.contract_pdf_url} target="_blank" rel="noreferrer" className="acts-pdf-btn">PDF →</a>
+                      : <span className="acts-no-pdf">Нет PDF</span>}
+                  </div>
+                ))}
+              </div>
+        ) : null}
       </div>
     </WarehouseLayout>
   )
