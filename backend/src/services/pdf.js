@@ -30,7 +30,7 @@ async function embedSig(doc, page, dataUrl, x, y, w = 220, h = 60) {
   } catch {}
 }
 
-async function createIssuancePDF({ issuedTo, issuedBy, deadline, signatureDataUrl, issuerSignatureDataUrl, issuerStamp, items, receiverRole, receiverContact, projectName, issuerRole }) {
+async function createIssuancePDF({ issuedTo, issuedBy, deadline, signatureDataUrl, issuerSignatureDataUrl, issuerStamp, items, receiverRole, receiverContact, projectName, issuerRole, deposit }) {
   const doc  = await PDFDocument.create()
   const page = doc.addPage([595, 842]) // A4
   const { font, bold } = await embedFonts(doc)
@@ -86,7 +86,14 @@ async function createIssuancePDF({ issuedTo, issuedBy, deadline, signatureDataUr
     y -= 18
   }
 
-  y -= 10; line(y); y -= 30
+  y -= 10; line(y); y -= 20
+
+  // Deposit
+  if (deposit) {
+    text('Залог:', 50, y, { bold: true })
+    text(`${Number(deposit).toLocaleString('ru-RU')} ₽`, 130, y, { bold: true, color: rgb(0.1, 0.5, 0.2) })
+    y -= 24
+  }
 
   // Agreement
   text('Соглашение об ответственности', 50, y, { bold: true })
@@ -108,7 +115,7 @@ async function createIssuancePDF({ issuedTo, issuedBy, deadline, signatureDataUr
   return doc.save()
 }
 
-async function createReturnPDF({ items, returnedBy, acceptedBy, conditionNotes, signatureDataUrl, returnerSignatureDataUrl, returnerRole, returnerContact, projectName, acceptorRole }) {
+async function createReturnPDF({ items, returnedBy, acceptedBy, conditionNotes, signatureDataUrl, returnerSignatureDataUrl, returnerRole, returnerContact, projectName, acceptorRole, deposit }) {
   const doc  = await PDFDocument.create()
   const page = doc.addPage([595, 842])
   const { font, bold } = await embedFonts(doc)
@@ -151,6 +158,13 @@ async function createReturnPDF({ items, returnedBy, acceptedBy, conditionNotes, 
     text(item.serial || String(i + 1), 300, y, { size: 10 })
     text(item.condition || 'Не указано', 430, y, { size: 10 })
     y -= 18
+  }
+
+  if (deposit) {
+    y -= 10; line(y); y -= 16
+    text('Залог (возврат):', 50, y, { bold: true })
+    text(`${Number(deposit).toLocaleString('ru-RU')} ₽`, 160, y, { bold: true, color: rgb(0.1, 0.5, 0.2) })
+    y -= 20
   }
 
   if (conditionNotes) {

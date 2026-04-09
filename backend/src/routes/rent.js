@@ -13,7 +13,7 @@ router.post('/', verifyJWT, checkRole(...RENT_ROLES), async (req, res) => {
   const {
     type, counterparty_name, counterparty_type, counterparty_contact, counterparty_email,
     unit_ids, period_start, period_end, price_total, signature_data,
-    inn, legal_address, extra_contact,
+    inn, legal_address, extra_contact, deposit,
   } = req.body
 
   if (!type || !counterparty_name || !unit_ids?.length || !period_start || !period_end) {
@@ -34,6 +34,8 @@ router.post('/', verifyJWT, checkRole(...RENT_ROLES), async (req, res) => {
       issuedBy: issuer[0]?.name || 'Склад',
       deadline: period_end,
       signatureDataUrl: signature_data,
+      issuerStamp: true,
+      deposit: deposit || null,
     })
     const contract_pdf_url = await uploadFile(Buffer.from(pdfBytes), 'contract.pdf', 'contracts')
 
@@ -44,13 +46,13 @@ router.post('/', verifyJWT, checkRole(...RENT_ROLES), async (req, res) => {
       `INSERT INTO rent_deals
          (type, counterparty_name, counterparty_type, counterparty_contact, counterparty_email,
           unit_ids, period_start, period_end, price_total, signature_url, contract_pdf_url,
-          sign_token, sign_status, inn, legal_address, extra_contact)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16) RETURNING *`,
+          sign_token, sign_status, inn, legal_address, extra_contact, deposit)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17) RETURNING *`,
       [type, counterparty_name, counterparty_type || 'person', counterparty_contact || null,
        counterparty_email || null, unit_ids, period_start, period_end,
        price_total || null, null, contract_pdf_url,
        signToken, signToken ? 'pending' : null,
-       inn || null, legal_address || null, extra_contact || null]
+       inn || null, legal_address || null, extra_contact || null, deposit || null]
     )
     const deal = rows[0]
 
@@ -176,10 +178,11 @@ router.post('/:id/return', verifyJWT, checkRole(...RENT_ROLES), async (req, res)
       returnedBy: deal.counterparty_name || 'Контрагент',
       acceptedBy: acceptor[0]?.name || 'Склад',
       conditionNotes: condition_notes,
+      deposit: deal.deposit || null,
     })
     const return_pdf_url = await uploadFile(Buffer.from(pdfBytes), 'act_rent_return.pdf', 'acts')
 
-    await db.query(`UPDATE rent_deals SET status='done' WHERE id=$1`, [req.params.id])
+    await db.query(`UPDATE rent_deals SET status='done', return_pdf_url=$1 WHERE id=$2`, [return_pdf_url, req.params.id])
     for (const uid of deal.unit_ids) {
       await db.query(`UPDATE units SET status='on_stock' WHERE id=$1`, [uid])
     }

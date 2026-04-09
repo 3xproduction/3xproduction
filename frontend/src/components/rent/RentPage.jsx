@@ -255,9 +255,15 @@ function RentReturnModal({ deal, onClose, onDone }) {
                 <span style={{ fontSize: 13 }}>{new Date(deal.period_start).toLocaleDateString('ru-RU')} — {new Date(deal.period_end).toLocaleDateString('ru-RU')}</span>
               </div>
               {deal.price_total && (
-                <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: deal.deposit ? 8 : 0 }}>
                   <span style={{ color: 'var(--muted)', fontSize: 13 }}>Сумма</span>
                   <span style={{ fontWeight: 600, fontSize: 13 }}>{Number(deal.price_total).toLocaleString('ru-RU')} ₽</span>
+                </div>
+              )}
+              {deal.deposit && (
+                <div style={{ display: 'flex', justifyContent: 'space-between', padding: '8px 0', borderTop: '1px solid var(--border)' }}>
+                  <span style={{ color: 'var(--green)', fontSize: 13, fontWeight: 500 }}>Залог</span>
+                  <span style={{ fontWeight: 600, fontSize: 13, color: 'var(--green)' }}>{Number(deal.deposit).toLocaleString('ru-RU')} ₽</span>
                 </div>
               )}
             </div>
@@ -392,6 +398,8 @@ function NewDeal({ onDone }) {
   const [dealPhotos, setDealPhotos] = useState([null, null])
   const [renterSig, setRenterSig] = useState(null)
   const [issuerStamped, setIssuerStamped] = useState(false)
+  const [showDeposit, setShowDeposit] = useState(false)
+  const [depositAmount, setDepositAmount] = useState('')
 
   useEffect(() => {
     unitsApi.list({ status: 'on_stock' }).then(data => setAvailableUnits(data.units || []))
@@ -437,6 +445,7 @@ function NewDeal({ onDone }) {
         period_start: dateStart,
         period_end: dateEnd,
         price_total: calcTotal() || null,
+        deposit: depositAmount || null,
         signature_data: signatureData,
       })
       const dealId = data.deal?.id
@@ -586,15 +595,30 @@ function NewDeal({ onDone }) {
           </div>
 
           {days > 0 && selectedUnits.length > 0 && (
-            <div style={{ marginTop: 12, padding: '14px 16px', borderRadius: 8, background: 'var(--green-dim)', display: 'flex', justifyContent: 'space-between' }}>
+            <div style={{ marginTop: 12, padding: '14px 16px', borderRadius: 8, background: 'var(--green-dim)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
               <span style={{ fontSize: 13, color: 'var(--muted)' }}>{days} дн. · {selectedUnits.length} ед.</span>
               <span style={{ fontWeight: 700, color: 'var(--green)', fontSize: 16 }}>{calcTotal().toLocaleString('ru-RU')} ₽</span>
             </div>
           )}
 
+          {/* Deposit */}
+          <div style={{ marginTop: 12, display: 'flex', alignItems: 'center', gap: 8 }}>
+            <button onClick={() => setShowDeposit(v => !v)} style={{
+              padding: '8px 14px', borderRadius: 'var(--radius-btn)', fontSize: 13, fontWeight: 500, cursor: 'pointer',
+              border: '1px solid var(--border)', background: showDeposit ? 'var(--green-dim)' : 'var(--white)', color: showDeposit ? 'var(--green)' : 'var(--text)',
+            }}>
+              {showDeposit ? '✓ Залог' : '+ Залог'}
+            </button>
+            {showDeposit && (
+              <input type="number" placeholder="Сумма залога ₽" value={depositAmount}
+                onChange={e => setDepositAmount(e.target.value)}
+                style={{ flex: 1, height: 38, padding: '0 10px', border: '2px solid var(--green)', borderRadius: 'var(--radius-btn)', fontSize: 13, outline: 'none', background: 'var(--green-dim)', boxSizing: 'border-box' }} />
+            )}
+          </div>
+
           <div style={{ display: 'flex', gap: 8, marginTop: 16 }}>
             <Button variant="secondary" onClick={() => setStep(1)}>Назад</Button>
-            <Button fullWidth disabled={selectedUnits.length === 0 || !dateStart || !dateEnd} onClick={() => setStep(3)}>
+            <Button fullWidth disabled={selectedUnits.length === 0 || !dateStart || !dateEnd || calcTotal() === 0} onClick={() => setStep(3)}>
               Далее — Фото
             </Button>
           </div>

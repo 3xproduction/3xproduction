@@ -147,28 +147,45 @@ export default function ActsPage() {
           (data.rentDeals || []).length === 0
             ? <div className="acts-empty">Нет актов аренды</div>
             : <div className="acts-list">
-                {(data.rentDeals || []).map(d => (
-                  <div key={d.id} className="acts-item">
+                {(data.rentDeals || []).map(d => (<>
+                  <div key={'ri-' + d.id} className="acts-item">
                     <div className="acts-icon" style={{ background: 'var(--amber-dim)', color: 'var(--amber)' }}>
                       <Handshake size={18} strokeWidth={1.8} />
                     </div>
                     <div className="acts-item-body">
                       <div className="acts-item-title">
-                        {d.type === 'out' ? 'Сдача в аренду' : 'Аренда'} · {formatDate(d.created_at)}
+                        Выдача · {d.type === 'out' ? 'Сдача в аренду' : 'Аренда'} · {formatDate(d.created_at)}
                       </div>
                       <div className="acts-item-meta">
                         <span>Контрагент: {d.counterparty_name || '—'}</span>
                         <span>{(d.unit_ids || []).length} ед.</span>
                         <span>{formatDate(d.period_start)} — {formatDate(d.period_end)}</span>
-                        {d.sign_status === 'signed' && <span className="acts-returned">✓ Подписано</span>}
-                        {d.sign_status === 'pending' && <span style={{ color: 'var(--amber)' }}>⏳ Ожидает подписи</span>}
+                        {d.deposit && <span style={{ color: 'var(--green)', fontWeight: 500 }}>Залог: {Number(d.deposit).toLocaleString('ru-RU')} ₽</span>}
                       </div>
                     </div>
                     {d.contract_pdf_url
                       ? <a href={d.contract_pdf_url} target="_blank" rel="noreferrer" className="acts-pdf-btn">PDF →</a>
                       : <span className="acts-no-pdf">Нет PDF</span>}
                   </div>
-                ))}
+                  {d.status === 'done' && (
+                    <div key={'rr-' + d.id} className="acts-item">
+                      <div className="acts-icon" style={{ background: 'var(--green-dim)', color: 'var(--green)' }}>
+                        <FileCheck size={18} strokeWidth={1.8} />
+                      </div>
+                      <div className="acts-item-body">
+                        <div className="acts-item-title">Возврат · {d.counterparty_name} · {formatDate(d.period_end)}</div>
+                        <div className="acts-item-meta">
+                          <span>{(d.unit_ids || []).length} ед.</span>
+                          <span className="acts-returned">✓ Возвращено</span>
+                          {d.deposit && <span style={{ color: 'var(--green)', fontWeight: 500 }}>Залог: {Number(d.deposit).toLocaleString('ru-RU')} ₽</span>}
+                        </div>
+                      </div>
+                      {d.return_pdf_url
+                        ? <a href={d.return_pdf_url} target="_blank" rel="noreferrer" className="acts-pdf-btn">PDF →</a>
+                        : <span className="acts-no-pdf">Нет PDF</span>}
+                    </div>
+                  )}
+                </>))}
               </div>
         ) : null}
       </div>

@@ -309,7 +309,7 @@ router.get('/acts', verifyJWT, async (req, res) => {
     const { rows: rentDeals } = await db.query(`
       SELECT rd.id, rd.created_at, rd.type, rd.period_start, rd.period_end,
              rd.counterparty_name, rd.price_total, rd.contract_pdf_url,
-             rd.sign_status, rd.unit_ids
+             rd.return_pdf_url, rd.sign_status, rd.status, rd.unit_ids, rd.deposit
       FROM rent_deals rd
       ORDER BY rd.created_at DESC
     `)
