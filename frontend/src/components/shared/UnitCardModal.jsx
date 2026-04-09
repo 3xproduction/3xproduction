@@ -12,9 +12,11 @@ const DIRECTOR_ROLES  = ['warehouse_director', 'warehouse_deputy']
 
 export default function UnitCardModal({ unitId, onClose, onChanged }) {
   const { user } = useAuth()
+  const [currentId, setCurrentId]     = useState(unitId)
   const [unit, setUnit]               = useState(null)
   const [loading, setLoading]         = useState(true)
   const [activePhoto, setActivePhoto] = useState(0)
+  const [similar, setSimilar]         = useState([])
 
   // Cell assignment
   const [showCell, setShowCell]       = useState(false)
@@ -34,10 +36,21 @@ export default function UnitCardModal({ unitId, onClose, onChanged }) {
   const isDirector  = DIRECTOR_ROLES.includes(user?.role)
 
   useEffect(() => {
-    unitsApi.get(unitId)
-      .then(d => { setUnit(d.unit); setLoading(false) })
+    setLoading(true)
+    setActivePhoto(0)
+    setSimilar([])
+    unitsApi.get(currentId)
+      .then(d => {
+        setUnit(d.unit)
+        setLoading(false)
+        if (d.unit?.category) {
+          unitsApi.list({ category: d.unit.category }).then(r => {
+            setSimilar((r.units || []).filter(s => s.id !== currentId).slice(0, 6))
+          }).catch(() => {})
+        }
+      })
       .catch(() => setLoading(false))
-  }, [unitId])
+  }, [currentId])
 
   // Load warehouses when cell panel opens, preselect unit's warehouse
   useEffect(() => {
@@ -62,13 +75,13 @@ export default function UnitCardModal({ unitId, onClose, onChanged }) {
     setCellSaving(true)
     try {
       const u = unit
-      await unitsApi.update(unitId, {
+      await unitsApi.update(currentId, {
         name: u.name, category: u.category, serial: u.serial,
         warehouse_id: selWh, cell_id: selCell,
         description: u.description, qty: u.qty,
         condition: u.condition, valuation: u.valuation,
       })
-      const d = await unitsApi.get(unitId)
+      const d = await unitsApi.get(currentId)
       setUnit(d.unit)
       setShowCell(false)
       setSelWh(''); setSelCell('')
@@ -83,8 +96,8 @@ export default function UnitCardModal({ unitId, onClose, onChanged }) {
     try {
       const isRequest = user?.role === 'warehouse_deputy' || user?.role === 'warehouse_staff'
       const action = isRequest
-        ? unitsApi.requestWriteoff(unitId, writeoffReason)
-        : unitsApi.writeoff(unitId, writeoffReason)
+        ? unitsApi.requestWriteoff(currentId, writeoffReason)
+        : unitsApi.writeoff(currentId, writeoffReason)
       await action
       if (!isRequest) {
         setWriteoffSuccess(true)
@@ -178,6 +191,29 @@ export default function UnitCardModal({ unitId, onClose, onChanged }) {
             </div>
           )}
 
+          {/* Similar items */}
+          {similar.length > 0 && (
+            <div style={{ marginBottom: 14 }}>
+              <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--muted)', marginBottom: 8 }}>Похожие</div>
+              <div style={{ display: 'flex', gap: 8, overflowX: 'auto', paddingBottom: 4 }}>
+                {similar.map(s => (
+                  <div key={s.id} onClick={() => setCurrentId(s.id)} style={{
+                    flexShrink: 0, width: 100, cursor: 'pointer',
+                    borderRadius: 'var(--radius-btn)', border: '1px solid var(--border)',
+                    background: 'var(--bg)', overflow: 'hidden',
+                  }}>
+                    <div style={{ width: 100, height: 80, display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'var(--bg)' }}>
+                      {s.photo_url
+                        ? <img src={s.photo_url} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+                        : <span style={{ fontSize: 24 }}>📦</span>}
+                    </div>
+                    <div style={{ padding: '6px 8px', fontSize: 11, fontWeight: 500, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', color: 'var(--text)' }}>{s.name}</div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
           {/* Warehouse buttons */}
           {isWarehouse && (
             <div style={{ display: 'flex', gap: 8, marginBottom: 8 }}>
@@ -237,7 +273,7 @@ export default function UnitCardModal({ unitId, onClose, onChanged }) {
               <div style={{ display: 'flex', gap: 8 }}>
                 <Button variant="secondary" fullWidth onClick={() => setShowDeleteConfirm(false)}>Отмена</Button>
                 <Button fullWidth style={{ background: 'var(--red)', borderColor: 'var(--red)' }} onClick={async () => {
-                  try { await unitsApi.delete(unitId); onChanged?.(); onClose() } catch (e) { alert(e.message || 'Ошибка') }
+                  try { await unitsApi.delete(currentId); onChanged?.(); onClose() } catch (e) { alert(e.message || 'Ошибка') }
                 }}>Удалить</Button>
               </div>
             </div>
