@@ -13,7 +13,17 @@ async function embedFonts(doc) {
   return { font, bold }
 }
 
-async function createIssuancePDF({ issuedTo, issuedBy, deadline, signatureDataUrl, items, receiverRole, receiverContact, projectName, issuerRole }) {
+async function embedSig(doc, page, dataUrl, x, y, w = 220, h = 60) {
+  if (!dataUrl) return
+  try {
+    const base64 = dataUrl.replace(/^data:image\/\w+;base64,/, '')
+    const imgBytes = Buffer.from(base64, 'base64')
+    const img = await doc.embedPng(imgBytes).catch(() => doc.embedJpg(imgBytes))
+    page.drawImage(img, { x, y: y - h, width: w, height: h })
+  } catch {}
+}
+
+async function createIssuancePDF({ issuedTo, issuedBy, deadline, signatureDataUrl, issuerSignatureDataUrl, items, receiverRole, receiverContact, projectName, issuerRole }) {
   const doc  = await PDFDocument.create()
   const page = doc.addPage([595, 842]) // A4
   const { font, bold } = await embedFonts(doc)
@@ -55,7 +65,7 @@ async function createIssuancePDF({ issuedTo, issuedBy, deadline, signatureDataUr
   // Items table header
   text('№', 50, y, { bold: true, size: 10 })
   text('Наименование', 75, y, { bold: true, size: 10 })
-  text('Серийный №', 320, y, { bold: true, size: 10 })
+  text('Инв. №', 320, y, { bold: true, size: 10 })
   text('Кол-во', 460, y, { bold: true, size: 10 })
   y -= 6; line(y); y -= 16
 
@@ -64,7 +74,7 @@ async function createIssuancePDF({ issuedTo, issuedBy, deadline, signatureDataUr
     const item = items[i]
     text(String(i + 1), 50, y, { size: 10 })
     text(item.name, 75, y, { size: 10, maxWidth: 230 })
-    text(item.serial || '—', 320, y, { size: 10 })
+    text(item.serial || String(i + 1), 320, y, { size: 10 })
     text(String(item.qty || 1), 460, y, { size: 10 })
     y -= 18
   }
@@ -78,23 +88,16 @@ async function createIssuancePDF({ issuedTo, issuedBy, deadline, signatureDataUr
   text(agreementText, 50, y, { size: 9, color: rgb(0.4, 0.4, 0.4), maxWidth: 495 })
   y -= 50
 
-  // Signature
-  if (signatureDataUrl) {
-    try {
-      const base64 = signatureDataUrl.replace(/^data:image\/\w+;base64,/, '')
-      const imgBytes = Buffer.from(base64, 'base64')
-      const img = await doc.embedPng(imgBytes).catch(() => doc.embedJpg(imgBytes))
-      page.drawImage(img, { x: 50, y: y - 60, width: 240, height: 80 })
-    } catch {}
-  }
-
+  // Signatures — both parties
   text('Подпись получателя:', 50, y + 5, { size: 9, color: rgb(0.5, 0.5, 0.5) })
   text('Подпись выдавшего:', 310, y + 5, { size: 9, color: rgb(0.5, 0.5, 0.5) })
+  await embedSig(doc, page, signatureDataUrl, 50, y, 240, 70)
+  await embedSig(doc, page, issuerSignatureDataUrl, 310, y, 240, 70)
 
   return doc.save()
 }
 
-async function createReturnPDF({ items, returnedBy, acceptedBy, conditionNotes, signatureDataUrl, returnerRole, returnerContact, projectName, acceptorRole }) {
+async function createReturnPDF({ items, returnedBy, acceptedBy, conditionNotes, signatureDataUrl, returnerSignatureDataUrl, returnerRole, returnerContact, projectName, acceptorRole }) {
   const doc  = await PDFDocument.create()
   const page = doc.addPage([595, 842])
   const { font, bold } = await embedFonts(doc)
@@ -126,7 +129,7 @@ async function createReturnPDF({ items, returnedBy, acceptedBy, conditionNotes, 
 
   text('№', 50, y, { bold: true, size: 10 })
   text('Наименование', 75, y, { bold: true, size: 10 })
-  text('Серийный №', 300, y, { bold: true, size: 10 })
+  text('Инв. №', 300, y, { bold: true, size: 10 })
   text('Состояние', 430, y, { bold: true, size: 10 })
   y -= 6; line(y); y -= 16
 
@@ -134,7 +137,7 @@ async function createReturnPDF({ items, returnedBy, acceptedBy, conditionNotes, 
     const item = items[i]
     text(String(i + 1), 50, y, { size: 10 })
     text(item.name, 75, y, { size: 10, maxWidth: 210 })
-    text(item.serial || '—', 300, y, { size: 10 })
+    text(item.serial || String(i + 1), 300, y, { size: 10 })
     text(item.condition || 'Не указано', 430, y, { size: 10 })
     y -= 18
   }
@@ -148,15 +151,11 @@ async function createReturnPDF({ items, returnedBy, acceptedBy, conditionNotes, 
   }
 
   y -= 20
-  if (signatureDataUrl) {
-    try {
-      const base64 = signatureDataUrl.replace(/^data:image\/\w+;base64,/, '')
-      const imgBytes = Buffer.from(base64, 'base64')
-      const img = await doc.embedPng(imgBytes).catch(() => doc.embedJpg(imgBytes))
-      page.drawImage(img, { x: 310, y: y - 60, width: 240, height: 80 })
-    } catch {}
-  }
+  // Signatures — both parties
+  text('Подпись сдавшего:', 50, y + 5, { size: 9, color: rgb(0.5, 0.5, 0.5) })
   text('Подпись принимающего:', 310, y + 5, { size: 9, color: rgb(0.5, 0.5, 0.5) })
+  await embedSig(doc, page, returnerSignatureDataUrl, 50, y, 240, 70)
+  await embedSig(doc, page, signatureDataUrl, 310, y, 240, 70)
 
   return doc.save()
 }
@@ -196,18 +195,8 @@ async function createExtensionPDF({ items, newDeadline, initiatorName, acceptorN
   text('Подпись инициатора:', 50, y + 5, { size: 9, color: rgb(0.5, 0.5, 0.5) })
   text('Подпись принимающего:', 310, y + 5, { size: 9, color: rgb(0.5, 0.5, 0.5) })
 
-  const embedSig = async (dataUrl, x, yy) => {
-    if (!dataUrl) return
-    try {
-      const base64 = dataUrl.replace(/^data:image\/\w+;base64,/, '')
-      const imgBytes = Buffer.from(base64, 'base64')
-      const img = await doc.embedPng(imgBytes).catch(() => doc.embedJpg(imgBytes))
-      page.drawImage(img, { x, y: yy - 60, width: 220, height: 60 })
-    } catch {}
-  }
-
-  await embedSig(initiatorSig, 50, y)
-  await embedSig(acceptorSig, 310, y)
+  await embedSig(doc, page, initiatorSig, 50, y)
+  await embedSig(doc, page, acceptorSig, 310, y)
 
   return doc.save()
 }

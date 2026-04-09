@@ -78,7 +78,7 @@ export default function SignPage() {
           {done && (
             <div style={{ textAlign: 'center', padding: '40px 0' }}>
               <div style={{ fontSize: 48, marginBottom: 16 }}>✅</div>
-              <div style={{ fontSize: 18, fontWeight: 600, marginBottom: 8 }}>Договор подписан</div>
+              <div style={{ fontSize: 18, fontWeight: 600, marginBottom: 8, color: 'var(--green)' }}>Подписано успешно</div>
               <div style={{ color: 'var(--muted)', fontSize: 13 }}>Спасибо! Документы направлены организатору аренды.</div>
             </div>
           )}

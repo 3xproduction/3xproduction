@@ -102,7 +102,20 @@ router.post('/sign/:token', async (req, res) => {
       `UPDATE rent_deals SET sign_status = 'signed', signature_url = $1 WHERE id = $2`,
       [sig_url, deal.id]
     )
-    res.json({ ok: true })
+
+    // Notify warehouse about successful signing
+    const { rows: directors } = await db.query(
+      `SELECT id FROM users WHERE role IN ('warehouse_director','warehouse_deputy')`
+    )
+    for (const u of directors) {
+      await db.query(
+        `INSERT INTO notifications (user_id, type, text, entity_id, entity_type)
+         VALUES ($1,'rent_signed',$2,$3,'rent')`,
+        [u.id, `Договор аренды подписан: ${deal.counterparty_name || 'контрагент'}`, deal.id]
+      )
+    }
+
+    res.json({ ok: true, message: 'Подписано успешно' })
   } catch (err) {
     console.error(err)
     res.status(500).json({ error: 'Server error' })
