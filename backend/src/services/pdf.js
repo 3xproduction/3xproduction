@@ -30,7 +30,7 @@ async function embedSig(doc, page, dataUrl, x, y, w = 220, h = 60) {
   } catch {}
 }
 
-async function createIssuancePDF({ issuedTo, issuedBy, deadline, signatureDataUrl, issuerSignatureDataUrl, items, receiverRole, receiverContact, projectName, issuerRole }) {
+async function createIssuancePDF({ issuedTo, issuedBy, deadline, signatureDataUrl, issuerSignatureDataUrl, issuerStamp, items, receiverRole, receiverContact, projectName, issuerRole }) {
   const doc  = await PDFDocument.create()
   const page = doc.addPage([595, 842]) // A4
   const { font, bold } = await embedFonts(doc)
@@ -101,8 +101,7 @@ async function createIssuancePDF({ issuedTo, issuedBy, deadline, signatureDataUr
   await embedSig(doc, page, signatureDataUrl, 50, y, 240, 70)
   if (issuerSignatureDataUrl) {
     await embedSig(doc, page, issuerSignatureDataUrl, 310, y, 240, 70)
-  } else {
-    // Stamp placeholder — issuer name as text signature
+  } else if (issuerStamp || !issuerSignatureDataUrl) {
     drawStamp(page, font, bold, 310, y - 50, issuedBy)
   }
 

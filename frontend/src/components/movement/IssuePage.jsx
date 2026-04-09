@@ -39,6 +39,8 @@ export default function IssuePage() {
   const [loading, setLoading] = useState(false)
   const [initLoading, setInitLoading] = useState(true)
   const [success, setSuccess] = useState(false)
+  const [receiverSig, setReceiverSig] = useState(null)
+  const [issuerStamped, setIssuerStamped] = useState(false)
 
   useEffect(() => {
     if (requestId) {
@@ -88,7 +90,7 @@ export default function IssuePage() {
     })
   }
 
-  async function handleIssue(signatureData) {
+  async function handleIssue(signatureData, issuerSigData) {
     setLoading(true)
     try {
       const fd = new FormData()
@@ -96,6 +98,7 @@ export default function IssuePage() {
       fd.append('received_by', receiverId)
       fd.append('deadline', deadline || new Date(Date.now() + 7 * 86400000).toISOString().split('T')[0])
       fd.append('signature_data', signatureData)
+      if (issuerSigData) fd.append('issuer_signature_data', issuerSigData)
 
       // Append photos
       for (const uid of selected) {
@@ -307,18 +310,47 @@ export default function IssuePage() {
           </div>
         )}
 
-        {/* Step 4 — signature */}
+        {/* Step 4 — receiver signature */}
         {step === 4 && (
           <div>
             <div style={{ fontWeight: 600, marginBottom: 4 }}>Подпись получателя</div>
             {receiverName && <div style={{ fontSize: 13, color: 'var(--muted)', marginBottom: 16 }}>{receiverName}</div>}
             <SignatureCanvas
-              onSave={data => handleIssue(data)}
+              onSave={data => { setReceiverSig(data); setStep(5) }}
               onClear={() => {}}
             />
-            {loading && <div style={{ textAlign: 'center', marginTop: 12, color: 'var(--muted)', fontSize: 13 }}>Сохранение...</div>}
+          </div>
+        )}
+
+        {/* Step 5 — issuer stamp */}
+        {step === 5 && (
+          <div>
+            <div style={{ fontWeight: 600, marginBottom: 4 }}>Подпись выдавшего</div>
+            <div style={{ fontSize: 13, color: 'var(--muted)', marginBottom: 16 }}>Нажмите на поле чтобы поставить штамп сотрудника склада</div>
+            <div
+              onClick={() => setIssuerStamped(true)}
+              style={{
+                width: '100%', height: 100, border: '2px dashed var(--border)',
+                borderRadius: 'var(--radius-card)', display: 'flex', alignItems: 'center',
+                justifyContent: 'center', cursor: 'pointer', marginBottom: 16,
+                background: issuerStamped ? 'var(--accent-dim)' : 'var(--bg)',
+                borderColor: issuerStamped ? 'var(--accent)' : 'var(--border)',
+              }}
+            >
+              {issuerStamped ? (
+                <div style={{ textAlign: 'center' }}>
+                  <div style={{ fontSize: 14, fontWeight: 600, color: 'var(--accent)' }}>Штамп / Подпись</div>
+                  <div style={{ fontSize: 12, color: 'var(--accent)', marginTop: 4 }}>Сотрудник склада</div>
+                </div>
+              ) : (
+                <div style={{ color: 'var(--muted)', fontSize: 13 }}>Нажмите для подтверждения</div>
+              )}
+            </div>
+            <Button fullWidth disabled={!issuerStamped || loading} onClick={() => handleIssue(receiverSig, 'stamp')}>
+              {loading ? 'Сохранение...' : 'Оформить выдачу'}
+            </Button>
             <div style={{ fontSize: 12, color: 'var(--muted)', marginTop: 12, textAlign: 'center' }}>
-              После подписи будет сформирован PDF акт выдачи
+              После подтверждения будет сформирован PDF акт выдачи
             </div>
           </div>
         )}
@@ -333,9 +365,9 @@ export default function IssuePage() {
             background: 'var(--white)', borderRadius: 16, padding: '32px 40px',
             textAlign: 'center', boxShadow: '0 8px 32px rgba(0,0,0,0.15)',
           }}>
-            <div style={{ fontSize: 40, marginBottom: 12 }}>✓</div>
-            <div style={{ fontWeight: 600, fontSize: 16, marginBottom: 6 }}>Выдача оформлена</div>
-            <div style={{ fontSize: 13, color: 'var(--muted)' }}>Акт выдачи сформирован</div>
+            <div style={{ fontSize: 40, marginBottom: 12 }}>✅</div>
+            <div style={{ fontWeight: 600, fontSize: 18, marginBottom: 6, color: 'var(--green)' }}>Успешно</div>
+            <div style={{ fontSize: 13, color: 'var(--muted)' }}>Акт выдачи сформирован, подписан обеими сторонами</div>
           </div>
         </div>
       )}

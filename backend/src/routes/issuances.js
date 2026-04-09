@@ -66,7 +66,8 @@ router.post('/', verifyJWT, checkRole(...WAREHOUSE_ROLES), upload.fields([
       issuedBy: issuer[0]?.name || 'Склад',
       deadline,
       signatureDataUrl: req.body.signature_data,
-      issuerSignatureDataUrl: req.body.issuer_signature_data,
+      issuerSignatureDataUrl: req.body.issuer_signature_data === 'stamp' ? null : req.body.issuer_signature_data,
+      issuerStamp: req.body.issuer_signature_data === 'stamp',
       receiverRole: rcv.role,
       receiverContact: rcv.phone || rcv.email || '',
       projectName: rcv.project_name,
@@ -308,10 +309,8 @@ router.get('/acts', verifyJWT, async (req, res) => {
     const { rows: rentDeals } = await db.query(`
       SELECT rd.id, rd.created_at, rd.type, rd.period_start, rd.period_end,
              rd.counterparty_name, rd.price_total, rd.contract_pdf_url,
-             rd.sign_status, rd.unit_ids,
-             u.name AS created_by_name
+             rd.sign_status, rd.unit_ids
       FROM rent_deals rd
-      LEFT JOIN users u ON u.id = rd.created_by
       ORDER BY rd.created_at DESC
     `)
 

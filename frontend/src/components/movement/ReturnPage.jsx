@@ -29,6 +29,8 @@ export default function ReturnPage() {
   const [loading, setLoading] = useState(false)
   const [initLoading, setInitLoading] = useState(true)
   const [returnerSignature, setReturnerSignature] = useState(null)
+  const [acceptorStamped, setAcceptorStamped] = useState(false)
+  const [success, setSuccess] = useState(false)
 
   useEffect(() => {
     issuancesApi.active().then(data => {
@@ -92,7 +94,8 @@ export default function ReturnPage() {
       }
 
       await issuancesApi.return(fd)
-      navigate('/dashboard')
+      setSuccess(true)
+      setTimeout(() => navigate('/dashboard'), 2000)
     } catch (err) {
       alert(err.message || 'Ошибка возврата')
     } finally {
@@ -248,22 +251,52 @@ export default function ReturnPage() {
           </div>
         )}
 
-        {/* Step 3 — acceptor signature */}
+        {/* Step 3 — acceptor stamp */}
         {step === 3 && (
           <div>
             <div style={{ fontWeight: 600, marginBottom: 4 }}>Подпись принимающего</div>
-            {user?.name && <div style={{ fontSize: 13, color: 'var(--muted)', marginBottom: 16 }}>{user.name} (сотрудник склада)</div>}
-            <SignatureCanvas
-              onSave={data => handleReturn(data)}
-              onClear={() => {}}
-            />
-            {loading && <div style={{ textAlign: 'center', marginTop: 12, color: 'var(--muted)', fontSize: 13 }}>Сохранение...</div>}
-            <div style={{ fontSize: 12, color: 'var(--muted)', marginTop: 12, textAlign: 'center' }}>
-              После подписи будет сформирован акт возврата
+            <div style={{ fontSize: 13, color: 'var(--muted)', marginBottom: 16 }}>Нажмите на поле чтобы поставить штамп сотрудника склада</div>
+            <div
+              onClick={() => setAcceptorStamped(true)}
+              style={{
+                width: '100%', height: 100, border: '2px dashed var(--border)',
+                borderRadius: 'var(--radius-card)', display: 'flex', alignItems: 'center',
+                justifyContent: 'center', cursor: 'pointer', marginBottom: 16,
+                background: acceptorStamped ? 'var(--accent-dim)' : 'var(--bg)',
+                borderColor: acceptorStamped ? 'var(--accent)' : 'var(--border)',
+              }}
+            >
+              {acceptorStamped ? (
+                <div style={{ textAlign: 'center' }}>
+                  <div style={{ fontSize: 14, fontWeight: 600, color: 'var(--accent)' }}>Штамп / Подпись</div>
+                  <div style={{ fontSize: 12, color: 'var(--accent)', marginTop: 4 }}>{user?.name || 'Сотрудник склада'}</div>
+                </div>
+              ) : (
+                <div style={{ color: 'var(--muted)', fontSize: 13 }}>Нажмите для подтверждения</div>
+              )}
             </div>
+            <Button fullWidth disabled={!acceptorStamped || loading} onClick={() => handleReturn('stamp')}>
+              {loading ? 'Сохранение...' : 'Оформить возврат'}
+            </Button>
           </div>
         )}
       </div>
+
+      {success && (
+        <div style={{
+          position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.4)', zIndex: 500,
+          display: 'flex', alignItems: 'center', justifyContent: 'center',
+        }}>
+          <div style={{
+            background: 'var(--white)', borderRadius: 16, padding: '32px 40px',
+            textAlign: 'center', boxShadow: '0 8px 32px rgba(0,0,0,0.15)',
+          }}>
+            <div style={{ fontSize: 40, marginBottom: 12 }}>✅</div>
+            <div style={{ fontWeight: 600, fontSize: 18, marginBottom: 6, color: 'var(--green)' }}>Успешно</div>
+            <div style={{ fontSize: 13, color: 'var(--muted)' }}>Акт возврата сформирован, подписан обеими сторонами</div>
+          </div>
+        </div>
+      )}
     </WarehouseLayout>
   )
 }

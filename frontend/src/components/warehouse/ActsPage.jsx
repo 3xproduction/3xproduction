@@ -66,7 +66,7 @@ function formatDate(str) {
 }
 
 export default function ActsPage() {
-  const [tab, setTab] = useState('issue')
+  const [tab, setTab] = useState('requests')
   const [data, setData] = useState({ issuances: [], returns: [], rentDeals: [] })
   const [loading, setLoading] = useState(true)
 
@@ -77,23 +77,20 @@ export default function ActsPage() {
       .finally(() => setLoading(false))
   }, [])
 
+  const requestsCount = data.issuances.length + data.returns.length
+
   return (
     <WarehouseLayout>
       <style>{css}</style>
       <div className="acts-page">
         <h1 className="acts-title">Акты</h1>
-        <p className="acts-sub">Акты выдачи, возврата и аренды</p>
+        <p className="acts-sub">Акты по заявкам и аренде</p>
 
         <div className="acts-tabs">
-          <button className={`acts-tab${tab === 'issue' ? ' active' : ''}`} onClick={() => setTab('issue')}>
+          <button className={`acts-tab${tab === 'requests' ? ' active' : ''}`} onClick={() => setTab('requests')}>
             <FileText size={15} strokeWidth={1.8} />
-            Выдано
-            <span className="acts-tab-count">{data.issuances.length}</span>
-          </button>
-          <button className={`acts-tab${tab === 'return' ? ' active' : ''}`} onClick={() => setTab('return')}>
-            <FileCheck size={15} strokeWidth={1.8} />
-            Вернули
-            <span className="acts-tab-count">{data.returns.length}</span>
+            Заявки
+            <span className="acts-tab-count">{requestsCount}</span>
           </button>
           <button className={`acts-tab${tab === 'rent' ? ' active' : ''}`} onClick={() => setTab('rent')}>
             <Handshake size={15} strokeWidth={1.8} />
@@ -104,15 +101,15 @@ export default function ActsPage() {
 
         {loading ? (
           <div className="acts-empty">Загрузка...</div>
-        ) : tab === 'issue' ? (
-          data.issuances.length === 0
-            ? <div className="acts-empty">Нет актов выдачи</div>
+        ) : tab === 'requests' ? (
+          requestsCount === 0
+            ? <div className="acts-empty">Нет актов</div>
             : <div className="acts-list">
                 {data.issuances.map(i => (
-                  <div key={i.id} className="acts-item">
+                  <div key={'i-' + i.id} className="acts-item">
                     <div className="acts-icon"><FileText size={18} strokeWidth={1.8} /></div>
                     <div className="acts-item-body">
-                      <div className="acts-item-title">Акт выдачи · {formatDate(i.issued_at)}</div>
+                      <div className="acts-item-title">Выдача · {formatDate(i.issued_at)}</div>
                       <div className="acts-item-meta">
                         <span>Выдал: {i.issued_by_name}</span>
                         <span>Получил: {i.received_by_name}</span>
@@ -126,18 +123,13 @@ export default function ActsPage() {
                       : <span className="acts-no-pdf">Нет PDF</span>}
                   </div>
                 ))}
-              </div>
-        ) : tab === 'return' ? (
-          data.returns.length === 0
-            ? <div className="acts-empty">Нет актов возврата</div>
-            : <div className="acts-list">
                 {data.returns.map(r => (
-                  <div key={r.id} className="acts-item">
+                  <div key={'r-' + r.id} className="acts-item">
                     <div className="acts-icon" style={{ background: 'var(--green-dim)', color: 'var(--green)' }}>
                       <FileCheck size={18} strokeWidth={1.8} />
                     </div>
                     <div className="acts-item-body">
-                      <div className="acts-item-title">Акт возврата · {formatDate(r.returned_at)}</div>
+                      <div className="acts-item-title">Возврат · {formatDate(r.returned_at)}</div>
                       <div className="acts-item-meta">
                         <span>Вернул: {r.returned_by_name}</span>
                         <span>Принял: {r.accepted_by_name}</span>
@@ -166,7 +158,6 @@ export default function ActsPage() {
                       </div>
                       <div className="acts-item-meta">
                         <span>Контрагент: {d.counterparty_name || '—'}</span>
-                        {d.created_by_name && <span>Создал: {d.created_by_name}</span>}
                         <span>{(d.unit_ids || []).length} ед.</span>
                         <span>{formatDate(d.period_start)} — {formatDate(d.period_end)}</span>
                         {d.sign_status === 'signed' && <span className="acts-returned">✓ Подписано</span>}
