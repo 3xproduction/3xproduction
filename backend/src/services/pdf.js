@@ -13,7 +13,7 @@ async function embedFonts(doc) {
   return { font, bold }
 }
 
-async function createIssuancePDF({ unit, issuedTo, issuedBy, deadline, signatureDataUrl, items }) {
+async function createIssuancePDF({ issuedTo, issuedBy, deadline, signatureDataUrl, items, receiverRole, receiverContact, projectName, issuerRole }) {
   const doc  = await PDFDocument.create()
   const page = doc.addPage([595, 842]) // A4
   const { font, bold } = await embedFonts(doc)
@@ -43,9 +43,14 @@ async function createIssuancePDF({ unit, issuedTo, issuedBy, deadline, signature
 
   // Parties
   text('Выдал:', 50, y, { bold: true }); text(issuedBy, 130, y)
+  if (issuerRole) { text(`(${issuerRole})`, 130 + font.widthOfTextAtSize(issuedBy, 11) + 6, y, { size: 9, color: rgb(0.5, 0.5, 0.5) }) }
   y -= 18
   text('Получил:', 50, y, { bold: true }); text(issuedTo, 130, y)
-  y -= 30; line(y); y -= 20
+  if (receiverRole) { text(`(${receiverRole})`, 130 + font.widthOfTextAtSize(issuedTo, 11) + 6, y, { size: 9, color: rgb(0.5, 0.5, 0.5) }) }
+  y -= 18
+  if (projectName) { text('Проект:', 50, y, { bold: true }); text(projectName, 130, y); y -= 18 }
+  if (receiverContact) { text('Контакт:', 50, y, { bold: true }); text(receiverContact, 130, y); y -= 18 }
+  y -= 12; line(y); y -= 20
 
   // Items table header
   text('№', 50, y, { bold: true, size: 10 })
@@ -89,7 +94,7 @@ async function createIssuancePDF({ unit, issuedTo, issuedBy, deadline, signature
   return doc.save()
 }
 
-async function createReturnPDF({ items, returnedBy, acceptedBy, conditionNotes, signatureDataUrl }) {
+async function createReturnPDF({ items, returnedBy, acceptedBy, conditionNotes, signatureDataUrl, returnerRole, returnerContact, projectName, acceptorRole }) {
   const doc  = await PDFDocument.create()
   const page = doc.addPage([595, 842])
   const { font, bold } = await embedFonts(doc)
@@ -110,9 +115,14 @@ async function createReturnPDF({ items, returnedBy, acceptedBy, conditionNotes, 
   y -= 30; line(y); y -= 20
 
   text('Сдал:', 50, y, { bold: true }); text(returnedBy, 120, y)
+  if (returnerRole) { text(`(${returnerRole})`, 120 + font.widthOfTextAtSize(returnedBy, 11) + 6, y, { size: 9, color: rgb(0.5, 0.5, 0.5) }) }
   y -= 18
   text('Принял:', 50, y, { bold: true }); text(acceptedBy, 120, y)
-  y -= 30; line(y); y -= 20
+  if (acceptorRole) { text(`(${acceptorRole})`, 120 + font.widthOfTextAtSize(acceptedBy, 11) + 6, y, { size: 9, color: rgb(0.5, 0.5, 0.5) }) }
+  y -= 18
+  if (projectName) { text('Проект:', 50, y, { bold: true }); text(projectName, 120, y); y -= 18 }
+  if (returnerContact) { text('Контакт:', 50, y, { bold: true }); text(returnerContact, 120, y); y -= 18 }
+  y -= 12; line(y); y -= 20
 
   text('№', 50, y, { bold: true, size: 10 })
   text('Наименование', 75, y, { bold: true, size: 10 })

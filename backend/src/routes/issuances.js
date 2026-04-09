@@ -44,22 +44,32 @@ router.post('/', verifyJWT, checkRole(...WAREHOUSE_ROLES), upload.fields([
 
     // Get unit + user details for PDF
     const { rows: units } = await client.query(
-      `SELECT * FROM units WHERE id = ANY($1)`, [unit_ids]
+      `SELECT u.*, up.url AS photo_url
+       FROM units u
+       LEFT JOIN LATERAL (SELECT url FROM unit_photos WHERE unit_id = u.id AND type='stock' ORDER BY created_at LIMIT 1) up ON true
+       WHERE u.id = ANY($1)`, [unit_ids]
     )
     const { rows: receiver } = await client.query(
-      `SELECT name FROM users WHERE id=$1`, [received_by]
+      `SELECT u.name, u.role, u.email, u.phone, p.name AS project_name
+       FROM users u LEFT JOIN projects p ON p.id = u.project_id
+       WHERE u.id=$1`, [received_by]
     )
     const { rows: issuer } = await client.query(
-      `SELECT name FROM users WHERE id=$1`, [req.user.id]
+      `SELECT name, role FROM users WHERE id=$1`, [req.user.id]
     )
 
     // Generate PDF
+    const rcv = receiver[0] || {}
     const pdfBytes = await createIssuancePDF({
       items: units,
-      issuedTo: receiver[0]?.name || received_by,
+      issuedTo: rcv.name || received_by,
       issuedBy: issuer[0]?.name || 'Склад',
       deadline,
       signatureDataUrl: req.body.signature_data,
+      receiverRole: rcv.role,
+      receiverContact: rcv.phone || rcv.email || '',
+      projectName: rcv.project_name,
+      issuerRole: issuer[0]?.role,
     })
     const pdfBuffer = Buffer.from(pdfBytes)
     const act_pdf_url = await uploadFile(pdfBuffer, 'act_issue.pdf', 'acts')
@@ -132,8 +142,14 @@ router.post('/returns', verifyJWT, checkRole(...WAREHOUSE_ROLES), upload.fields(
     const issuance = issuances[0]
     const unitIds = issuance.unit_ids || []
 
-    const { rows: returnerRow } = await client.query(`SELECT name FROM users WHERE id=$1`, [issuance.received_by])
-    const { rows: acceptorRow } = await client.query(`SELECT name FROM users WHERE id=$1`, [req.user.id])
+    const { rows: returnerRow } = await client.query(
+      `SELECT u.name, u.role, u.phone, u.email, p.name AS project_name
+       FROM users u LEFT JOIN projects p ON p.id = u.project_id
+       WHERE u.id=$1`, [issuance.received_by]
+    )
+    const { rows: acceptorRow } = await client.query(
+      `SELECT name, role FROM users WHERE id=$1`, [req.user.id]
+    )
     const { rows: units } = unitIds.length
       ? await client.query(`SELECT * FROM units WHERE id = ANY($1)`, [unitIds])
       : { rows: [] }
@@ -142,13 +158,18 @@ router.post('/returns', verifyJWT, checkRole(...WAREHOUSE_ROLES), upload.fields(
     let condMap = {}
     try { condMap = JSON.parse(items_condition || '{}') } catch {}
 
+    const ret = returnerRow[0] || {}
     // Generate PDF
     const pdfBytes = await createReturnPDF({
       items: units.map(u => ({ ...u, condition: condMap[u.id] })),
-      returnedBy: returnerRow[0]?.name || '',
+      returnedBy: ret.name || '',
       acceptedBy: acceptorRow[0]?.name || '',
       conditionNotes: condition_notes,
       signatureDataUrl: signature_data,
+      returnerRole: ret.role,
+      returnerContact: ret.phone || ret.email || '',
+      projectName: ret.project_name,
+      acceptorRole: acceptorRow[0]?.role,
     })
     const act_pdf_url = await uploadFile(Buffer.from(pdfBytes), 'act_return.pdf', 'acts')
 
