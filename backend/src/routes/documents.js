@@ -119,18 +119,53 @@ router.post('/upload', verifyJWT, upload.single('file'), async (req, res) => {
     // Build parsed_data from scenes (no AI call — direct extraction)
     let parsed_data = null
     if (type !== 'callsheet' && parsed_content?.scenes) {
-      // Map scene → shoot date from shoot_days
+      // Map scene → shoot date from shoot_days (KPP format)
       const sceneDateMap = {}
+      const sceneTimeMap = {}
       for (const sd of (parsed_content.shoot_days || [])) {
         for (const sid of (sd.scenes || [])) {
           sceneDateMap[sid] = sd.date || ''
+          sceneTimeMap[sid] = `СД ${sd.day_number || '?'}`
+        }
+      }
+
+      // For scenario: get series number and KPP dates to map correctly
+      let dataSeries = ''
+      if (type === 'scenario') {
+        const fnLower = (req.file.originalname || '').toLowerCase()
+        const sm = fnLower.match(/(\d{1,2})\s*сер/) || fnLower.match(/сер[а-я]*\s*(\d{1,2})/) || fnLower.match(/^(\d{1,2})[._\s-]/)
+        dataSeries = sm ? sm[1].padStart(2, '0') : ''
+        // Fallback: get series from existing KPP scenes in DB
+        if (!dataSeries) {
+          const { rows: kppItems } = await db.query(
+            `SELECT DISTINCT pli.scene FROM production_list_items pli
+             JOIN production_lists pl ON pl.id = pli.list_id
+             WHERE pl.project_id=$1 AND pli.scene LIKE '%-%' LIMIT 1`, [project_id])
+          if (kppItems.length) { const m2 = kppItems[0].scene.match(/^(\d+)-/); if (m2) dataSeries = m2[1].padStart(2, '0') }
+        }
+        // Load KPP date map if scenario has no shoot_days
+        if (!Object.keys(sceneDateMap).length) {
+          const { rows: kd } = await db.query(
+            `SELECT parsed_content FROM documents WHERE project_id=$1 AND type='kpp' ORDER BY version DESC LIMIT 1`, [project_id])
+          if (kd.length && kd[0].parsed_content?.shoot_days) {
+            for (const sd of kd[0].parsed_content.shoot_days) {
+              for (const sid of (sd.scenes || [])) {
+                sceneDateMap[sid] = sd.date || ''
+                sceneTimeMap[sid] = `СД ${sd.day_number || '?'}`
+              }
+            }
+          }
         }
       }
 
       parsed_data = { props: [], costumes: [], makeup: [], auto: [], stunts: [], decoration: [], pyrotechnics: [], art_fill: [], dummy: [] }
       const seen = {}
       for (const s of parsed_content.scenes) {
-        const shootDate = sceneDateMap[s.id] || ''
+        // For scenario: prefix series to scene ID
+        const rawId = (s.id || '').replace(/^0+/, '')
+        const fullSceneId = (type === 'scenario' && dataSeries && rawId) ? `${parseInt(dataSeries)}-${rawId}` : s.id
+        const shootDate = sceneDateMap[fullSceneId] || sceneDateMap[s.id] || ''
+        const shootTime = sceneTimeMap[fullSceneId] || sceneTimeMap[s.id] || `СД ${s.day || '?'}`
         const sceneText = s.object || s.synopsis || ''
         for (const [field, cat] of Object.entries(CATEGORY_MAP_IMPORT)) {
           for (const item of (s[field] || [])) {
@@ -138,8 +173,8 @@ router.post('/upload', verifyJWT, upload.single('file'), async (req, res) => {
             if (!name || seen[cat + ':' + name.toLowerCase()]) continue
             seen[cat + ':' + name.toLowerCase()] = true
             parsed_data[cat].push({
-              name, scene: s.id, day: shootDate, source: type,
-              time: `СД ${s.day || '?'}`,
+              name, scene: fullSceneId, day: shootDate, source: type,
+              time: shootTime,
               location: s.location || '',
               note: sceneText,
             })
