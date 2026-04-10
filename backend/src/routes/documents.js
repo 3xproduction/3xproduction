@@ -223,22 +223,31 @@ router.post('/upload', verifyJWT, upload.single('file'), async (req, res) => {
       }
       console.log(`[UPLOAD] Updated ${updated} list items with scenario text`)
 
-      // AI analysis: synchronous with 60s timeout (serverless freezes after response)
+      // AI analysis: find items in scenario text NOT already in KPP lists
       if (process.env.ANTHROPIC_API_KEY) {
         try {
           console.log(`[AI] Starting scenario analysis`)
+          // Get existing item names to tell AI what's already known
+          const { rows: existingItems } = await db.query(
+            `SELECT DISTINCT LOWER(TRIM(pli.name)) AS name FROM production_list_items pli
+             JOIN production_lists pl ON pl.id = pli.list_id
+             WHERE pl.project_id = $1`, [project_id]
+          )
+          const existingNames = existingItems.map(r => r.name)
+
           const sceneTexts = parsed_content.scenes.map(s => {
             const id = s.id || s.scene || ''
             const text = s.text || s.synopsis || s.object || ''
-            const props = (s.props || []).join(', ')
-            const costumes = (s.costumes || []).join(', ')
-            const makeup = (s.makeup || []).join(', ')
-            return `Сцена ${id}: ${text.substring(0, 200)} | Реквизит: ${props} | Костюмы: ${costumes} | Грим: ${makeup}`
+            return `Сцена ${id}: ${text.substring(0, 300)}`
           }).join('\n')
 
-          const aiPromise = require('../services/groq').parseDocument(sceneTexts)
+          const aiPrompt = `Вот текст сценария:\n${sceneTexts.substring(0, 14000)}\n\nВот предметы, которые УЖЕ ЕСТЬ в списке (не дублируй их):\n${existingNames.join(', ')}\n\nНайди предметы реквизита, костюмы, грим, декорации, транспорт которые УПОМИНАЮТСЯ В ТЕКСТЕ СЦЕН, но ОТСУТСТВУЮТ в списке выше. Верни ТОЛЬКО НОВЫЕ позиции.`
+
+          const { parseDocument } = require('../services/groq')
+          const aiPromise = parseDocument(aiPrompt)
           const timeout = new Promise((_, reject) => setTimeout(() => reject(new Error('AI timeout 60s')), 60000))
           const aiResult = await Promise.race([aiPromise, timeout])
+          console.log(`[AI] Result categories: ${aiResult ? Object.keys(aiResult).filter(k => (aiResult[k]||[]).length).join(', ') : 'none'}`)
 
           if (aiResult) {
             const { rows: members } = await db.query(`SELECT id, role FROM users WHERE project_id=$1`, [project_id])
