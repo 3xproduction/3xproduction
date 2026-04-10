@@ -124,7 +124,7 @@ app.post('/admin/cleanup-dupes', require('./middleware/auth').verifyJWT, async (
         SELECT id FROM (
           SELECT id,
             ROW_NUMBER() OVER (
-              PARTITION BY list_id, LOWER(TRIM(REGEXP_REPLACE(name, '\\s+', ' ', 'g')))
+              PARTITION BY list_id, LOWER(TRIM(name)), COALESCE(scene, '')
               ORDER BY created_at ASC
             ) AS rn
           FROM production_list_items

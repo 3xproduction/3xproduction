@@ -229,8 +229,8 @@ router.post('/upload', verifyJWT, upload.single('file'), async (req, res) => {
             const normalizedName = (item.name || '').replace(/\s+/g, ' ').trim()
             if (!normalizedName) continue
             const { rows: ex } = await db.query(
-              `SELECT id FROM production_list_items WHERE list_id=$1 AND LOWER(TRIM(REGEXP_REPLACE(name, '\\s+', ' ', 'g')))=LOWER($2)`,
-              [lr[0].id, normalizedName.toLowerCase()]
+              `SELECT id FROM production_list_items WHERE list_id=$1 AND LOWER(TRIM(name))=LOWER($2) AND COALESCE(scene,'')=$3`,
+              [lr[0].id, normalizedName.toLowerCase(), item.scene || '']
             )
             if (ex.length) continue
             await db.query(
