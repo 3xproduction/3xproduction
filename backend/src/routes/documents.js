@@ -133,7 +133,7 @@ router.post('/upload', verifyJWT, upload.single('file'), async (req, res) => {
         const sceneText = s.object || s.synopsis || ''
         for (const [field, cat] of Object.entries(CATEGORY_MAP_IMPORT)) {
           for (const item of (s[field] || [])) {
-            const name = (item || '').trim()
+            const name = (item || '').replace(/\s+/g, ' ').trim()
             if (!name || seen[cat + ':' + name.toLowerCase()]) continue
             seen[cat + ':' + name.toLowerCase()] = true
             parsed_data[cat].push({
@@ -226,14 +226,17 @@ router.post('/upload', verifyJWT, upload.single('file'), async (req, res) => {
             [project_id, member.id, listType]
           )
           for (const item of items) {
+            const normalizedName = (item.name || '').replace(/\s+/g, ' ').trim()
+            if (!normalizedName) continue
             const { rows: ex } = await db.query(
-              `SELECT id FROM production_list_items WHERE list_id=$1 AND name=$2`, [lr[0].id, item.name]
+              `SELECT id FROM production_list_items WHERE list_id=$1 AND LOWER(TRIM(REGEXP_REPLACE(name, '\\s+', ' ', 'g')))=LOWER($2)`,
+              [lr[0].id, normalizedName.toLowerCase()]
             )
             if (ex.length) continue
             await db.query(
               `INSERT INTO production_list_items (list_id, name, scene, day, time, location, qty, source, note)
                VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
-              [lr[0].id, item.name, item.scene||null, item.day||null, item.time||null,
+              [lr[0].id, normalizedName, item.scene||null, item.day||null, item.time||null,
                item.location||null, 1, item.source||type, item.note||null]
             )
           }
