@@ -557,14 +557,14 @@ export default function DocumentsPage() {
                         return (a.scene || '').localeCompare(b.scene || '')
                       })
 
-                    // Group by shoot date
+                    // Group by shoot date (skip items without date)
+                    const withDate = filtered.filter(i => i.day)
                     const groups = []
                     let lastDay = null
-                    for (const item of filtered) {
-                      const day = item.day || 'Без даты'
-                      if (day !== lastDay) {
-                        groups.push({ day, time: item.time, items: [] })
-                        lastDay = day
+                    for (const item of withDate) {
+                      if (item.day !== lastDay) {
+                        groups.push({ day: item.day, time: item.time, items: [] })
+                        lastDay = item.day
                       }
                       groups[groups.length - 1].items.push(item)
                     }

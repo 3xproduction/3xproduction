@@ -241,7 +241,22 @@ router.post('/upload', verifyJWT, upload.single('file'), async (req, res) => {
             return `Сцена ${id}: ${text.substring(0, 300)}`
           }).join('\n')
 
-          const aiPrompt = `Вот текст сценария:\n${sceneTexts.substring(0, 14000)}\n\nВот предметы, которые УЖЕ ЕСТЬ в списке (не дублируй их):\n${existingNames.join(', ')}\n\nНайди предметы реквизита, костюмы, грим, декорации, транспорт которые УПОМИНАЮТСЯ В ТЕКСТЕ СЦЕН, но ОТСУТСТВУЮТ в списке выше. Верни ТОЛЬКО НОВЫЕ позиции.`
+          // Build scene→date map from KPP data for AI items
+          const { rows: kppDocs } = await db.query(
+            `SELECT parsed_content FROM documents WHERE project_id=$1 AND type='kpp' ORDER BY version DESC LIMIT 1`, [project_id]
+          )
+          const aiSceneDateMap = {}
+          const aiSceneTimeMap = {}
+          if (kppDocs.length && kppDocs[0].parsed_content?.shoot_days) {
+            for (const sd of kppDocs[0].parsed_content.shoot_days) {
+              for (const sid of (sd.scenes || [])) {
+                aiSceneDateMap[sid] = sd.date || ''
+                aiSceneTimeMap[sid] = `СД ${sd.day_number || '?'}`
+              }
+            }
+          }
+
+          const aiPrompt = `Вот текст сценария:\n${sceneTexts.substring(0, 14000)}\n\nВот предметы, которые УЖЕ ЕСТЬ в списке (не дублируй их):\n${existingNames.join(', ')}\n\nНайди предметы реквизита, костюмы, грим, декорации, транспорт которые УПОМИНАЮТСЯ В ТЕКСТЕ СЦЕН, но ОТСУТСТВУЮТ в списке выше. Верни ТОЛЬКО НОВЫЕ позиции. ОБЯЗАТЕЛЬНО укажи номер сцены в поле scene.`
 
           const { parseDocument } = require('../services/groq')
           const aiPromise = parseDocument(aiPrompt)
@@ -263,9 +278,12 @@ router.post('/upload', verifyJWT, upload.single('file'), async (req, res) => {
                   const { rows: lr } = await db.query(`SELECT id FROM production_lists WHERE project_id=$1 AND user_id=$2 AND type=$3`, [project_id, m.id, cat])
                   const { rows: ex } = await db.query(`SELECT id FROM production_list_items WHERE list_id=$1 AND LOWER(TRIM(name))=LOWER($2)`, [lr[0].id, aiName.toLowerCase()])
                   if (ex.length) continue
-                  const sceneId = seriesNum ? `${parseInt(seriesNum)}-${(ai.scene||'').replace(/^0+/,'')}` : (ai.scene || null)
+                  const rawScene = (ai.scene||'').replace(/^0+/, '')
+                  const sceneId = seriesNum && rawScene ? `${parseInt(seriesNum)}-${rawScene}` : (rawScene || null)
+                  const aiDay = (sceneId && aiSceneDateMap[sceneId]) || ai.day || null
+                  const aiTime = (sceneId && aiSceneTimeMap[sceneId]) || ai.time || null
                   await db.query(`INSERT INTO production_list_items (list_id, name, scene, day, time, location, qty, source, note) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
-                    [lr[0].id, aiName, sceneId, ai.day||null, ai.time||null, ai.location||null, 1, 'ai', ai.note||null])
+                    [lr[0].id, aiName, sceneId, aiDay, aiTime, ai.location||null, 1, 'ai', ai.note||null])
                   aiImported++
                 }
               }
@@ -281,8 +299,11 @@ router.post('/upload', verifyJWT, upload.single('file'), async (req, res) => {
                 const { rows: lr } = await db.query(`SELECT id FROM production_lists WHERE project_id=$1 AND user_id=$2 AND type=$3`, [project_id, m.id, sugCat])
                 const { rows: ex } = await db.query(`SELECT id FROM production_list_items WHERE list_id=$1 AND LOWER(TRIM(name))=LOWER($2)`, [lr[0].id, sugName.toLowerCase()])
                 if (ex.length) continue
-                await db.query(`INSERT INTO production_list_items (list_id, name, scene, qty, source, note) VALUES ($1,$2,$3,$4,$5,$6)`,
-                  [lr[0].id, sugName, null, 1, 'ai', sug.reason||null])
+                const sugScene = sug.scene ? (seriesNum ? `${parseInt(seriesNum)}-${(sug.scene||'').replace(/^0+/,'')}` : sug.scene) : null
+                const sugDay = (sugScene && aiSceneDateMap[sugScene]) || null
+                const sugTime = (sugScene && aiSceneTimeMap[sugScene]) || null
+                await db.query(`INSERT INTO production_list_items (list_id, name, scene, day, time, qty, source, note) VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
+                  [lr[0].id, sugName, sugScene, sugDay, sugTime, 1, 'ai', sug.reason||null])
                 aiImported++
               }
             }
