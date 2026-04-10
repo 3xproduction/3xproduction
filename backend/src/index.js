@@ -114,6 +114,32 @@ app.post('/admin/reset-docs', require('./middleware/auth').verifyJWT, async (req
   }
 })
 
+// POST /admin/cleanup-dupes — remove duplicate items from production lists (keep oldest)
+app.post('/admin/cleanup-dupes', require('./middleware/auth').verifyJWT, async (req, res) => {
+  if (req.user.role !== 'producer') return res.status(403).json({ error: 'Producer only' })
+  try {
+    const { rows } = await db.query(`
+      DELETE FROM production_list_items
+      WHERE id IN (
+        SELECT id FROM (
+          SELECT id,
+            ROW_NUMBER() OVER (
+              PARTITION BY list_id, LOWER(TRIM(REGEXP_REPLACE(name, '\\s+', ' ', 'g')))
+              ORDER BY created_at ASC
+            ) AS rn
+          FROM production_list_items
+        ) dupes
+        WHERE rn > 1
+      )
+      RETURNING id
+    `)
+    res.json({ ok: true, deleted: rows.length })
+  } catch (err) {
+    console.error(err)
+    res.status(500).json({ error: 'Server error' })
+  }
+})
+
 // GET /projects — list all projects
 app.get('/projects', require('./middleware/auth').verifyJWT, async (req, res) => {
   try {
