@@ -86,6 +86,15 @@ export const ROLES = {
     world: 'production',
     uploadCallsheet: true,
   },
+  first_assistant_director: {
+    label: '1-й ассистент режиссёра-постановщика',
+    world: 'production',
+    uploadCallsheet: true,
+    uploadKpp: true,
+    uploadScenario: true,
+    ownLists: ['all'],
+    seeAllLists: true,
+  },
   director: {
     label: 'Режиссёр-постановщик',
     world: 'production',

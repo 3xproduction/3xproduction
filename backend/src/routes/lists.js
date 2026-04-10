@@ -5,9 +5,10 @@ const { verifyJWT } = require('../middleware/auth')
 const ALL_LIST_TYPES = ['props', 'art_fill', 'dummy', 'auto', 'decoration', 'costumes', 'makeup', 'stunts', 'pyrotechnics']
 
 const ROLE_OWN_LISTS = {
-  production_designer:    ALL_LIST_TYPES,
-  art_director_assistant: ALL_LIST_TYPES,
-  props_master:           ['props', 'art_fill', 'dummy', 'auto'],
+  production_designer:      ALL_LIST_TYPES,
+  art_director_assistant:   ALL_LIST_TYPES,
+  first_assistant_director: ALL_LIST_TYPES,
+  props_master:             ['props', 'art_fill', 'dummy', 'auto'],
   props_assistant:        ['props', 'art_fill', 'dummy', 'auto'],
   decorator:              ['decoration', 'props', 'art_fill', 'dummy'],
   costumer:               ['costumes'],
@@ -17,7 +18,7 @@ const ROLE_OWN_LISTS = {
   pyrotechnician:         ['pyrotechnics'],
 }
 
-const SEE_ALL_ROLES = ['production_designer', 'art_director_assistant', 'director', 'project_director', 'producer']
+const SEE_ALL_ROLES = ['production_designer', 'art_director_assistant', 'first_assistant_director', 'director', 'project_director', 'producer']
 
 function getOwnTypes(role) {
   return ROLE_OWN_LISTS[role] || []

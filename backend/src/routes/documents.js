@@ -22,9 +22,10 @@ const upload = multer({
 
 // Role → list types mapping for auto-import
 const ROLE_LIST_TYPES = {
-  production_designer:    ['props','art_fill','dummy','auto','decoration','costumes','makeup','stunts','pyrotechnics'],
-  art_director_assistant: ['props','art_fill','dummy','auto','decoration','costumes','makeup','stunts','pyrotechnics'],
-  props_master:           ['props','art_fill','dummy','auto','costumes'],
+  production_designer:      ['props','art_fill','dummy','auto','decoration','costumes','makeup','stunts','pyrotechnics'],
+  art_director_assistant:   ['props','art_fill','dummy','auto','decoration','costumes','makeup','stunts','pyrotechnics'],
+  first_assistant_director: ['props','art_fill','dummy','auto','decoration','costumes','makeup','stunts','pyrotechnics'],
+  props_master:             ['props','art_fill','dummy','auto','costumes'],
   props_assistant:        ['props','art_fill','dummy','auto','costumes'],
   decorator:              ['decoration','props','art_fill','dummy'],
   costumer:               ['costumes'],

@@ -34,14 +34,14 @@ const SOURCE_BADGE = {
 }
 
 const SEE_ALL_ROLES = [
-  'production_designer', 'art_director_assistant', 'director', 'project_director', 'producer',
+  'production_designer', 'art_director_assistant', 'first_assistant_director', 'director', 'project_director', 'producer',
   'project_deputy_upload', 'project_deputy', 'set_admin', 'assistant_director',
   'gaffer', 'dop', 'camera_mechanic', 'casting_director', 'casting_assistant', 'playback', 'driver',
 ]
 const HIDE_LIST_TYPES_ROLES = ['set_admin']
 
 const UPLOAD_KPP_ROLES = [
-  'producer', 'project_director', 'project_deputy_upload', 'director', 'assistant_director',
+  'producer', 'project_director', 'project_deputy_upload', 'director', 'assistant_director', 'first_assistant_director',
   'production_designer', 'art_director_assistant',
   'props_master', 'props_assistant', 'decorator', 'costumer', 'costume_assistant',
   'makeup_artist', 'stunt_coordinator', 'pyrotechnician',
@@ -550,12 +550,20 @@ export default function DocumentsPage() {
                       return words.every(w => haystack.includes(w))
                     }
 
+                    function parseDateNum(day) {
+                      if (!day) return 99999999
+                      const m = day.match(/(\d{1,2})[.\-/](\d{1,2})/)
+                      if (m) return parseInt(m[2]) * 100 + parseInt(m[1]) // month*100 + day for correct sort
+                      const n = parseInt(day.replace(/\D/g, ''))
+                      return isNaN(n) ? 99999999 : n
+                    }
+
                     const filtered = listItems
                       .filter(i => i.ai_status !== 'rejected' && fuzzyMatch(i, listSearch))
                       .sort((a, b) => {
-                        const dayA = (a.day || 'яяя').replace(/[^\d.]/g, '')
-                        const dayB = (b.day || 'яяя').replace(/[^\d.]/g, '')
-                        if (dayA !== dayB) return dayA.localeCompare(dayB)
+                        const dayA = parseDateNum(a.day)
+                        const dayB = parseDateNum(b.day)
+                        if (dayA !== dayB) return dayA - dayB
                         return (a.scene || '').localeCompare(b.scene || '')
                       })
 
@@ -950,12 +958,12 @@ export default function DocumentsPage() {
       {/* Scroll to top */}
       {showScrollTop && (
         <button onClick={() => window.scrollTo({ top: 0, behavior: 'smooth' })} style={{
-          position: 'fixed', bottom: cart.length > 0 ? 86 : 24, left: 24, zIndex: 300,
-          width: 44, height: 44, borderRadius: '50%',
-          background: 'var(--white)', border: '1px solid var(--border)',
-          boxShadow: '0 2px 12px rgba(0,0,0,0.1)',
+          position: 'fixed', top: 16, right: 60, zIndex: 250,
+          width: 36, height: 36, borderRadius: '50%',
+          background: 'var(--accent)', border: 'none',
+          boxShadow: '0 2px 8px rgba(0,0,0,0.15)',
           cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center',
-          fontSize: 18, color: 'var(--muted)', transition: 'all 0.2s',
+          fontSize: 16, color: '#fff', transition: 'all 0.2s',
         }}>
           ↑
         </button>
