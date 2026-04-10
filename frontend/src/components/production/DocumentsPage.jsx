@@ -82,7 +82,6 @@ export default function DocumentsPage() {
   const [listItems, setListItems] = useState([])
   const [listLoading, setListLoading] = useState(false)
   const [listSearch, setListSearch] = useState('')
-  const [parsedData, setParsedData] = useState(null)
   const [matchedUnits, setMatchedUnits] = useState([])
   const [cardId, setCardId] = useState(null)
   const [editingId, setEditingId] = useState(null)
@@ -154,11 +153,6 @@ export default function DocumentsPage() {
 
   useEffect(() => {
     if (tab === 'my_list') loadListItems()
-    if (tab === 'ai_check' && projectId) {
-      docsApi.parsed(projectId)
-        .then(data => setParsedData(data.parsed_data))
-        .catch(() => {})
-    }
   }, [tab, activeListType, projectId])
 
   function getMatch(itemName) {
@@ -287,11 +281,7 @@ export default function DocumentsPage() {
   const allTabs = [
     ...Object.entries(visibleDocTypes).map(([key, t]) => ({ key, label: t.label, icon: t.icon })),
     { key: 'my_list', label: 'Мой список', icon: '📄' },
-    { key: 'ai_check', label: 'Сверка ИИ', icon: '🤖' },
   ]
-
-  const crossCheck = parsedData?.cross_check || null
-  const aiSuggestions = parsedData?.ai_suggestions || []
 
   return (
     <ProductionLayout>
@@ -758,53 +748,6 @@ export default function DocumentsPage() {
 
         {cardId && <UnitCardModal unitId={cardId} onClose={() => setCardId(null)} />}
 
-        {/* Сверка ИИ */}
-        {tab === 'ai_check' && (
-          <div>
-            {!parsedData ? (
-              <div style={{ textAlign: 'center', padding: '60px 0', color: 'var(--muted)', fontSize: 14 }}>
-                КПП ещё не загружен или не распознан ИИ
-              </div>
-            ) : (
-              <>
-                {aiSuggestions.length > 0 && (
-                  <div style={{ marginBottom: 28 }}>
-                    <div style={{ fontWeight: 600, fontSize: 15, marginBottom: 14, display: 'flex', alignItems: 'center', gap: 8 }}>
-                      🤖 Предложения ИИ <Badge color="green">{aiSuggestions.length}</Badge>
-                    </div>
-                    {aiSuggestions.map((s, i) => (
-                      <div key={i} style={{ background: 'var(--white)', border: '1px solid rgba(22,163,74,0.2)', borderRadius: 'var(--radius-card)', padding: '14px 16px', marginBottom: 10 }}>
-                        <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 12 }}>
-                          <div>
-                            <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6 }}>
-                              <span style={{ fontSize: 11, padding: '2px 8px', borderRadius: 'var(--radius-badge)', background: 'var(--green-dim)', color: 'var(--green)', fontWeight: 500 }}>🤖 ИИ</span>
-                              <span style={{ fontSize: 12, color: 'var(--muted)' }}>{categoryLabel(s.category)}</span>
-                            </div>
-                            <div style={{ fontWeight: 500, marginBottom: 4 }}>{s.item}</div>
-                            <div style={{ fontSize: 12, color: 'var(--muted)', lineHeight: 1.5 }}>{s.reason}</div>
-                          </div>
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                )}
-
-                {crossCheck && (
-                  <>
-                    <CrossSection icon="⚠️" title="Расхождения" color="amber" items={crossCheck.discrepancies || []} label="Расхождение" />
-                    <CrossSection icon="🔍" title="Пропуски" color="red" items={crossCheck.missing || []} label="Пропуск" />
-                    <CrossSection icon="🔗" title="Сквозные единицы" color="blue" items={crossCheck.cross_items || []} label="Сквозная" />
-                  </>
-                )}
-
-                {!crossCheck && aiSuggestions.length === 0 && (
-                  <div style={{ textAlign: 'center', padding: '40px 0', color: 'var(--muted)', fontSize: 14 }}>Нет данных сверки</div>
-                )}
-              </>
-            )}
-          </div>
-        )}
-
         {/* Upload modal */}
         {showUpload && (
           <div style={{
@@ -986,23 +929,5 @@ function DeltaBadge({ color, icon, label }) {
   )
 }
 
-function CrossSection({ icon, title, color, items, label }) {
-  const bg = { amber: 'var(--amber-dim)', red: 'var(--red-dim)', blue: 'var(--blue-dim)' }
-  const cl = { amber: 'var(--amber)', red: 'var(--red)', blue: 'var(--blue)' }
-  if (!items.length) return null
-  return (
-    <div style={{ marginBottom: 24 }}>
-      <div style={{ fontWeight: 600, fontSize: 15, marginBottom: 12, display: 'flex', alignItems: 'center', gap: 8 }}>
-        {icon} {title} <Badge color={color}>{items.length}</Badge>
-      </div>
-      {items.map((item, i) => (
-        <div key={i} style={{ display: 'flex', gap: 10, alignItems: 'flex-start', background: 'var(--white)', border: `1px solid ${cl[color]}30`, borderRadius: 8, padding: '12px 14px', marginBottom: 8 }}>
-          <span style={{ fontSize: 10, padding: '2px 8px', borderRadius: 'var(--radius-badge)', background: bg[color], color: cl[color], fontWeight: 500, flexShrink: 0, marginTop: 1 }}>
-            {label}
-          </span>
-          <span style={{ fontSize: 13, lineHeight: 1.5 }}>{item}</span>
-        </div>
-      ))}
-    </div>
   )
 }

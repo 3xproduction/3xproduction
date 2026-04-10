@@ -166,43 +166,148 @@ router.post('/upload', verifyJWT, upload.single('file'), async (req, res) => {
 
     // When scenario uploaded — attach scene texts to existing list items
     if (type === 'scenario' && parsed_content?.scenes) {
-      // Extract series number from filename: "01 серия", "серия 01", "сер 1", etc.
+      // Extract series number: 1) from filename, 2) from KPP scene IDs in DB
       const fnLower = (req.file.originalname || '').toLowerCase()
       const seriesMatch = fnLower.match(/(\d{1,2})\s*сер/) || fnLower.match(/сер[а-я]*\s*(\d{1,2})/) || fnLower.match(/^(\d{1,2})[._\s-]/)
-      const seriesNum = seriesMatch ? seriesMatch[1].padStart(2, '0') : ''
-      console.log(`[UPLOAD] Scenario series: "${seriesNum}" from "${req.file.originalname}"`)
+      let seriesNum = seriesMatch ? seriesMatch[1].padStart(2, '0') : ''
 
-      if (seriesNum) {
-        // Build map: "XX-YY" → scene text
-        const sceneTextMap = {}
-        for (const s of parsed_content.scenes) {
-          const sceneId = `${seriesNum}-${(s.id || s.scene || '').replace(/^0+/, '')}`
-          sceneTextMap[sceneId] = s.text || s.synopsis || s.object || ''
-          // Also try with zero-padded scene number
-          const paddedId = `${seriesNum}-${String(s.id || s.scene || '').padStart(2, '0')}`
-          sceneTextMap[paddedId] = sceneTextMap[sceneId]
-        }
-        console.log(`[UPLOAD] Scene text map: ${Object.keys(sceneTextMap).length} scenes`)
-
-        // Update existing list items that have matching scene IDs
-        const { rows: allItems } = await db.query(
-          `SELECT pli.id, pli.scene, pli.note FROM production_list_items pli
+      // Fallback: get series number from existing KPP list items (e.g. scene "46-38" → series "46")
+      if (!seriesNum) {
+        const { rows: kppItems } = await db.query(
+          `SELECT DISTINCT pli.scene FROM production_list_items pli
            JOIN production_lists pl ON pl.id = pli.list_id
-           WHERE pl.project_id = $1 AND pli.scene IS NOT NULL`,
+           WHERE pl.project_id = $1 AND pli.scene IS NOT NULL AND pli.scene LIKE '%-%'
+           LIMIT 1`,
           [project_id]
         )
-        let updated = 0
-        for (const item of allItems) {
-          const scenarioText = sceneTextMap[item.scene]
-          if (!scenarioText) continue
-          // Append scenario text to note, separated
-          const existingNote = (item.note || '').trim()
-          const separator = existingNote ? '\n---\n' : ''
-          const newNote = existingNote + separator + '📝 ' + scenarioText.substring(0, 500)
-          await db.query(`UPDATE production_list_items SET note = $1 WHERE id = $2`, [newNote, item.id])
-          updated++
+        if (kppItems.length) {
+          const m = kppItems[0].scene.match(/^(\d+)-/)
+          if (m) seriesNum = m[1].padStart(2, '0')
         }
-        console.log(`[UPLOAD] Updated ${updated} list items with scenario text`)
+      }
+      console.log(`[UPLOAD] Scenario series: "${seriesNum}" from "${req.file.originalname}"`)
+
+      // Build map: multiple key formats for reliable matching
+      const sceneTextMap = {}
+      for (const s of parsed_content.scenes) {
+        const rawId = (s.id || s.scene || '').replace(/^0+/, '')
+        const text = s.text || s.synopsis || s.object || ''
+        if (!rawId || !text) continue
+        // Key formats: "46-38", "46-038", "38" (raw)
+        if (seriesNum) {
+          sceneTextMap[`${seriesNum}-${rawId}`] = text
+          sceneTextMap[`${parseInt(seriesNum)}-${rawId}`] = text
+          sceneTextMap[`${seriesNum}-${String(rawId).padStart(2, '0')}`] = text
+        }
+        sceneTextMap[rawId] = text
+      }
+      console.log(`[UPLOAD] Scene text map: ${Object.keys(sceneTextMap).length} entries`)
+
+      // Update existing list items that have matching scene IDs
+      const { rows: allItems } = await db.query(
+        `SELECT pli.id, pli.scene, pli.note FROM production_list_items pli
+         JOIN production_lists pl ON pl.id = pli.list_id
+         WHERE pl.project_id = $1 AND pli.scene IS NOT NULL`,
+        [project_id]
+      )
+      let updated = 0
+      for (const item of allItems) {
+        if ((item.note || '').includes('\n---\n')) continue // already has scenario text
+        const scenarioText = sceneTextMap[item.scene] || sceneTextMap[item.scene.replace(/^0+/, '')]
+        if (!scenarioText) continue
+        const existingNote = (item.note || '').trim()
+        const separator = existingNote ? '\n---\n' : ''
+        const newNote = existingNote + separator + '📝 ' + scenarioText.substring(0, 500)
+        await db.query(`UPDATE production_list_items SET note = $1 WHERE id = $2`, [newNote, item.id])
+        updated++
+      }
+      console.log(`[UPLOAD] Updated ${updated} list items with scenario text`)
+
+      // AI analysis: find items in scenario not already in lists
+      if (process.env.ANTHROPIC_API_KEY) {
+        try {
+          const sceneTexts = parsed_content.scenes.map(s => {
+            const id = s.id || s.scene || ''
+            const text = s.text || s.synopsis || s.object || ''
+            const props = (s.props || []).join(', ')
+            const costumes = (s.costumes || []).join(', ')
+            const makeup = (s.makeup || []).join(', ')
+            return `Сцена ${id}: ${text.substring(0, 200)} | Реквизит: ${props} | Костюмы: ${costumes} | Грим: ${makeup}`
+          }).join('\n')
+          const aiResult = await require('../services/groq').parseDocument(sceneTexts)
+          // Import AI-found items into lists with source='ai'
+          if (aiResult) {
+            const { rows: projectMembers } = await db.query(
+              `SELECT id, role FROM users WHERE project_id=$1`, [project_id]
+            )
+            let aiImported = 0
+            for (const cat of ALL_LIST_TYPES) {
+              const aiItems = aiResult[cat] || []
+              for (const ai of aiItems) {
+                const aiName = (ai.name || ai.item || '').replace(/\s+/g, ' ').trim()
+                if (!aiName) continue
+                for (const member of projectMembers) {
+                  const isFullAccess = ['producer', 'project_director'].includes(member.role)
+                  const ownTypes = isFullAccess ? ALL_LIST_TYPES : (ROLE_LIST_TYPES[member.role] || [])
+                  if (!ownTypes.includes(cat)) continue
+                  await db.query(
+                    `INSERT INTO production_lists (project_id, user_id, type) VALUES ($1,$2,$3) ON CONFLICT DO NOTHING`,
+                    [project_id, member.id, cat]
+                  )
+                  const { rows: lr } = await db.query(
+                    `SELECT id FROM production_lists WHERE project_id=$1 AND user_id=$2 AND type=$3`,
+                    [project_id, member.id, cat]
+                  )
+                  const { rows: ex } = await db.query(
+                    `SELECT id FROM production_list_items WHERE list_id=$1 AND LOWER(TRIM(name))=LOWER($2)`,
+                    [lr[0].id, aiName.toLowerCase()]
+                  )
+                  if (ex.length) continue
+                  const sceneId = seriesNum ? `${parseInt(seriesNum)}-${(ai.scene || '').replace(/^0+/, '')}` : (ai.scene || null)
+                  await db.query(
+                    `INSERT INTO production_list_items (list_id, name, scene, day, time, location, qty, source, note)
+                     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
+                    [lr[0].id, aiName, sceneId, ai.day||null, ai.time||null, ai.location||null, 1, 'ai', ai.note||null]
+                  )
+                  aiImported++
+                }
+              }
+            }
+            // Also import ai_suggestions
+            for (const sug of (aiResult.ai_suggestions || [])) {
+              const sugName = (sug.item || '').replace(/\s+/g, ' ').trim()
+              const sugCat = sug.category || 'props'
+              if (!sugName) continue
+              for (const member of projectMembers) {
+                const isFullAccess = ['producer', 'project_director'].includes(member.role)
+                const ownTypes = isFullAccess ? ALL_LIST_TYPES : (ROLE_LIST_TYPES[member.role] || [])
+                if (!ownTypes.includes(sugCat)) continue
+                await db.query(
+                  `INSERT INTO production_lists (project_id, user_id, type) VALUES ($1,$2,$3) ON CONFLICT DO NOTHING`,
+                  [project_id, member.id, sugCat]
+                )
+                const { rows: lr } = await db.query(
+                  `SELECT id FROM production_lists WHERE project_id=$1 AND user_id=$2 AND type=$3`,
+                  [project_id, member.id, sugCat]
+                )
+                const { rows: ex } = await db.query(
+                  `SELECT id FROM production_list_items WHERE list_id=$1 AND LOWER(TRIM(name))=LOWER($2)`,
+                  [lr[0].id, sugName.toLowerCase()]
+                )
+                if (ex.length) continue
+                await db.query(
+                  `INSERT INTO production_list_items (list_id, name, scene, qty, source, note)
+                   VALUES ($1,$2,$3,$4,$5,$6)`,
+                  [lr[0].id, sugName, null, 1, 'ai', sug.reason||null]
+                )
+                aiImported++
+              }
+            }
+            console.log(`[UPLOAD] AI imported ${aiImported} new items from scenario`)
+          }
+        } catch (aiErr) {
+          console.error('[UPLOAD] AI scenario analysis error:', aiErr.message)
+        }
       }
     }
 

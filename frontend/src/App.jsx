@@ -22,7 +22,6 @@ import DebtsPage from './components/warehouse/DebtsPage'
 import ApprovalsPage from './components/warehouse/ApprovalsPage'
 import DocumentsPage from './components/production/DocumentsPage'
 import DocumentViewer from './components/production/DocumentViewer'
-import ProductionListsPage from './components/production/ProductionListsPage'
 import RequestsProductionPage from './components/production/RequestsProductionPage'
 import WarehouseViewPage from './components/production/WarehouseViewPage'
 import PublicWarehousePage from './components/production/PublicWarehousePage'
@@ -132,7 +131,7 @@ function App() {
         <Route path="/production/requests"      element={<ProductionRoute><RequestsProductionPage /></ProductionRoute>} />
         <Route path="/production/documents"    element={<ProductionRoute><DocumentsPage /></ProductionRoute>} />
         <Route path="/production/documents/:projectId/:docId" element={<ProductionRoute><DocumentViewer /></ProductionRoute>} />
-        <Route path="/production/lists"        element={<ProductionRoute><ProductionListsPage /></ProductionRoute>} />
+        <Route path="/production/lists"        element={<Navigate to="/production/documents" replace />} />
         <Route path="/production/warehouse"    element={<ProductionRoute><WarehouseViewPage /></ProductionRoute>} />
         <Route path="/production/units"        element={<ProductionRoute><UnitsPage /></ProductionRoute>} />
         <Route path="/production/rent"            element={<ProductionRoute><RentPage /></ProductionRoute>} />
