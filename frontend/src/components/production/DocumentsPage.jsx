@@ -928,6 +928,3 @@ function DeltaBadge({ color, icon, label }) {
     </span>
   )
 }
-
-  )
-}
