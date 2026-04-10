@@ -78,14 +78,16 @@ router.get('/:type/items', verifyJWT, async (req, res) => {
   }
 
   try {
-    // If seeAll and no specific user_id — return all items for this project+type
+    // If seeAll and no specific user_id — return deduplicated items for this project+type
     if (seeAll && !targetUserId) {
       const items = await db.query(
-        `SELECT i.*, u.name AS user_name FROM production_list_items i
+        `SELECT DISTINCT ON (LOWER(TRIM(i.name)), COALESCE(i.scene, ''))
+                i.*, u.name AS user_name
+         FROM production_list_items i
          JOIN production_lists l ON l.id = i.list_id
          LEFT JOIN users u ON u.id = l.user_id
          WHERE l.project_id=$1 AND l.type=$2
-         ORDER BY i.sort_order, i.created_at`,
+         ORDER BY LOWER(TRIM(i.name)), COALESCE(i.scene, ''), i.created_at`,
         [projectId, type]
       )
       return res.json({ list: null, items: items.rows })
