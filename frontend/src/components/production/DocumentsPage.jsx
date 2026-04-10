@@ -92,6 +92,11 @@ export default function DocumentsPage() {
   const [expandedItem, setExpandedItem] = useState(null)
   const [collapsedDays, setCollapsedDays] = useState({})
   const [daysInitialized, setDaysInitialized] = useState(false)
+  const [cart, setCart] = useState([])
+  const [showCart, setShowCart] = useState(false)
+  const [cartSending, setCartSending] = useState(false)
+  const [cartSuccess, setCartSuccess] = useState(false)
+  const [showScrollTop, setShowScrollTop] = useState(false)
 
   const canUpload = tab === 'callsheet'
     ? UPLOAD_CALLSHEET_ROLES.includes(role)
@@ -192,12 +197,30 @@ export default function DocumentsPage() {
     } catch (e) { alert(e.message || 'Ошибка') }
   }
 
-  async function handleOrderFromWarehouse(unitId) {
-    try {
-      await requestsApi.create({ unit_ids: [unitId], project_id: projectId })
-      alert('Заявка создана')
-    } catch (e) { alert(e.message || 'Ошибка') }
+  function addToCart(unitId) {
+    if (!cart.includes(unitId)) setCart(c => [...c, unitId])
   }
+  function removeFromCart(unitId) {
+    setCart(c => c.filter(x => x !== unitId))
+  }
+  async function submitCart() {
+    if (!cart.length) return
+    setCartSending(true)
+    try {
+      await requestsApi.create({ unit_ids: cart, project_id: projectId })
+      setCart([])
+      setShowCart(false)
+      setCartSuccess(true)
+      setTimeout(() => setCartSuccess(false), 2500)
+    } catch (e) { alert(e.message || 'Ошибка отправки заявки') }
+    setCartSending(false)
+  }
+
+  useEffect(() => {
+    function onScroll() { setShowScrollTop(window.scrollY > 400) }
+    window.addEventListener('scroll', onScroll)
+    return () => window.removeEventListener('scroll', onScroll)
+  }, [])
 
   const tabDocs = docs.filter(d => d.type === tab)
   const callDates = [...new Set(docs.filter(d => d.type === 'callsheet').map(d =>
@@ -640,10 +663,17 @@ export default function DocumentsPage() {
                                 <div style={{ fontSize: 12, fontWeight: 500 }}>{match.unit_name}</div>
                                 <div style={{ fontSize: 10, color: 'var(--green)' }}>На складе</div>
                               </div>
-                              <button onClick={e => { e.stopPropagation(); handleOrderFromWarehouse(match.unit_id) }}
-                                style={{ padding: '4px 10px', borderRadius: 6, border: '1px solid var(--blue)', background: 'var(--blue-dim)', color: 'var(--blue)', fontSize: 11, fontWeight: 500, cursor: 'pointer', flexShrink: 0 }}>
-                                Заказать
-                              </button>
+                              {cart.includes(match.unit_id) ? (
+                                <button onClick={e => { e.stopPropagation(); removeFromCart(match.unit_id) }}
+                                  style={{ padding: '4px 10px', borderRadius: 6, border: '1px solid var(--red)', background: 'var(--red-dim)', color: 'var(--red)', fontSize: 11, fontWeight: 500, cursor: 'pointer', flexShrink: 0 }}>
+                                  Убрать
+                                </button>
+                              ) : (
+                                <button onClick={e => { e.stopPropagation(); addToCart(match.unit_id) }}
+                                  style={{ padding: '4px 10px', borderRadius: 6, border: '1px solid var(--blue)', background: 'var(--blue-dim)', color: 'var(--blue)', fontSize: 11, fontWeight: 500, cursor: 'pointer', flexShrink: 0 }}>
+                                  В корзину
+                                </button>
+                              )}
                             </div>
                           )}
                           {expandedItem === item.id && item.note && (() => {
@@ -843,6 +873,93 @@ export default function DocumentsPage() {
           </div>
         )}
       </div>
+
+      {/* Floating cart button */}
+      {cart.length > 0 && !showCart && (
+        <button onClick={() => setShowCart(true)} style={{
+          position: 'fixed', bottom: 24, right: 24, zIndex: 300,
+          height: 52, padding: '0 24px', borderRadius: 26,
+          background: 'var(--blue)', color: '#fff', border: 'none',
+          fontSize: 14, fontWeight: 600, cursor: 'pointer',
+          boxShadow: '0 4px 16px rgba(0,0,0,0.18)',
+          display: 'flex', alignItems: 'center', gap: 8,
+        }}>
+          🛒 Корзина ({cart.length})
+        </button>
+      )}
+
+      {/* Cart modal */}
+      {showCart && (
+        <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.45)', zIndex: 400, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16 }}
+          onClick={() => setShowCart(false)}>
+          <div style={{ background: 'var(--white)', borderRadius: 'var(--radius-card)', padding: 24, maxWidth: 500, width: '100%', maxHeight: '80vh', overflowY: 'auto' }}
+            onClick={e => e.stopPropagation()}>
+            <div style={{ fontWeight: 600, fontSize: 16, marginBottom: 16 }}>Корзина ({cart.length})</div>
+            {cart.length === 0 ? (
+              <div style={{ color: 'var(--muted)', fontSize: 13, padding: '20px 0', textAlign: 'center' }}>Корзина пуста</div>
+            ) : (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginBottom: 16 }}>
+                {cart.map(uid => {
+                  const mu = matchedUnits.find(m => m.unit_id === uid)
+                  return (
+                    <div key={uid} style={{
+                      display: 'flex', alignItems: 'center', gap: 10, padding: '10px 12px',
+                      borderRadius: 8, background: 'var(--bg)', border: '1px solid var(--border)',
+                    }}>
+                      <div style={{
+                        width: 40, height: 40, borderRadius: 6, flexShrink: 0,
+                        background: 'var(--border)', display: 'flex', alignItems: 'center', justifyContent: 'center',
+                        fontSize: 16, overflow: 'hidden',
+                      }}>
+                        {mu?.photo_url
+                          ? <img src={mu.photo_url} alt="" style={{ width: '100%', height: '100%', objectFit: 'contain' }} />
+                          : '📦'}
+                      </div>
+                      <div style={{ flex: 1 }}>
+                        <div style={{ fontWeight: 500, fontSize: 13 }}>{mu?.unit_name || 'Единица'}</div>
+                      </div>
+                      <button onClick={() => removeFromCart(uid)} style={{
+                        fontSize: 18, color: 'var(--muted)', background: 'none', border: 'none', cursor: 'pointer', padding: '0 4px',
+                      }}>×</button>
+                    </div>
+                  )
+                })}
+              </div>
+            )}
+            <div style={{ display: 'flex', gap: 8 }}>
+              <Button variant="secondary" fullWidth onClick={() => setShowCart(false)}>Закрыть</Button>
+              <Button fullWidth disabled={cart.length === 0 || cartSending} onClick={submitCart}>
+                {cartSending ? 'Отправка...' : `Оформить заявку (${cart.length})`}
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Success popup */}
+      {cartSuccess && (
+        <div style={{
+          position: 'fixed', top: 24, left: '50%', transform: 'translateX(-50%)', zIndex: 500,
+          background: 'var(--green)', color: '#fff', padding: '12px 24px', borderRadius: 12,
+          fontWeight: 600, fontSize: 14, boxShadow: '0 4px 20px rgba(0,0,0,0.15)',
+        }}>
+          Заявка успешно оформлена
+        </div>
+      )}
+
+      {/* Scroll to top */}
+      {showScrollTop && (
+        <button onClick={() => window.scrollTo({ top: 0, behavior: 'smooth' })} style={{
+          position: 'fixed', bottom: cart.length > 0 ? 86 : 24, left: 24, zIndex: 300,
+          width: 44, height: 44, borderRadius: '50%',
+          background: 'var(--white)', border: '1px solid var(--border)',
+          boxShadow: '0 2px 12px rgba(0,0,0,0.1)',
+          cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center',
+          fontSize: 18, color: 'var(--muted)', transition: 'all 0.2s',
+        }}>
+          ↑
+        </button>
+      )}
     </ProductionLayout>
   )
 }
