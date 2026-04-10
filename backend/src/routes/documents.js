@@ -223,91 +223,66 @@ router.post('/upload', verifyJWT, upload.single('file'), async (req, res) => {
       }
       console.log(`[UPLOAD] Updated ${updated} list items with scenario text`)
 
-      // AI analysis: find items in scenario not already in lists
+      // AI analysis: run in background (don't block upload response)
       if (process.env.ANTHROPIC_API_KEY) {
-        try {
-          const sceneTexts = parsed_content.scenes.map(s => {
-            const id = s.id || s.scene || ''
-            const text = s.text || s.synopsis || s.object || ''
-            const props = (s.props || []).join(', ')
-            const costumes = (s.costumes || []).join(', ')
-            const makeup = (s.makeup || []).join(', ')
-            return `Сцена ${id}: ${text.substring(0, 200)} | Реквизит: ${props} | Костюмы: ${costumes} | Грим: ${makeup}`
-          }).join('\n')
-          const aiResult = await require('../services/groq').parseDocument(sceneTexts)
-          // Import AI-found items into lists with source='ai'
-          if (aiResult) {
-            const { rows: projectMembers } = await db.query(
-              `SELECT id, role FROM users WHERE project_id=$1`, [project_id]
-            )
+        const bgProjectId = project_id
+        const bgSeriesNum = seriesNum
+        const bgScenes = parsed_content.scenes
+        setImmediate(async () => {
+          try {
+            console.log(`[AI-BG] Starting scenario analysis for project ${bgProjectId}`)
+            const sceneTexts = bgScenes.map(s => {
+              const id = s.id || s.scene || ''
+              const text = s.text || s.synopsis || s.object || ''
+              const props = (s.props || []).join(', ')
+              const costumes = (s.costumes || []).join(', ')
+              const makeup = (s.makeup || []).join(', ')
+              return `Сцена ${id}: ${text.substring(0, 200)} | Реквизит: ${props} | Костюмы: ${costumes} | Грим: ${makeup}`
+            }).join('\n')
+            const aiResult = await require('../services/groq').parseDocument(sceneTexts)
+            if (!aiResult) return
+            const { rows: members } = await db.query(`SELECT id, role FROM users WHERE project_id=$1`, [bgProjectId])
             let aiImported = 0
-            for (const cat of ALL_LIST_TYPES) {
-              const aiItems = aiResult[cat] || []
-              for (const ai of aiItems) {
+            const allCats = ALL_LIST_TYPES
+            for (const cat of allCats) {
+              for (const ai of (aiResult[cat] || [])) {
                 const aiName = (ai.name || ai.item || '').replace(/\s+/g, ' ').trim()
                 if (!aiName) continue
-                for (const member of projectMembers) {
-                  const isFullAccess = ['producer', 'project_director'].includes(member.role)
-                  const ownTypes = isFullAccess ? ALL_LIST_TYPES : (ROLE_LIST_TYPES[member.role] || [])
-                  if (!ownTypes.includes(cat)) continue
-                  await db.query(
-                    `INSERT INTO production_lists (project_id, user_id, type) VALUES ($1,$2,$3) ON CONFLICT DO NOTHING`,
-                    [project_id, member.id, cat]
-                  )
-                  const { rows: lr } = await db.query(
-                    `SELECT id FROM production_lists WHERE project_id=$1 AND user_id=$2 AND type=$3`,
-                    [project_id, member.id, cat]
-                  )
-                  const { rows: ex } = await db.query(
-                    `SELECT id FROM production_list_items WHERE list_id=$1 AND LOWER(TRIM(name))=LOWER($2)`,
-                    [lr[0].id, aiName.toLowerCase()]
-                  )
+                for (const m of members) {
+                  const own = ['producer','project_director'].includes(m.role) ? allCats : (ROLE_LIST_TYPES[m.role] || [])
+                  if (!own.includes(cat)) continue
+                  await db.query(`INSERT INTO production_lists (project_id, user_id, type) VALUES ($1,$2,$3) ON CONFLICT DO NOTHING`, [bgProjectId, m.id, cat])
+                  const { rows: lr } = await db.query(`SELECT id FROM production_lists WHERE project_id=$1 AND user_id=$2 AND type=$3`, [bgProjectId, m.id, cat])
+                  const { rows: ex } = await db.query(`SELECT id FROM production_list_items WHERE list_id=$1 AND LOWER(TRIM(name))=LOWER($2)`, [lr[0].id, aiName.toLowerCase()])
                   if (ex.length) continue
-                  const sceneId = seriesNum ? `${parseInt(seriesNum)}-${(ai.scene || '').replace(/^0+/, '')}` : (ai.scene || null)
-                  await db.query(
-                    `INSERT INTO production_list_items (list_id, name, scene, day, time, location, qty, source, note)
-                     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
-                    [lr[0].id, aiName, sceneId, ai.day||null, ai.time||null, ai.location||null, 1, 'ai', ai.note||null]
-                  )
+                  const sceneId = bgSeriesNum ? `${parseInt(bgSeriesNum)}-${(ai.scene||'').replace(/^0+/,'')}` : (ai.scene || null)
+                  await db.query(`INSERT INTO production_list_items (list_id, name, scene, day, time, location, qty, source, note) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
+                    [lr[0].id, aiName, sceneId, ai.day||null, ai.time||null, ai.location||null, 1, 'ai', ai.note||null])
                   aiImported++
                 }
               }
             }
-            // Also import ai_suggestions
             for (const sug of (aiResult.ai_suggestions || [])) {
               const sugName = (sug.item || '').replace(/\s+/g, ' ').trim()
               const sugCat = sug.category || 'props'
               if (!sugName) continue
-              for (const member of projectMembers) {
-                const isFullAccess = ['producer', 'project_director'].includes(member.role)
-                const ownTypes = isFullAccess ? ALL_LIST_TYPES : (ROLE_LIST_TYPES[member.role] || [])
-                if (!ownTypes.includes(sugCat)) continue
-                await db.query(
-                  `INSERT INTO production_lists (project_id, user_id, type) VALUES ($1,$2,$3) ON CONFLICT DO NOTHING`,
-                  [project_id, member.id, sugCat]
-                )
-                const { rows: lr } = await db.query(
-                  `SELECT id FROM production_lists WHERE project_id=$1 AND user_id=$2 AND type=$3`,
-                  [project_id, member.id, sugCat]
-                )
-                const { rows: ex } = await db.query(
-                  `SELECT id FROM production_list_items WHERE list_id=$1 AND LOWER(TRIM(name))=LOWER($2)`,
-                  [lr[0].id, sugName.toLowerCase()]
-                )
+              for (const m of members) {
+                const own = ['producer','project_director'].includes(m.role) ? allCats : (ROLE_LIST_TYPES[m.role] || [])
+                if (!own.includes(sugCat)) continue
+                await db.query(`INSERT INTO production_lists (project_id, user_id, type) VALUES ($1,$2,$3) ON CONFLICT DO NOTHING`, [bgProjectId, m.id, sugCat])
+                const { rows: lr } = await db.query(`SELECT id FROM production_lists WHERE project_id=$1 AND user_id=$2 AND type=$3`, [bgProjectId, m.id, sugCat])
+                const { rows: ex } = await db.query(`SELECT id FROM production_list_items WHERE list_id=$1 AND LOWER(TRIM(name))=LOWER($2)`, [lr[0].id, sugName.toLowerCase()])
                 if (ex.length) continue
-                await db.query(
-                  `INSERT INTO production_list_items (list_id, name, scene, qty, source, note)
-                   VALUES ($1,$2,$3,$4,$5,$6)`,
-                  [lr[0].id, sugName, null, 1, 'ai', sug.reason||null]
-                )
+                await db.query(`INSERT INTO production_list_items (list_id, name, scene, qty, source, note) VALUES ($1,$2,$3,$4,$5,$6)`,
+                  [lr[0].id, sugName, null, 1, 'ai', sug.reason||null])
                 aiImported++
               }
             }
-            console.log(`[UPLOAD] AI imported ${aiImported} new items from scenario`)
+            console.log(`[AI-BG] Imported ${aiImported} AI items for project ${bgProjectId}`)
+          } catch (err) {
+            console.error('[AI-BG] Error:', err.message)
           }
-        } catch (aiErr) {
-          console.error('[UPLOAD] AI scenario analysis error:', aiErr.message)
-        }
+        })
       }
     }
 
