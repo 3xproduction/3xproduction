@@ -32,6 +32,10 @@ import WarehouseAnalyticsPage from './components/analytics/WarehouseAnalyticsPag
 import ProducerDashboardPage from './components/analytics/ProducerDashboardPage'
 import StaffPage from './components/production/StaffPage'
 import AssetsPage from './components/warehouse/AssetsPage'
+import LocationsPage from './components/warehouse/LocationsPage'
+import DecorationsPage from './components/warehouse/DecorationsPage'
+import VehiclesPage from './components/warehouse/VehiclesPage'
+import CastingPage from './components/production/CastingPage'
 import SeedPage from './components/dev/SeedPage'
 
 // Requires auth only
@@ -120,6 +124,9 @@ function App() {
         <Route path="/approvals"               element={<WarehouseRoute><ApprovalsPage /></WarehouseRoute>} />
         <Route path="/analytics"               element={<WarehouseRoute><WarehouseAnalyticsPage /></WarehouseRoute>} />
         <Route path="/assets"                  element={<PrivateRoute><AssetsPage /></PrivateRoute>} />
+        <Route path="/locations"               element={<PrivateRoute><LocationsPage /></PrivateRoute>} />
+        <Route path="/decorations"             element={<PrivateRoute><DecorationsPage /></PrivateRoute>} />
+        <Route path="/vehicles"                element={<PrivateRoute><VehiclesPage /></PrivateRoute>} />
 
         {/* Production routes */}
         <Route path="/production/requests"      element={<ProductionRoute><RequestsProductionPage /></ProductionRoute>} />
@@ -127,6 +134,13 @@ function App() {
         <Route path="/production/documents/:projectId/:docId" element={<ProductionRoute><DocumentViewer /></ProductionRoute>} />
         <Route path="/production/lists"        element={<ProductionRoute><ProductionListsPage /></ProductionRoute>} />
         <Route path="/production/warehouse"    element={<ProductionRoute><WarehouseViewPage /></ProductionRoute>} />
+        <Route path="/production/units"        element={<ProductionRoute><UnitsPage /></ProductionRoute>} />
+        <Route path="/production/rent"            element={<ProductionRoute><RentPage /></ProductionRoute>} />
+        <Route path="/production/acts"            element={<ProductionRoute><ActsPage /></ProductionRoute>} />
+        <Route path="/production/locations"       element={<ProductionRoute><LocationsPage /></ProductionRoute>} />
+        <Route path="/production/decorations"     element={<ProductionRoute><DecorationsPage /></ProductionRoute>} />
+        <Route path="/production/vehicles"        element={<ProductionRoute><VehiclesPage /></ProductionRoute>} />
+        <Route path="/production/casting"         element={<ProductionRoute><CastingPage /></ProductionRoute>} />
         <Route path="/production/staff"          element={<ProductionRoute><StaffPage /></ProductionRoute>} />
         <Route path="/analytics/producer"      element={<ProductionRoute><ProducerDashboardPage /></ProductionRoute>} />
 

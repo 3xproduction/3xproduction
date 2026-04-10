@@ -158,6 +158,9 @@ export default function CellsPage() {
                 <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 10, cursor: 'grab' }}>
                   <span style={{ color: 'var(--muted)', fontSize: 14 }}>⠿</span>
                   <div style={{ fontWeight: 600, fontSize: 15 }}>{section.name}</div>
+                  {section.type === 'hanger' && (
+                    <span style={{ padding: '2px 8px', borderRadius: 10, fontSize: 10, fontWeight: 600, background: 'rgba(168,85,247,0.1)', color: '#7c3aed' }}>Вешалка</span>
+                  )}
                   <div style={{
                     display: 'flex', alignItems: 'center', gap: 6,
                     padding: '3px 10px', borderRadius: 20,
@@ -243,22 +246,22 @@ export default function CellsPage() {
             {!selectedCell.unit_id || selectedCell.unit_status !== 'on_stock' ? (
               <div style={{ textAlign: 'center', paddingTop: 40 }}>
                 <div style={{ fontSize: 32, marginBottom: 12, opacity: 0.3 }}>📦</div>
-                <div style={{ color: 'var(--muted)', fontSize: 14, marginBottom: 16 }}>Ячейка свободна</div>
+                <div style={{ color: 'var(--muted)', fontSize: 14, marginBottom: 16 }}>Полка свободна</div>
                 <button onClick={async () => {
-                  if (!window.confirm('Удалить ячейку?')) return
+                  if (!window.confirm('Удалить полку?')) return
                   try {
                     await warehousesApi.deleteCell(selectedCell.id)
                     setSections(prev => prev.map(s => ({
                       ...s, cells: (s.cells || []).filter(c => c.id !== selectedCell.id)
                     })))
                     setSelected(null)
-                    toast?.('Ячейка удалена', 'success')
+                    toast?.('Полка удалена', 'success')
                   } catch (e) { toast?.(e.message || 'Ошибка', 'error') }
                 }} style={{
                   fontSize: 12, color: 'var(--red)', background: 'none',
                   border: '1px solid var(--red)', borderRadius: 6,
                   padding: '6px 14px', cursor: 'pointer',
-                }}>Удалить ячейку</button>
+                }}>Удалить полку</button>
               </div>
             ) : (
               <>
@@ -290,7 +293,7 @@ export default function CellsPage() {
                 <Button fullWidth onClick={() => { setCardId(selectedCell.unit_id); setSelected(null) }}>Открыть карточку</Button>
               </>
             ) : (
-              <div style={{ fontSize: 13, color: 'var(--muted)' }}>Ячейка свободна</div>
+              <div style={{ fontSize: 13, color: 'var(--muted)' }}>Полка свободна</div>
             )}
           </div>
         </div>

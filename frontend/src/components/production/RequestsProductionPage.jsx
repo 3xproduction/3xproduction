@@ -50,9 +50,12 @@ export default function RequestsProductionPage() {
 
   useEffect(() => {
     if (!user?.id) return
-    const params = user?.project_id
-      ? { project_id: user.project_id }
-      : { requester_id: user.id }
+    const isProducer = user?.role === 'producer'
+    const params = isProducer
+      ? {} // producer sees all requests
+      : user?.project_id
+        ? { project_id: user.project_id }
+        : { requester_id: user.id }
     requestsApi.list(params)
       .then(data => setAllRequests(data.requests || []))
       .catch(() => {})
@@ -244,7 +247,7 @@ export default function RequestsProductionPage() {
                                     <div style={{ fontSize: 12, color: 'var(--muted)', marginBottom: 8 }}>
                                       {u.serial && <div>Серийный №: {u.serial}</div>}
                                       {u.category && <div>Категория: {u.category}</div>}
-                                      {u.cell_name && <div>Ячейка: {u.cell_name}</div>}
+                                      {u.cell_name && <div>Полка: {u.cell_name}</div>}
                                     </div>
                                     {photos.length > 0 && (
                                       <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>

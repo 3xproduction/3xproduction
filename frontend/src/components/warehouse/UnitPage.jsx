@@ -133,7 +133,7 @@ export default function UnitPage() {
             <div style={{ background: 'var(--bg)', borderRadius: 'var(--radius-card)', padding: 16, marginBottom: 16 }}>
               <InfoRow label="Серийный номер" value={unit.serial} />
               {unit.warehouse_name && <InfoRow label="Склад" value={unit.warehouse_name} />}
-              {unit.cell_name && <InfoRow label="Ячейка" value={unit.cell_name} />}
+              {unit.cell_name && <InfoRow label="Полка" value={unit.cell_name} />}
               {unit.qty && <InfoRow label="Количество" value={`${unit.qty} шт.`} />}
               {unit.dimensions && <InfoRow label="Размеры" value={unit.dimensions} />}
               {canSeeValuation && unit.source && <InfoRow label="Источник" value={unit.source} />}

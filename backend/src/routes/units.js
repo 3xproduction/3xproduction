@@ -40,10 +40,32 @@ router.get('/', verifyJWT, async (req, res) => {
     if (category)  { params.push(category);  q += ` AND u.category = $${params.length}` }
     if (cell_id)   { params.push(cell_id);   q += ` AND u.cell_id = $${params.length}` }
     if (search) {
-      params.push(`%${search}%`)
-      q += ` AND (u.name ILIKE $${params.length} OR u.serial ILIKE $${params.length} OR u.description ILIKE $${params.length} OR c.code ILIKE $${params.length} OR c.custom_name ILIKE $${params.length})`
+      const s = search.trim()
+      params.push(`%${s}%`)
+      const likeIdx = params.length
+      params.push(s)
+      const termIdx = params.length
+
+      // Fuzzy search: ILIKE + trigram similarity + synonyms + period/dimensions
+      q += ` AND (
+        u.name ILIKE $${likeIdx} OR u.serial ILIKE $${likeIdx}
+        OR u.description ILIKE $${likeIdx} OR c.code ILIKE $${likeIdx} OR c.custom_name ILIKE $${likeIdx}
+        OR u.period ILIKE $${likeIdx} OR u.dimensions ILIKE $${likeIdx}
+        OR similarity(u.name, $${termIdx}) > 0.25
+        OR EXISTS (
+          SELECT 1 FROM search_synonyms ss
+          WHERE (lower(ss.term) = lower($${termIdx}) OR lower($${termIdx}) = ANY(SELECT lower(unnest(ss.synonyms))))
+          AND (u.name ILIKE '%' || ss.term || '%' OR EXISTS (
+            SELECT 1 FROM unnest(ss.synonyms) syn WHERE u.name ILIKE '%' || syn || '%'
+          ))
+        )
+      )`
     }
-    q += ` ORDER BY u.created_at DESC`
+    if (search) {
+      q += ` ORDER BY similarity(u.name, $${params.length}) DESC, u.created_at DESC`
+    } else {
+      q += ` ORDER BY u.created_at DESC`
+    }
 
     const { rows } = await db.query(q, params)
     const canSeeValuation = ['warehouse_director', 'producer'].includes(req.user.role)

@@ -3,14 +3,15 @@ import { NavLink, useNavigate, useLocation } from 'react-router-dom'
 import {
   LayoutDashboard, ClipboardList, Package, Grid3x3,
   Users, FileText, Handshake, BarChart2, Bell,
-  User, X, Menu, ChevronDown, LogOut, Clock, AlertTriangle, ArrowLeft
+  User, X, Menu, ChevronDown, LogOut, Clock, AlertTriangle, ArrowLeft,
+  MapPin, Clapperboard, Car
 } from 'lucide-react'
 import { useAuth } from '../../hooks/useAuth'
 
 const HIDDEN_BY_ROLE = {
-  warehouse_director: ['/analytics'],
-  warehouse_deputy:   ['/analytics', '/assets'],
-  warehouse_staff:    ['/analytics', '/assets', '/acts', '/rent', '/team'],
+  warehouse_director: ['/analytics', '/locations', '/vehicles'],
+  warehouse_deputy:   ['/analytics', '/assets', '/locations', '/vehicles'],
+  warehouse_staff:    ['/analytics', '/assets', '/acts', '/rent', '/team', '/locations', '/vehicles'],
 }
 
 const NAV_ALL = [
@@ -31,6 +32,14 @@ const NAV_ALL = [
     items: [
       { to: '/acts',  icon: FileText,  label: 'Акты' },
       { to: '/rent',  icon: Handshake, label: 'Аренда' },
+    ],
+  },
+  {
+    section: 'Каталоги',
+    items: [
+      { to: '/locations',    icon: MapPin,        label: 'Локации' },
+      { to: '/decorations',  icon: Clapperboard,  label: 'Декорации' },
+      { to: '/vehicles',     icon: Car,           label: 'Транспорт' },
     ],
   },
   {

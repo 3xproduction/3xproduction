@@ -1,7 +1,10 @@
 import { useState, useEffect } from 'react'
 import { FileText, FileCheck, Handshake } from 'lucide-react'
 import WarehouseLayout from './WarehouseLayout'
+import ProductionLayout from '../production/ProductionLayout'
 import { issuances as issuancesApi } from '../../services/api'
+import { useAuth } from '../../hooks/useAuth'
+import { ROLES } from '../../constants/roles'
 
 const css = `
 .acts-page { padding: 28px 32px; max-width: 900px; }
@@ -66,6 +69,8 @@ function formatDate(str) {
 }
 
 export default function ActsPage() {
+  const { user } = useAuth()
+  const Layout = ROLES[user?.role]?.world === 'production' ? ProductionLayout : WarehouseLayout
   const [tab, setTab] = useState('requests')
   const [data, setData] = useState({ issuances: [], returns: [], rentDeals: [] })
   const [loading, setLoading] = useState(true)
@@ -80,7 +85,7 @@ export default function ActsPage() {
   const requestsCount = data.issuances.length + data.returns.length
 
   return (
-    <WarehouseLayout>
+    <Layout>
       <style>{css}</style>
       <div className="acts-page">
         <h1 className="acts-title">Акты</h1>
@@ -189,6 +194,6 @@ export default function ActsPage() {
               </div>
         ) : null}
       </div>
-    </WarehouseLayout>
+    </Layout>
   )
 }

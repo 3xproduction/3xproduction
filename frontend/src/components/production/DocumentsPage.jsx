@@ -3,7 +3,8 @@ import { useNavigate } from 'react-router-dom'
 import ProductionLayout from './ProductionLayout'
 import Badge from '../shared/Badge'
 import Button from '../shared/Button'
-import { documents as docsApi, lists as listsApi } from '../../services/api'
+import { documents as docsApi, lists as listsApi, requests as requestsApi, projects as projectsApi } from '../../services/api'
+import UnitCardModal from '../shared/UnitCardModal'
 import { useAuth } from '../../hooks/useAuth'
 import { ROLES } from '../../constants/roles'
 import { categoryLabel } from '../../constants/categories'
@@ -37,10 +38,10 @@ const SEE_ALL_ROLES = [
   'project_deputy_upload', 'project_deputy', 'set_admin', 'assistant_director',
   'gaffer', 'dop', 'camera_mechanic', 'casting_director', 'casting_assistant', 'playback', 'driver',
 ]
-const HIDE_LIST_TYPES_ROLES = ['set_admin', 'project_director']
+const HIDE_LIST_TYPES_ROLES = ['set_admin']
 
 const UPLOAD_KPP_ROLES = [
-  'project_director', 'project_deputy_upload', 'director', 'assistant_director',
+  'producer', 'project_director', 'project_deputy_upload', 'director', 'assistant_director',
   'production_designer', 'art_director_assistant',
   'props_master', 'props_assistant', 'decorator', 'costumer', 'costume_assistant',
   'makeup_artist', 'stunt_coordinator', 'pyrotechnician',
@@ -66,7 +67,9 @@ export default function DocumentsPage() {
   const [uploadType, setUploadType] = useState('kpp')
   const [uploadFile, setUploadFile] = useState(null)
   const [uploading, setUploading] = useState(false)
+  const [uploadMsg, setUploadMsg] = useState('')
   const fileRef = useRef()
+  const uploadMsgTimer = useRef(null)
 
   // List state
   const roleDef = ROLES[role] || {}
@@ -80,6 +83,15 @@ export default function DocumentsPage() {
   const [listLoading, setListLoading] = useState(false)
   const [listSearch, setListSearch] = useState('')
   const [parsedData, setParsedData] = useState(null)
+  const [matchedUnits, setMatchedUnits] = useState([])
+  const [cardId, setCardId] = useState(null)
+  const [editingId, setEditingId] = useState(null)
+  const [editForm, setEditForm] = useState({})
+  const [showAddItem, setShowAddItem] = useState(false)
+  const [addForm, setAddForm] = useState({ name: '', scene: '', day: '', qty: 1, note: '' })
+  const [expandedItem, setExpandedItem] = useState(null)
+  const [collapsedDays, setCollapsedDays] = useState({})
+  const [daysInitialized, setDaysInitialized] = useState(false)
 
   const canUpload = tab === 'callsheet'
     ? UPLOAD_CALLSHEET_ROLES.includes(role)
@@ -90,32 +102,102 @@ export default function DocumentsPage() {
     ? Object.fromEntries(Object.entries(DOC_TYPES).filter(([k]) => allowedDocs.includes(k)))
     : DOC_TYPES
 
-  const projectId = user?.project_id || null
+  const [projectsList, setProjectsList] = useState([])
+  const [selectedProjectId, setSelectedProjectId] = useState(user?.project_id || null)
+  const isProducer = role === 'producer'
+  const projectId = selectedProjectId
+
+  useEffect(() => {
+    if (isProducer) {
+      projectsApi.list().then(d => {
+        const list = d.projects || []
+        setProjectsList(list)
+        const savedName = localStorage.getItem('project')
+        const match = list.find(p => p.name === savedName)
+        if (match) setSelectedProjectId(match.id)
+        else if (list.length) setSelectedProjectId(list[0].id)
+      }).catch(() => {})
+    }
+  }, [])
 
   function loadDocs() {
-    if (!projectId) { setLoading(false); return }
     setLoading(true)
-    docsApi.list(projectId).then(data => {
+    const promise = isProducer
+      ? docsApi.listAll()
+      : projectId
+        ? docsApi.list(projectId)
+        : Promise.resolve({ documents: [] })
+    promise.then(data => {
       setDocs(data.documents || [])
     }).finally(() => setLoading(false))
   }
 
   useEffect(() => { loadDocs() }, [projectId])
 
+  function loadListItems() {
+    if (!activeListType || !projectId) return
+    setListLoading(true)
+    Promise.all([
+      listsApi.items(activeListType, { project_id: projectId }),
+      listsApi.matchedUnits(projectId),
+    ]).then(([data, mu]) => {
+      setListItems(data.items || [])
+      setMatchedUnits(mu.matched_units || [])
+    }).catch(() => setListItems([]))
+      .finally(() => setListLoading(false))
+  }
+
   useEffect(() => {
-    if (tab === 'my_list' && activeListType && projectId) {
-      setListLoading(true)
-      listsApi.items(activeListType, { project_id: projectId })
-        .then(data => setListItems(data.items || []))
-        .catch(() => setListItems([]))
-        .finally(() => setListLoading(false))
-    }
+    if (tab === 'my_list') loadListItems()
     if (tab === 'ai_check' && projectId) {
       docsApi.parsed(projectId)
         .then(data => setParsedData(data.parsed_data))
         .catch(() => {})
     }
   }, [tab, activeListType, projectId])
+
+  function getMatch(itemName) {
+    if (!itemName || !matchedUnits.length) return null
+    const lower = itemName.toLowerCase()
+    return matchedUnits.find(m =>
+      m.text?.toLowerCase() === lower ||
+      m.unit_name?.toLowerCase().includes(lower) ||
+      lower.includes(m.unit_name?.toLowerCase() || '')
+    )
+  }
+
+  async function handleAddItem() {
+    if (!addForm.name.trim()) return
+    try {
+      await listsApi.addItem(activeListType, { ...addForm, source: 'manual' })
+      setShowAddItem(false)
+      setAddForm({ name: '', scene: '', day: '', qty: 1, note: '' })
+      loadListItems()
+    } catch (e) { alert(e.message || 'Ошибка') }
+  }
+
+  async function handleEditSave(id) {
+    try {
+      await listsApi.updateItem(id, editForm)
+      setEditingId(null)
+      loadListItems()
+    } catch (e) { alert(e.message || 'Ошибка') }
+  }
+
+  async function handleDeleteItem(id) {
+    if (!window.confirm('Удалить позицию?')) return
+    try {
+      await listsApi.deleteItem(id)
+      loadListItems()
+    } catch (e) { alert(e.message || 'Ошибка') }
+  }
+
+  async function handleOrderFromWarehouse(unitId) {
+    try {
+      await requestsApi.create({ unit_ids: [unitId], project_id: projectId })
+      alert('Заявка создана')
+    } catch (e) { alert(e.message || 'Ошибка') }
+  }
 
   const tabDocs = docs.filter(d => d.type === tab)
   const callDates = [...new Set(docs.filter(d => d.type === 'callsheet').map(d =>
@@ -125,13 +207,40 @@ export default function DocumentsPage() {
   const callsheetDoc = docs.find(d => d.type === 'callsheet' &&
     new Date(d.created_at).toISOString().split('T')[0] === curDate)
 
+  const UPLOAD_MESSAGES = [
+    'ИИ читает документ...',
+    'Секундочку...',
+    'Ждём магию...',
+    'Анализируем сцены...',
+    'Раскладываем по полочкам...',
+    'Ищем реквизит...',
+    'Почти готово...',
+  ]
+
+  function startUploadMessages() {
+    let i = 0
+    setUploadMsg(UPLOAD_MESSAGES[0])
+    uploadMsgTimer.current = setInterval(() => {
+      i = (i + 1) % UPLOAD_MESSAGES.length
+      setUploadMsg(UPLOAD_MESSAGES[i])
+    }, 2500)
+  }
+
+  function stopUploadMessages() {
+    clearInterval(uploadMsgTimer.current)
+    setUploadMsg('')
+  }
+
   async function handleUpload() {
     if (!uploadFile) return
+    const pid = projectId
+    if (!pid) { alert('Выберите проект в боковом меню'); return }
     setUploading(true)
+    startUploadMessages()
     try {
       const fd = new FormData()
       fd.append('file', uploadFile)
-      fd.append('project_id', projectId)
+      fd.append('project_id', pid)
       fd.append('type', uploadType)
       await docsApi.upload(fd)
       setShowUpload(false)
@@ -141,6 +250,7 @@ export default function DocumentsPage() {
       alert(err.message || 'Ошибка загрузки')
     } finally {
       setUploading(false)
+      stopUploadMessages()
     }
   }
 
@@ -187,7 +297,9 @@ export default function DocumentsPage() {
         <div className="doc-header" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 24 }}>
           <div>
             <h1 style={{ fontSize: 20, fontWeight: 600 }}>Записи</h1>
-            <p style={{ fontSize: 13, color: 'var(--muted)', marginTop: 2 }}>Проект #{projectId}</p>
+            <p style={{ fontSize: 13, color: 'var(--muted)', marginTop: 2 }}>
+              {isProducer ? 'Все проекты' : `Проект`}
+            </p>
           </div>
           {canUpload && DOC_TYPES[tab] && (
             <Button onClick={() => { setUploadType(tab); setShowUpload(true) }}>+ Загрузить</Button>
@@ -224,7 +336,7 @@ export default function DocumentsPage() {
           <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
             <div className="doc-filters" style={{ display: 'flex', gap: 8, marginBottom: 4, flexWrap: 'wrap' }}>
               <input value={docSearch} onChange={e => setDocSearch(e.target.value)}
-                placeholder="Найдите..."
+                placeholder="Поиск по названию, серии, блоку..."
                 style={{ flex: 1, minWidth: 140, height: 40, padding: '0 12px', border: '1px solid var(--border)', borderRadius: 'var(--radius-btn)', fontSize: 13, outline: 'none', boxSizing: 'border-box' }} />
               <select value={blockFilter} onChange={e => setBlockFilter(e.target.value)}
                 style={{ height: 40, padding: '0 10px', border: '1px solid var(--border)', borderRadius: 'var(--radius-btn)', fontSize: 13, background: blockFilter ? 'var(--blue-dim)' : 'var(--white)', color: blockFilter ? 'var(--blue)' : 'var(--text)', cursor: 'pointer' }}>
@@ -238,8 +350,11 @@ export default function DocumentsPage() {
               </select>
             </div>
             {tabDocs.filter(d => {
-              const name = (d.original_name || d.file_url || '').toLowerCase()
-              if (docSearch && !name.includes(docSearch.toLowerCase())) return false
+              if (docSearch) {
+                const words = docSearch.toLowerCase().split(/\s+/).filter(Boolean)
+                const haystack = [d.original_name, d.file_url, d.uploaded_by_name, `v${d.version}`].filter(Boolean).join(' ').toLowerCase()
+                if (!words.every(w => haystack.includes(w))) return false
+              }
               if (blockFilter && !name.includes(`блок ${blockFilter}`)) return false
               if (seasonFilter && !name.includes(`сезон ${seasonFilter}`)) return false
               return true
@@ -393,66 +508,217 @@ export default function DocumentsPage() {
               <div style={{ color: 'var(--muted)', fontSize: 13 }}>Загрузка...</div>
             ) : (
               <>
-                <div className="doc-list-search" style={{ position: 'relative', marginBottom: 14 }}>
-                  <span style={{ position: 'absolute', left: 10, top: '50%', transform: 'translateY(-50%)', color: 'var(--muted)', fontSize: 14 }}>🔍</span>
-                  <input value={listSearch} onChange={e => setListSearch(e.target.value)} placeholder="Найдите по названию..."
-                    style={{ width: '100%', height: 40, padding: '0 10px 0 32px', border: '1px solid var(--border)', borderRadius: 'var(--radius-btn)', fontSize: 13, background: 'var(--white)', outline: 'none', boxSizing: 'border-box' }} />
+                <div style={{ display: 'flex', gap: 8, marginBottom: 14, alignItems: 'center', flexWrap: 'wrap' }}>
+                  <div className="doc-list-search" style={{ position: 'relative', flex: 1, minWidth: 160 }}>
+                    <span style={{ position: 'absolute', left: 10, top: '50%', transform: 'translateY(-50%)', color: 'var(--muted)', fontSize: 14 }}>🔍</span>
+                    <input value={listSearch} onChange={e => { setListSearch(e.target.value); if (e.target.value) setCollapsedDays({}) }} placeholder="Поиск по названию, сцене, содержанию..."
+                      style={{ width: '100%', height: 40, padding: '0 10px 0 32px', border: '1px solid var(--border)', borderRadius: 'var(--radius-btn)', fontSize: 13, background: 'var(--white)', outline: 'none', boxSizing: 'border-box' }} />
+                  </div>
+                  <Button onClick={() => setShowAddItem(true)} style={{ height: 40, fontSize: 13 }}>+ Добавить</Button>
                 </div>
 
-                {/* Desktop: grid header */}
-                {listItems.length > 0 && (
-                  <div className="doc-list-grid-header" style={{
-                    display: 'grid',
-                    gridTemplateColumns: '2fr 60px 50px 70px 100px 60px 100px',
-                    gap: 6, padding: '6px 12px',
-                    fontSize: 11, fontWeight: 600, color: 'var(--muted)',
-                    textTransform: 'uppercase', letterSpacing: '0.5px',
-                  }}>
-                    <span>Наименование</span><span>Сцена</span><span>День</span>
-                    <span>Время</span><span>Локация</span><span>Кол-во</span>
-                    <span>Источник</span>
-                  </div>
-                )}
-
                 <div className="doc-list-grid">
-                  {listItems
-                    .filter(i => i.ai_status !== 'rejected' && (!listSearch || i.name.toLowerCase().includes(listSearch.toLowerCase())))
-                    .map(item => {
-                      const src = SOURCE_BADGE[item.source] || SOURCE_BADGE.manual
+                  {(() => {
+                    // Fuzzy search: split query into words, match if all words found in name+scene+note+location
+                    function fuzzyMatch(item, query) {
+                      if (!query) return true
+                      const words = query.toLowerCase().split(/\s+/).filter(Boolean)
+                      const haystack = [item.name, item.scene, item.note, item.location, item.day, item.time].filter(Boolean).join(' ').toLowerCase()
+                      return words.every(w => haystack.includes(w))
+                    }
+
+                    const filtered = listItems
+                      .filter(i => i.ai_status !== 'rejected' && fuzzyMatch(i, listSearch))
+                      .sort((a, b) => {
+                        const dayA = (a.day || 'яяя').replace(/[^\d.]/g, '')
+                        const dayB = (b.day || 'яяя').replace(/[^\d.]/g, '')
+                        if (dayA !== dayB) return dayA.localeCompare(dayB)
+                        return (a.scene || '').localeCompare(b.scene || '')
+                      })
+
+                    // Group by shoot date
+                    const groups = []
+                    let lastDay = null
+                    for (const item of filtered) {
+                      const day = item.day || 'Без даты'
+                      if (day !== lastDay) {
+                        groups.push({ day, time: item.time, items: [] })
+                        lastDay = day
+                      }
+                      groups[groups.length - 1].items.push(item)
+                    }
+
+                    // Initialize all days as collapsed on first render
+                    if (!daysInitialized && groups.length > 0 && !listSearch) {
+                      const init = {}
+                      groups.forEach(g => { init[g.day] = true })
+                      setTimeout(() => { setCollapsedDays(init); setDaysInitialized(true) }, 0)
+                    }
+
+                    return groups.map((group, gi) => {
+                      const isCollapsed = !listSearch && collapsedDays[group.day]
+                      return (
+                      <div key={group.day}>
+                        <div onClick={() => setCollapsedDays(prev => ({ ...prev, [group.day]: !prev[group.day] }))}
+                          style={{
+                          padding: '10px 14px', marginBottom: isCollapsed ? 2 : 6, marginTop: gi > 0 ? 10 : 0,
+                          background: 'var(--blue-dim)', borderRadius: 8, fontWeight: 600, fontSize: 13,
+                          display: 'flex', alignItems: 'center', gap: 10,
+                          borderLeft: '3px solid var(--blue)', cursor: 'pointer', userSelect: 'none',
+                        }}>
+                          <span style={{ fontSize: 12, transition: 'transform 0.15s', transform: isCollapsed ? 'rotate(-90deg)' : 'rotate(0deg)' }}>▼</span>
+                          <span>📅 {group.day}</span>
+                          {group.time && <span style={{ fontSize: 11, color: 'var(--blue)', fontWeight: 500 }}>{group.time}</span>}
+                          <span style={{ fontSize: 11, color: 'var(--muted)', fontWeight: 400, marginLeft: 'auto' }}>{group.items.length} позиций</span>
+                        </div>
+                        {!isCollapsed && group.items.map(item => {
+                    const src = SOURCE_BADGE[item.source] || SOURCE_BADGE.manual
+                    const match = getMatch(item.name)
+                      const isEditing = editingId === item.id
+
+                      if (isEditing) {
+                        return (
+                          <div key={item.id} style={{ background: 'var(--white)', border: '2px solid var(--blue)', borderRadius: 8, padding: 14, marginBottom: 4 }}>
+                            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8, marginBottom: 8 }}>
+                              <input placeholder="Название" value={editForm.name || ''} onChange={e => setEditForm(f => ({ ...f, name: e.target.value }))}
+                                style={{ height: 34, padding: '0 10px', border: '1px solid var(--border)', borderRadius: 6, fontSize: 13 }} />
+                              <input placeholder="Сцена" value={editForm.scene || ''} onChange={e => setEditForm(f => ({ ...f, scene: e.target.value }))}
+                                style={{ height: 34, padding: '0 10px', border: '1px solid var(--border)', borderRadius: 6, fontSize: 13 }} />
+                              <input placeholder="День" value={editForm.day || ''} onChange={e => setEditForm(f => ({ ...f, day: e.target.value }))}
+                                style={{ height: 34, padding: '0 10px', border: '1px solid var(--border)', borderRadius: 6, fontSize: 13 }} />
+                              <input placeholder="Кол-во" type="number" value={editForm.qty || 1} onChange={e => setEditForm(f => ({ ...f, qty: Number(e.target.value) }))}
+                                style={{ height: 34, padding: '0 10px', border: '1px solid var(--border)', borderRadius: 6, fontSize: 13 }} />
+                            </div>
+                            <input placeholder="Заметка" value={editForm.note || ''} onChange={e => setEditForm(f => ({ ...f, note: e.target.value }))}
+                              style={{ width: '100%', height: 34, padding: '0 10px', border: '1px solid var(--border)', borderRadius: 6, fontSize: 13, marginBottom: 8, boxSizing: 'border-box' }} />
+                            <div style={{ display: 'flex', gap: 8 }}>
+                              <Button style={{ height: 32, fontSize: 12 }} onClick={() => handleEditSave(item.id)}>Сохранить</Button>
+                              <Button variant="secondary" style={{ height: 32, fontSize: 12 }} onClick={() => setEditingId(null)}>Отмена</Button>
+                            </div>
+                          </div>
+                        )
+                      }
+
                       return (
                         <div key={item.id} className="doc-list-row" style={{
-                          display: 'grid',
-                          gridTemplateColumns: '2fr 60px 50px 70px 100px 60px 100px',
-                          gap: 6, padding: '11px 12px',
                           background: 'var(--white)', borderRadius: 8,
                           border: '1px solid var(--border)',
-                          marginBottom: 4, alignItems: 'center',
+                          padding: '11px 14px', marginBottom: 4,
                         }}>
-                          <div style={{ fontWeight: 500, fontSize: 13 }}>{item.name}</div>
-                          <div style={{ fontSize: 12, color: 'var(--muted)' }}>{item.scene || '—'}</div>
-                          <div style={{ fontSize: 12, color: 'var(--muted)' }}>{item.day || '—'}</div>
-                          <div style={{ fontSize: 12, color: 'var(--muted)' }}>{item.time || '—'}</div>
-                          <div style={{ fontSize: 11, color: 'var(--muted)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{item.location || '—'}</div>
-                          <div style={{ fontSize: 13, fontWeight: 500 }}>{item.qty} шт.</div>
-                          <span style={{
-                            display: 'inline-flex', alignItems: 'center', gap: 4,
-                            padding: '2px 7px', borderRadius: 'var(--radius-badge)',
-                            background: src.bg, color: src.color, fontSize: 10, fontWeight: 500, width: 'fit-content',
-                          }}>{src.label}</span>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: match ? 8 : 0, flexWrap: 'wrap' }}>
+                            <div style={{ flex: 1, minWidth: 0 }}>
+                              <div style={{ fontWeight: 500, fontSize: 13, cursor: 'pointer', color: item.note ? 'var(--blue)' : 'var(--text)' }}
+                                onClick={() => setExpandedItem(expandedItem === item.id ? null : item.id)}>
+                                {item.name}
+                                {item.note && <span style={{ fontSize: 10, marginLeft: 6, color: 'var(--muted)' }}>{expandedItem === item.id ? '▲' : '▼'}</span>}
+                              </div>
+                              <div style={{ fontSize: 11, color: 'var(--muted)', marginTop: 2 }}>
+                                {[item.scene && `Сц. ${item.scene}`, item.time, item.location].filter(Boolean).join(' · ') || ''}
+                              </div>
+                            </div>
+                            <div style={{ fontSize: 13, fontWeight: 500, flexShrink: 0 }}>{item.qty} шт.</div>
+                            <span style={{
+                              padding: '2px 7px', borderRadius: 'var(--radius-badge)',
+                              background: src.bg, color: src.color, fontSize: 10, fontWeight: 500,
+                            }}>{src.label}</span>
+                            <button onClick={() => { setEditingId(item.id); setEditForm({ name: item.name, scene: item.scene, day: item.day, qty: item.qty, note: item.note }) }}
+                              style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: 14, color: 'var(--muted)', padding: '2px 4px' }} title="Редактировать">✏️</button>
+                            <button onClick={() => handleDeleteItem(item.id)}
+                              style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: 14, color: 'var(--muted)', padding: '2px 4px' }} title="Удалить">🗑️</button>
+                          </div>
+
+                          {match && (
+                            <div style={{
+                              display: 'flex', alignItems: 'center', gap: 10, padding: '8px 10px',
+                              background: 'var(--bg)', borderRadius: 8, cursor: 'pointer',
+                            }} onClick={() => setCardId(match.unit_id)}>
+                              {match.photo_url
+                                ? <img src={match.photo_url} alt="" style={{ width: 36, height: 36, borderRadius: 6, objectFit: 'cover', flexShrink: 0 }} />
+                                : <div style={{ width: 36, height: 36, borderRadius: 6, background: 'var(--border)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 14, flexShrink: 0 }}>📦</div>
+                              }
+                              <div style={{ flex: 1, minWidth: 0 }}>
+                                <div style={{ fontSize: 12, fontWeight: 500 }}>{match.unit_name}</div>
+                                <div style={{ fontSize: 10, color: 'var(--green)' }}>На складе</div>
+                              </div>
+                              <button onClick={e => { e.stopPropagation(); handleOrderFromWarehouse(match.unit_id) }}
+                                style={{ padding: '4px 10px', borderRadius: 6, border: '1px solid var(--blue)', background: 'var(--blue-dim)', color: 'var(--blue)', fontSize: 11, fontWeight: 500, cursor: 'pointer', flexShrink: 0 }}>
+                                Заказать
+                              </button>
+                            </div>
+                          )}
+                          {expandedItem === item.id && item.note && (() => {
+                            const parts = (item.note || '').split('\n---\n')
+                            const kppText = parts[0] || ''
+                            const scenarioText = parts[1]?.replace(/^📝\s*/, '') || ''
+                            return (
+                              <div style={{ marginTop: 8, display: 'flex', flexDirection: 'column', gap: 6 }}>
+                                {kppText && (
+                                  <div style={{
+                                    padding: '10px 12px', background: 'var(--bg)', borderRadius: 8,
+                                    borderLeft: '3px solid var(--amber)', fontSize: 12, lineHeight: 1.6,
+                                  }}>
+                                    <div style={{ fontSize: 10, fontWeight: 600, color: 'var(--amber)', marginBottom: 4 }}>КПП · Сцена {item.scene || '—'}</div>
+                                    {kppText}
+                                  </div>
+                                )}
+                                {scenarioText && (
+                                  <div style={{
+                                    padding: '10px 12px', background: 'rgba(99,102,241,0.04)', borderRadius: 8,
+                                    borderLeft: '3px solid var(--blue)', fontSize: 12, lineHeight: 1.6,
+                                  }}>
+                                    <div style={{ fontSize: 10, fontWeight: 600, color: 'var(--blue)', marginBottom: 4 }}>Сценарий · Сцена {item.scene || '—'}</div>
+                                    {scenarioText}
+                                  </div>
+                                )}
+                              </div>
+                            )
+                          })()}
                         </div>
                       )
                     })}
+                      </div>
+                    )})
+                  })()}
                 </div>
 
                 {listItems.length === 0 && (
                   <div style={{ textAlign: 'center', padding: '60px 0', color: 'var(--muted)', fontSize: 14 }}>
-                    Список пуст
+                    Список пуст — загрузите КПП или сценарий
                   </div>
                 )}
               </>
             )}
+
+            {/* Add item modal */}
+            {showAddItem && (
+              <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.4)', zIndex: 400, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 24 }}
+                onClick={() => setShowAddItem(false)}>
+                <div style={{ background: 'var(--white)', borderRadius: 'var(--radius-card)', padding: 24, maxWidth: 420, width: '100%' }}
+                  onClick={e => e.stopPropagation()}>
+                  <div style={{ fontWeight: 600, fontSize: 16, marginBottom: 16 }}>Добавить позицию</div>
+                  <input placeholder="Название *" value={addForm.name} onChange={e => setAddForm(f => ({ ...f, name: e.target.value }))}
+                    style={{ width: '100%', height: 38, padding: '0 10px', border: '1px solid var(--border)', borderRadius: 'var(--radius-btn)', fontSize: 13, marginBottom: 8, boxSizing: 'border-box' }} />
+                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 80px', gap: 8, marginBottom: 8 }}>
+                    <input placeholder="Сцена" value={addForm.scene} onChange={e => setAddForm(f => ({ ...f, scene: e.target.value }))}
+                      style={{ height: 38, padding: '0 10px', border: '1px solid var(--border)', borderRadius: 'var(--radius-btn)', fontSize: 13 }} />
+                    <input placeholder="День" value={addForm.day} onChange={e => setAddForm(f => ({ ...f, day: e.target.value }))}
+                      style={{ height: 38, padding: '0 10px', border: '1px solid var(--border)', borderRadius: 'var(--radius-btn)', fontSize: 13 }} />
+                    <input placeholder="Кол-во" type="number" value={addForm.qty} onChange={e => setAddForm(f => ({ ...f, qty: Number(e.target.value) }))}
+                      style={{ height: 38, padding: '0 10px', border: '1px solid var(--border)', borderRadius: 'var(--radius-btn)', fontSize: 13 }} />
+                  </div>
+                  <input placeholder="Заметка" value={addForm.note} onChange={e => setAddForm(f => ({ ...f, note: e.target.value }))}
+                    style={{ width: '100%', height: 38, padding: '0 10px', border: '1px solid var(--border)', borderRadius: 'var(--radius-btn)', fontSize: 13, marginBottom: 12, boxSizing: 'border-box' }} />
+                  <div style={{ display: 'flex', gap: 8 }}>
+                    <Button variant="secondary" fullWidth onClick={() => setShowAddItem(false)}>Отмена</Button>
+                    <Button fullWidth disabled={!addForm.name.trim()} onClick={handleAddItem}>Добавить</Button>
+                  </div>
+                </div>
+              </div>
+            )}
           </div>
         )}
+
+        {cardId && <UnitCardModal unitId={cardId} onClose={() => setCardId(null)} />}
 
         {/* Сверка ИИ */}
         {tab === 'ai_check' && (
@@ -560,10 +826,17 @@ export default function DocumentsPage() {
                   onChange={e => setUploadFile(e.target.files[0] || null)} />
               </div>
 
+              {uploading && (
+                <div style={{ textAlign: 'center', padding: '20px 0', marginBottom: 12 }}>
+                  <div style={{ fontSize: 28, marginBottom: 8, animation: 'spin 2s linear infinite' }}>🪄</div>
+                  <div style={{ fontWeight: 600, fontSize: 14, color: 'var(--blue)', transition: 'opacity 0.3s' }}>{uploadMsg}</div>
+                  <style>{`@keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }`}</style>
+                </div>
+              )}
               <div style={{ display: 'flex', gap: 8 }}>
-                <Button variant="secondary" fullWidth onClick={() => { setShowUpload(false); setUploadFile(null) }}>Отмена</Button>
+                <Button variant="secondary" fullWidth onClick={() => { setShowUpload(false); setUploadFile(null); stopUploadMessages() }} disabled={uploading}>Отмена</Button>
                 <Button fullWidth disabled={!uploadFile || uploading} onClick={handleUpload}>
-                  {uploading ? 'Загрузка...' : 'Загрузить'}
+                  {uploading ? 'Обработка...' : 'Загрузить'}
                 </Button>
               </div>
             </div>

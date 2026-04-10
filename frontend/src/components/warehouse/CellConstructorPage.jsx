@@ -36,6 +36,7 @@ export default function CellConstructorPage() {
   const [saving, setSaving] = useState(false)
   const [saveError, setSaveError] = useState('')
   const [created, setCreated] = useState(null)
+  const [sectionType, setSectionType] = useState('shelf') // shelf | hanger
   const [showNewWh, setShowNewWh] = useState(false)
   const [newWhName, setNewWhName] = useState('')
   const [newWhAddress, setNewWhAddress] = useState('')
@@ -78,6 +79,7 @@ export default function CellConstructorPage() {
         rows,
         shelves,
         cells,
+        type: sectionType,
       })
       setCreated(data.section)
       setStep(4)
@@ -146,6 +148,20 @@ export default function CellConstructorPage() {
                 }}>+ Новый</button>
               </div>
             </div>
+            <div style={{ marginBottom: 16 }}>
+              <div style={{ fontSize: 13, fontWeight: 500, marginBottom: 8 }}>Тип хранения</div>
+              <div style={{ display: 'flex', gap: 8 }}>
+                {[{ key: 'shelf', label: 'Полка / Стеллаж' }, { key: 'hanger', label: 'Вешалка' }].map(t => (
+                  <button key={t.key} onClick={() => setSectionType(t.key)} style={{
+                    padding: '8px 18px', borderRadius: 'var(--radius-badge)',
+                    border: `1px solid ${sectionType === t.key ? 'var(--blue)' : 'var(--border)'}`,
+                    background: sectionType === t.key ? 'var(--blue-dim)' : 'var(--white)',
+                    color: sectionType === t.key ? 'var(--blue)' : 'var(--text)',
+                    fontSize: 13, cursor: 'pointer', fontWeight: 500, transition: 'all 0.15s',
+                  }}>{t.label}</button>
+                ))}
+              </div>
+            </div>
             <Input label="Название секции" placeholder="А · Реквизит" value={name} onChange={e => setName(e.target.value)} />
             <div style={{ marginBottom: 16 }}>
               <div style={{ fontSize: 13, fontWeight: 500, marginBottom: 8 }}>Категории <span style={{ color: 'var(--muted)', fontSize: 11 }}>(выберите одну или несколько)</span></div>
@@ -198,7 +214,7 @@ export default function CellConstructorPage() {
 
             <div style={{ marginBottom: 20 }}>
               <div style={{ fontSize: 13, color: 'var(--muted)', marginBottom: 10 }}>
-                Предпросмотр — {rows * shelves} ячеек
+                Предпросмотр — {rows * shelves} полок
               </div>
               <div style={{
                 display: 'grid',
@@ -216,14 +232,14 @@ export default function CellConstructorPage() {
               </div>
             </div>
 
-            <Button fullWidth onClick={handleNext}>Далее — Коды ячеек</Button>
+            <Button fullWidth onClick={handleNext}>Далее — Коды полок</Button>
           </div>
         )}
 
         {/* Step 2 — cell codes */}
         {step === 2 && (
           <div>
-            <div style={{ fontWeight: 600, marginBottom: 4 }}>Коды ячеек</div>
+            <div style={{ fontWeight: 600, marginBottom: 4 }}>Коды полок</div>
             <div style={{ fontSize: 13, color: 'var(--muted)', marginBottom: 20 }}>
               Измените коды если нужно — буква, цифра или комбинация
             </div>
@@ -253,7 +269,7 @@ export default function CellConstructorPage() {
           <div>
             <div style={{ fontWeight: 600, marginBottom: 4 }}>Просмотр секции</div>
             <div style={{ fontSize: 13, color: 'var(--muted)', marginBottom: 16 }}>
-              {name} · {finalCategories.join(', ')} · {cells.length} ячеек
+              {name} · {finalCategories.join(', ')} · {cells.length} полок
             </div>
             <div style={{
               display: 'grid',
@@ -288,7 +304,7 @@ export default function CellConstructorPage() {
               {name} · {finalCategories.join(', ')}
             </div>
             <div style={{ color: 'var(--muted)', fontSize: 13, marginBottom: 32 }}>
-              {cells.length} ячеек · {rows} рядов × {shelves} полок
+              {cells.length} полок · {rows} рядов × {shelves} полок
             </div>
 
             <div style={{
@@ -309,7 +325,7 @@ export default function CellConstructorPage() {
               ))}
             </div>
 
-            <Button fullWidth onClick={() => navigate('/cells')}>Перейти к карте ячеек</Button>
+            <Button fullWidth onClick={() => navigate('/cells')}>Перейти к карте полок</Button>
           </div>
         )}
       </div>

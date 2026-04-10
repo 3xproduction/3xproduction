@@ -21,7 +21,7 @@ export function getHomeRoute(role) {
     'playback', 'casting_director', 'casting_assistant',
     'assistant_director', 'set_admin',
     'project_deputy', 'project_deputy_upload',
-    'director',
+    'director', 'ams_assistant',
   ]
   if (readOnlyRoles.includes(role)) return '/production/documents'
 

@@ -32,6 +32,7 @@ export default function WarehouseViewPage() {
   const [showCart, setShowCart] = useState(false)
   const [cartSending, setCartSending] = useState(false)
   const [successPopup, setSuccessPopup] = useState(false)
+  const [viewMode, setViewMode] = useState(() => localStorage.getItem('unitsViewMode') || 'grid')
   const { user } = useAuth()
 
   useEffect(() => {
@@ -95,13 +96,18 @@ export default function WarehouseViewPage() {
         }
       `}</style>
       <div style={{ padding: '24px 32px', maxWidth: 900 }}>
-        <div style={{ marginBottom: 24 }}>
-          <h1 style={{ fontSize: 20, fontWeight: 600 }}>Склад</h1>
-          <p style={{ fontSize: 13, color: 'var(--muted)', marginTop: 2 }}>Просмотр остатков</p>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 24, gap: 12 }}>
+          <div>
+            <h1 style={{ fontSize: 20, fontWeight: 600 }}>Склад</h1>
+            <p style={{ fontSize: 13, color: 'var(--muted)', marginTop: 2 }}>Просмотр остатков</p>
+          </div>
+          {user?.role === 'producer' && (
+            <Button onClick={() => window.location.href = '/production/units?add=1'}>+ Новая единица</Button>
+          )}
         </div>
 
         {/* Search + filter */}
-        <div style={{ display: 'flex', gap: 10, marginBottom: 20, flexWrap: 'wrap' }}>
+        <div style={{ display: 'flex', gap: 10, marginBottom: 20, flexWrap: 'wrap', alignItems: 'center' }}>
           <div style={{ position: 'relative', flex: 1, minWidth: 200 }}>
             <span style={{ position: 'absolute', left: 12, top: '50%', transform: 'translateY(-50%)', color: 'var(--muted)' }}>🔍</span>
             <input value={search} onChange={e => setSearch(e.target.value)}
@@ -125,83 +131,158 @@ export default function WarehouseViewPage() {
             <option value="all">Выбрать склад</option>
             {whList.map(w => <option key={w.id} value={w.id}>{w.name}</option>)}
           </select>
+          <span style={{ fontSize: 13, color: 'var(--muted)' }}>{filtered.length} ед.</span>
+          <div style={{ display: 'flex', gap: 2 }}>
+            {[
+              { mode: 'grid', icon: '▦', title: 'Карточки' },
+              { mode: 'rows', icon: '☰', title: 'Строки' },
+              { mode: 'list', icon: '≡', title: 'Список' },
+            ].map(v => (
+              <button key={v.mode} title={v.title} onClick={() => { setViewMode(v.mode); localStorage.setItem('unitsViewMode', v.mode) }}
+                style={{
+                  width: 32, height: 32, border: '1px solid var(--border)', borderRadius: 'var(--radius-btn)',
+                  background: viewMode === v.mode ? 'var(--accent)' : 'var(--white)',
+                  color: viewMode === v.mode ? '#fff' : 'var(--muted)',
+                  fontSize: 16, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center',
+                }} >{v.icon}</button>
+            ))}
+          </div>
         </div>
 
-        {/* Units */}
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-          {filtered.map(u => {
-            const reqStatus = requestedUnits[u.id]
-            const isOpen = expanded === u.id
-            return (
-              <div key={u.id} style={{
-                background: 'var(--white)', borderRadius: 'var(--radius-card)',
-                border: '1px solid var(--border)', overflow: 'hidden',
-              }}>
-                {/* Main row */}
-                <div className="wv-row" style={{ display: 'flex', alignItems: 'center', gap: 14, padding: '14px 16px', cursor: 'pointer' }}
-                  onClick={() => setExpanded(isOpen ? null : u.id)}>
-                  {/* Photo */}
-                  <div className="wv-photo" style={{
-                    width: 52, height: 52, borderRadius: 8, flexShrink: 0,
-                    background: 'var(--bg)', border: '1px solid var(--border)',
-                    display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 22,
-                    overflow: 'hidden',
+        {loading && <div style={{ textAlign: 'center', padding: '40px 0', color: 'var(--muted)', fontSize: 14 }}>Загрузка...</div>}
+
+        {!loading && filtered.length === 0 && (
+          <div style={{ textAlign: 'center', padding: '40px 0', color: 'var(--muted)', fontSize: 14 }}>Ничего не найдено</div>
+        )}
+
+        {/* Grid */}
+        {viewMode === 'grid' && (
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(170px, 1fr))', gap: 12 }}>
+            {filtered.map(u => {
+              const reqStatus = requestedUnits[u.id]
+              return (
+                <div key={u.id} onClick={() => setCardId(u.id)} style={{
+                  background: 'var(--card)', borderRadius: 'var(--radius-card)',
+                  border: '1px solid var(--border)', cursor: 'pointer', overflow: 'hidden',
+                }}>
+                  <div style={{
+                    aspectRatio: '1', background: 'var(--bg)', display: 'flex',
+                    alignItems: 'center', justifyContent: 'center', fontSize: 40, overflow: 'hidden',
                   }}>
                     {u.photo_url
-                      ? <img src={u.photo_url} alt="" style={{ width: '100%', height: '100%', objectFit: 'contain' }} />
-                      : '📦'}
+                      ? <img src={u.photo_url} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+                      : <span>📦</span>}
                   </div>
-
-                  <div className="wv-info" style={{ flex: 1, minWidth: 0 }}>
-                    <div style={{ fontWeight: 500, fontSize: 14, cursor: 'pointer', color: 'var(--accent)' }}
-                      onClick={e => { e.stopPropagation(); setCardId(u.id) }}>{u.name}</div>
-                    <div style={{ fontSize: 12, color: 'var(--muted)', marginTop: 2 }}>
-                      {u.serial ? `${u.serial} · ` : ''}{categoryLabel(u.category)}{(u.cell_custom || u.cell_code) ? ` · Ячейка ${u.cell_custom || u.cell_code}` : ''}
-                    </div>
-                  </div>
-
-                  <div className="wv-right" style={{ display: 'flex', alignItems: 'center', gap: 8, flexShrink: 0 }}>
-                    <Badge color={STATUS_COLOR[u.status]}>{STATUS_LABEL[u.status]}</Badge>
-
-                    {/* Cart / status */}
-                    <div onClick={e => e.stopPropagation()}>
-                      {!reqStatus && u.status === 'on_stock' ? (
-                        cart.includes(u.id) ? (
-                          <Button variant="secondary" style={{ height: 34, fontSize: 13, padding: '0 14px', color: 'var(--red)' }}
-                            onClick={() => removeFromCart(u.id)}>
-                            Убрать
-                          </Button>
-                        ) : (
-                          <Button style={{ height: 34, fontSize: 13, padding: '0 14px' }}
-                            onClick={() => addToCart(u.id)}>
-                            В корзину
-                          </Button>
-                        )
-                      ) : reqStatus && REQUEST_STATUSES[reqStatus] ? (
-                        <Badge color={REQUEST_STATUSES[reqStatus].color}>
-                          {REQUEST_STATUSES[reqStatus].label}
-                        </Badge>
-                      ) : (
-                        <Badge color="muted">Недоступно</Badge>
+                  <div style={{ padding: '10px 12px' }}>
+                    <div style={{ fontWeight: 500, fontSize: 13, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{u.name}</div>
+                    <div style={{ fontSize: 11, color: 'var(--muted)', marginTop: 2 }}>{categoryLabel(u.category)}</div>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 6 }}>
+                      <Badge color={STATUS_COLOR[u.status]}>{STATUS_LABEL[u.status]}</Badge>
+                      {!reqStatus && u.status === 'on_stock' && (
+                        <button onClick={e => { e.stopPropagation(); cart.includes(u.id) ? removeFromCart(u.id) : addToCart(u.id) }}
+                          style={{ fontSize: 11, padding: '2px 8px', borderRadius: 6, border: '1px solid var(--border)', background: cart.includes(u.id) ? 'var(--red)' : 'var(--accent)', color: '#fff', cursor: 'pointer' }}>
+                          {cart.includes(u.id) ? '−' : '+'}
+                        </button>
                       )}
+                      {reqStatus && REQUEST_STATUSES[reqStatus] && <Badge color={REQUEST_STATUSES[reqStatus].color}>{REQUEST_STATUSES[reqStatus].label}</Badge>}
                     </div>
                   </div>
-
-                  <span className="wv-chevron" style={{ color: 'var(--muted)', fontSize: 14, transition: 'transform 0.2s', transform: isOpen ? 'rotate(90deg)' : 'none' }}>›</span>
                 </div>
+              )
+            })}
+          </div>
+        )}
 
-                {/* Expanded details */}
-                {isOpen && u.description && (
-                  <div style={{ borderTop: '1px solid var(--border)', padding: '14px 16px', background: 'var(--bg)' }}>
-                    <div style={{ fontSize: 12, color: 'var(--muted)', marginBottom: 4 }}>Описание</div>
-                    <div style={{ fontSize: 13, lineHeight: 1.5 }}>{u.description}</div>
+        {/* Rows */}
+        {viewMode === 'rows' && (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+            {filtered.map(u => {
+              const reqStatus = requestedUnits[u.id]
+              const isOpen = expanded === u.id
+              return (
+                <div key={u.id} style={{
+                  background: 'var(--white)', borderRadius: 'var(--radius-card)',
+                  border: '1px solid var(--border)', overflow: 'hidden',
+                }}>
+                  <div className="wv-row" style={{ display: 'flex', alignItems: 'center', gap: 14, padding: '14px 16px', cursor: 'pointer' }}
+                    onClick={() => setExpanded(isOpen ? null : u.id)}>
+                    <div className="wv-photo" style={{
+                      width: 52, height: 52, borderRadius: 8, flexShrink: 0,
+                      background: 'var(--bg)', border: '1px solid var(--border)',
+                      display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 22,
+                      overflow: 'hidden',
+                    }}>
+                      {u.photo_url
+                        ? <img src={u.photo_url} alt="" style={{ width: '100%', height: '100%', objectFit: 'contain' }} />
+                        : '📦'}
+                    </div>
+                    <div className="wv-info" style={{ flex: 1, minWidth: 0 }}>
+                      <div style={{ fontWeight: 500, fontSize: 14, cursor: 'pointer', color: 'var(--accent)' }}
+                        onClick={e => { e.stopPropagation(); setCardId(u.id) }}>{u.name}</div>
+                      <div style={{ fontSize: 12, color: 'var(--muted)', marginTop: 2 }}>
+                        {u.serial ? `${u.serial} · ` : ''}{categoryLabel(u.category)}{(u.cell_custom || u.cell_code) ? ` · Полка ${u.cell_custom || u.cell_code}` : ''}
+                      </div>
+                    </div>
+                    <div className="wv-right" style={{ display: 'flex', alignItems: 'center', gap: 8, flexShrink: 0 }}>
+                      <Badge color={STATUS_COLOR[u.status]}>{STATUS_LABEL[u.status]}</Badge>
+                      <div onClick={e => e.stopPropagation()}>
+                        {!reqStatus && u.status === 'on_stock' ? (
+                          cart.includes(u.id) ? (
+                            <Button variant="secondary" style={{ height: 34, fontSize: 13, padding: '0 14px', color: 'var(--red)' }}
+                              onClick={() => removeFromCart(u.id)}>Убрать</Button>
+                          ) : (
+                            <Button style={{ height: 34, fontSize: 13, padding: '0 14px' }}
+                              onClick={() => addToCart(u.id)}>В корзину</Button>
+                          )
+                        ) : reqStatus && REQUEST_STATUSES[reqStatus] ? (
+                          <Badge color={REQUEST_STATUSES[reqStatus].color}>{REQUEST_STATUSES[reqStatus].label}</Badge>
+                        ) : (
+                          <Badge color="muted">Недоступно</Badge>
+                        )}
+                      </div>
+                    </div>
+                    <span className="wv-chevron" style={{ color: 'var(--muted)', fontSize: 14, transition: 'transform 0.2s', transform: isOpen ? 'rotate(90deg)' : 'none' }}>›</span>
                   </div>
-                )}
-              </div>
-            )
-          })}
-        </div>
-        {loading && <div style={{ textAlign: 'center', padding: '40px 0', color: 'var(--muted)', fontSize: 14 }}>Загрузка...</div>}
+                  {isOpen && u.description && (
+                    <div style={{ borderTop: '1px solid var(--border)', padding: '14px 16px', background: 'var(--bg)' }}>
+                      <div style={{ fontSize: 12, color: 'var(--muted)', marginBottom: 4 }}>Описание</div>
+                      <div style={{ fontSize: 13, lineHeight: 1.5 }}>{u.description}</div>
+                    </div>
+                  )}
+                </div>
+              )
+            })}
+          </div>
+        )}
+
+        {/* List */}
+        {viewMode === 'list' && (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+            {filtered.map(u => {
+              const reqStatus = requestedUnits[u.id]
+              return (
+                <div key={u.id} onClick={() => setCardId(u.id)} style={{
+                  display: 'flex', alignItems: 'center', gap: 12, padding: '8px 12px',
+                  background: 'var(--card)', borderRadius: 'var(--radius-btn)', cursor: 'pointer',
+                }}>
+                  <div style={{ flex: 1, minWidth: 0, fontSize: 13, fontWeight: 500, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{u.name}</div>
+                  {u.serial && <span style={{ fontSize: 12, color: 'var(--muted)', flexShrink: 0 }}>{u.serial}</span>}
+                  <span style={{ fontSize: 12, color: 'var(--muted)', flexShrink: 0 }}>{categoryLabel(u.category)}</span>
+                  <Badge color={STATUS_COLOR[u.status]}>{STATUS_LABEL[u.status]}</Badge>
+                  <div onClick={e => e.stopPropagation()}>
+                    {!reqStatus && u.status === 'on_stock' && (
+                      <button onClick={() => cart.includes(u.id) ? removeFromCart(u.id) : addToCart(u.id)}
+                        style={{ fontSize: 11, padding: '2px 8px', borderRadius: 6, border: '1px solid var(--border)', background: cart.includes(u.id) ? 'var(--red)' : 'var(--accent)', color: '#fff', cursor: 'pointer' }}>
+                        {cart.includes(u.id) ? '−' : '+'}
+                      </button>
+                    )}
+                    {reqStatus && REQUEST_STATUSES[reqStatus] && <Badge color={REQUEST_STATUSES[reqStatus].color}>{REQUEST_STATUSES[reqStatus].label}</Badge>}
+                  </div>
+                </div>
+              )
+            })}
+          </div>
+        )}
       </div>
       {cardId && <UnitCardModal unitId={cardId} onClose={() => setCardId(null)} />}
 

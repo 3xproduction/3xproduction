@@ -71,8 +71,9 @@ router.get('/:type/items', verifyJWT, async (req, res) => {
   const seeAll = SEE_ALL_ROLES.includes(req.user.role)
 
   // Permission check
-  const ownTypes = getOwnTypes(req.user.role)
-  if (!seeAll && !ownTypes.includes(type)) {
+  const isFullAccess = ['producer', 'project_director'].includes(req.user.role)
+  const ownTypes = isFullAccess ? ALL_LIST_TYPES : getOwnTypes(req.user.role)
+  if (!seeAll && !isFullAccess && !ownTypes.includes(type)) {
     return res.status(403).json({ error: 'Access denied' })
   }
 
@@ -124,11 +125,31 @@ router.get('/:type/items', verifyJWT, async (req, res) => {
   }
 })
 
+// GET /lists/matched-units — get matched units from latest document for project
+router.get('/matched-units', verifyJWT, async (req, res) => {
+  const raw = req.query.project_id
+  const projectId = (raw && raw !== 'null' && raw !== 'undefined') ? raw : req.user.project_id
+  if (!projectId) return res.status(400).json({ error: 'Missing project_id' })
+  try {
+    const { rows } = await db.query(
+      `SELECT matched_units FROM documents
+       WHERE project_id=$1 AND matched_units IS NOT NULL
+       ORDER BY version DESC LIMIT 1`,
+      [projectId]
+    )
+    res.json({ matched_units: rows[0]?.matched_units || [] })
+  } catch (err) {
+    console.error(err)
+    res.status(500).json({ error: 'Server error' })
+  }
+})
+
 // POST /lists/:type/items — add item
 router.post('/:type/items', verifyJWT, async (req, res) => {
   const { type } = req.params
   const projectId = req.user.project_id
-  const ownTypes = getOwnTypes(req.user.role)
+  const isFullAccess = ['producer', 'project_director'].includes(req.user.role)
+  const ownTypes = isFullAccess ? ALL_LIST_TYPES : getOwnTypes(req.user.role)
 
   if (!ownTypes.includes(type)) {
     return res.status(403).json({ error: 'Access denied' })

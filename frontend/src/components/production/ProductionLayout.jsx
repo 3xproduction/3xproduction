@@ -2,7 +2,8 @@ import { useState, useEffect } from 'react'
 import { NavLink, useNavigate } from 'react-router-dom'
 import {
   FileText, Package, BarChart2, DollarSign,
-  Bell, User, Menu, Users, Home, ChevronDown, Inbox
+  Bell, User, Menu, Users, Home, ChevronDown, Inbox,
+  Handshake, ClipboardList, MapPin, Clapperboard, Car, UserCheck
 } from 'lucide-react'
 import { useAuth } from '../../hooks/useAuth'
 import { ROLES } from '../../constants/roles'
@@ -185,11 +186,28 @@ function buildNav(role) {
 
   // Producer sections
   if (role === 'producer') {
-    nav.push({ to: '/production/warehouse', icon: Package,   label: 'Склад' })
-    nav.push({ to: '/production/requests',  icon: Inbox,     label: 'Заявки' })
-    nav.push({ to: '/production/staff',     icon: Users,     label: 'Сотрудники' })
-    nav.push({ to: '/analytics/producer',   icon: BarChart2, label: 'Аналитика' })
-    nav.push({ to: '/assets',              icon: DollarSign, label: 'Активы' })
+    nav.push({ to: '/production/warehouse', icon: Package,       label: 'Склад' })
+    nav.push({ to: '/production/requests',  icon: Inbox,         label: 'Заявки' })
+    nav.push({ to: '/production/rent',      icon: Handshake,     label: 'Аренда' })
+    nav.push({ to: '/production/acts',      icon: ClipboardList, label: 'Акты' })
+    nav.push({ to: '/production/locations',    icon: MapPin,        label: 'Локации' })
+    nav.push({ to: '/production/decorations',  icon: Clapperboard,  label: 'Декорации' })
+    nav.push({ to: '/production/vehicles',     icon: Car,           label: 'Транспорт' })
+    nav.push({ to: '/production/staff',     icon: Users,         label: 'Сотрудники' })
+    nav.push({ to: '/analytics/producer',   icon: BarChart2,     label: 'Аналитика' })
+    nav.push({ to: '/assets',              icon: DollarSign,     label: 'Активы' })
+  }
+
+  // Casting AMS — producer, project_director, ams_assistant
+  if (role === 'producer' || role === 'project_director' || role === 'ams_assistant') {
+    nav.push({ to: '/production/casting', icon: UserCheck, label: 'Кастинг АМС' })
+  }
+
+  // Catalogs for project director & deputy
+  if (role === 'project_director' || role === 'project_deputy' || role === 'project_deputy_upload') {
+    nav.push({ to: '/production/locations',    icon: MapPin,        label: 'Локации' })
+    nav.push({ to: '/production/decorations',  icon: Clapperboard,  label: 'Декорации' })
+    nav.push({ to: '/production/vehicles',     icon: Car,           label: 'Транспорт' })
   }
 
   // Team (project director)

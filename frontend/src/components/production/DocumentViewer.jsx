@@ -1,5 +1,5 @@
 import { useState, useEffect, useMemo } from 'react'
-import { useParams, useNavigate } from 'react-router-dom'
+import { useParams, useNavigate, useSearchParams } from 'react-router-dom'
 import ProductionLayout from './ProductionLayout'
 import Badge from '../shared/Badge'
 import UnitCardModal from '../shared/UnitCardModal'
@@ -45,6 +45,8 @@ const DEPT_GROUPS = {
    ============================================================ */
 export default function DocumentViewer() {
   const { projectId, docId } = useParams()
+  const [searchParams] = useSearchParams()
+  const sceneFromUrl = searchParams.get('scene')
   const navigate = useNavigate()
   const { user } = useAuth()
   const [doc, setDoc] = useState(null)
@@ -56,11 +58,19 @@ export default function DocumentViewer() {
   const [modeFilter, setModeFilter] = useState('')
   const [intNatFilter, setIntNatFilter] = useState('')
   const [selectedUnit, setSelectedUnit] = useState(null)
-  const [expandedScene, setExpandedScene] = useState(null)
+  const [expandedScene, setExpandedScene] = useState(sceneFromUrl || null)
 
   useEffect(() => {
     docsApi.view(projectId, docId)
-      .then(d => setDoc(d.document))
+      .then(d => {
+        setDoc(d.document)
+        if (sceneFromUrl) {
+          setTimeout(() => {
+            const el = document.getElementById(`scene-${sceneFromUrl}`)
+            if (el) el.scrollIntoView({ behavior: 'smooth', block: 'center' })
+          }, 300)
+        }
+      })
       .catch(() => {})
       .finally(() => setLoading(false))
   }, [projectId, docId])
@@ -261,7 +271,7 @@ function SceneCard({ scene, delta, expanded, onToggle, matched, onUnitClick, onC
   }) || scene.text
 
   return (
-    <div style={{
+    <div id={`scene-${scene.id}`} style={{
       background: isNew ? 'rgba(34,197,94,0.04)' : sceneChange ? 'rgba(234,179,8,0.04)' : 'var(--white)',
       border: '1px solid var(--border)',
       borderRadius: 'var(--radius-card)',

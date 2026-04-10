@@ -49,6 +49,8 @@ export const ROLES = {
     seeValuation: true,
     uploadDocs: false,
     readOnly: true,
+    canAddUnits: true,
+    canAddCatalogs: true,
   },
   project_director: {
     label: 'Директор проекта',
@@ -210,5 +212,11 @@ export const ROLES = {
     world: 'production',
     readDocs: ['kpp', 'callsheet'],
     noVersionNotify: true,
+  },
+  ams_assistant: {
+    label: 'Ассистент по АМС',
+    world: 'production',
+    readDocs: ['kpp', 'scenario', 'callsheet'],
+    ownLists: ['all'],
   },
 }

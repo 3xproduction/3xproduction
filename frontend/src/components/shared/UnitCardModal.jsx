@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react'
-import { X, ChevronDown } from 'lucide-react'
+import { X, ChevronDown, ZoomIn } from 'lucide-react'
 import Badge from './Badge'
+import Lightbox from './Lightbox'
 import Button from './Button'
 import { units as unitsApi, warehouses as warehousesApi } from '../../services/api'
 import { useAuth } from '../../hooks/useAuth'
@@ -17,6 +18,7 @@ export default function UnitCardModal({ unitId, onClose, onChanged }) {
   const [loading, setLoading]         = useState(true)
   const [activePhoto, setActivePhoto] = useState(0)
   const [similar, setSimilar]         = useState([])
+  const [lightbox, setLightbox]       = useState(null)
 
   // Cell assignment
   const [showCell, setShowCell]       = useState(false)
@@ -148,16 +150,22 @@ export default function UnitCardModal({ unitId, onClose, onChanged }) {
           {/* Photos */}
           {photos.length > 0 && (
             <div style={{ marginBottom: 16 }}>
-              <div style={styles.mainPhoto}>
+              <div style={{ ...styles.mainPhoto, cursor: photos[activePhoto]?.url ? 'zoom-in' : 'default', position: 'relative' }}
+                onClick={e => { e.stopPropagation(); photos[activePhoto]?.url && setLightbox(activePhoto) }}>
                 {photos[activePhoto]?.url
-                  ? <img src={photos[activePhoto].url} alt="" style={{ width: '100%', height: '100%', objectFit: 'contain' }} />
+                  ? <>
+                      <img src={photos[activePhoto].url} alt="" style={{ width: '100%', height: '100%', objectFit: 'contain' }} />
+                      <div style={{ position: 'absolute', top: 8, right: 8, background: 'rgba(0,0,0,0.5)', borderRadius: '50%', width: 28, height: 28, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                        <ZoomIn size={14} color="#fff" />
+                      </div>
+                    </>
                   : <span style={{ color: 'var(--muted)', fontSize: 13 }}>📷</span>
                 }
               </div>
               {photos.length > 1 && (
                 <div style={{ display: 'flex', gap: 6, marginTop: 6 }}>
                   {photos.map((p, i) => (
-                    <div key={i} onClick={() => setActivePhoto(i)} style={{
+                    <div key={i} onClick={e => { e.stopPropagation(); setActivePhoto(i) }} style={{
                       width: 48, height: 48, borderRadius: 6, overflow: 'hidden', cursor: 'pointer', flexShrink: 0,
                       border: `2px solid ${i === activePhoto ? 'var(--blue)' : 'var(--border)'}`,
                     }}>
@@ -176,7 +184,7 @@ export default function UnitCardModal({ unitId, onClose, onChanged }) {
           <div style={{ background: 'var(--bg)', borderRadius: 'var(--radius-card)', padding: '4px 14px', marginBottom: 14 }}>
             {unit.serial     && <InfoRow label="Серийный номер" value={unit.serial} />}
             {unit.warehouse_name && <InfoRow label="Склад"      value={unit.warehouse_name} />}
-            <InfoRow label="Ячейка" value={cellLabel} />
+            <InfoRow label="Полка" value={cellLabel} />
             {unit.qty        && <InfoRow label="Количество"     value={`${unit.qty} шт.`} />}
             {unit.dimensions && <InfoRow label="Размеры"        value={unit.dimensions} />}
             {unit.condition  && <InfoRow label="Состояние"      value={unit.condition} />}
@@ -219,7 +227,7 @@ export default function UnitCardModal({ unitId, onClose, onChanged }) {
             <div style={{ display: 'flex', gap: 8, marginBottom: 8 }}>
               {!unit.cell_id && (
                 <Button onClick={() => { setShowCell(v => !v); setShowWriteoff(false) }}>
-                  Ячейка <ChevronDown size={13} style={{ marginLeft: 4, transform: showCell ? 'rotate(180deg)' : 'none', transition: '0.15s' }} />
+                  Полка <ChevronDown size={13} style={{ marginLeft: 4, transform: showCell ? 'rotate(180deg)' : 'none', transition: '0.15s' }} />
                 </Button>
               )}
               {isDirector && (
@@ -238,21 +246,21 @@ export default function UnitCardModal({ unitId, onClose, onChanged }) {
           )}
           {isWarehouse && unit.cell_id && (
             <div style={{ fontSize: 12, color: 'var(--muted)', marginBottom: 8 }}>
-              Ячейка: <strong>{unit.cell_custom || unit.cell_code || '—'}</strong>
+              Полка: <strong>{unit.cell_custom || unit.cell_code || '—'}</strong>
             </div>
           )}
 
           {/* Cell assignment panel */}
           {showCell && (
             <div style={{ background: 'var(--bg)', borderRadius: 10, padding: 14, marginBottom: 8, border: '1px solid var(--border)' }}>
-              <div style={{ fontSize: 13, fontWeight: 500, marginBottom: 10 }}>Назначить ячейку</div>
+              <div style={{ fontSize: 13, fontWeight: 500, marginBottom: 10 }}>Назначить полку</div>
               <select value={selWh} onChange={e => setSelWh(e.target.value)} style={styles.select}>
                 <option value="">— Выберите склад —</option>
                 {warehouses.map(w => <option key={w.id} value={w.id}>{w.name}</option>)}
               </select>
               {cells.length > 0 && (
                 <select value={selCell} onChange={e => setSelCell(e.target.value)} style={{ ...styles.select, marginTop: 8 }}>
-                  <option value="">— Выберите ячейку —</option>
+                  <option value="">— Выберите полку —</option>
                   {cells.map(c => <option key={c.id} value={c.id}>{c.custom_name || c.code}</option>)}
                 </select>
               )}
@@ -308,6 +316,13 @@ export default function UnitCardModal({ unitId, onClose, onChanged }) {
           )}
         </div>
       </div>
+      {lightbox !== null && (
+        <Lightbox
+          photos={photos.map(p => p.url)}
+          startIndex={lightbox}
+          onClose={() => setLightbox(null)}
+        />
+      )}
     </div>
   )
 }

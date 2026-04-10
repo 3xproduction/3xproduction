@@ -1,6 +1,8 @@
 import { useState, useEffect, useRef } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import WarehouseLayout from './WarehouseLayout'
+import ProductionLayout from '../production/ProductionLayout'
+import { ROLES } from '../../constants/roles'
 import UnitCardModal from '../shared/UnitCardModal'
 import Badge from '../shared/Badge'
 import Button from '../shared/Button'
@@ -28,8 +30,11 @@ export default function UnitsPage() {
   const [searchParams, setSearchParams] = useSearchParams()
   const { user } = useAuth()
   const toast = useToast()
+  const Layout = ROLES[user?.role]?.world === 'production' ? ProductionLayout : WarehouseLayout
   const [viewMode, setViewMode] = useState(() => localStorage.getItem('unitsViewMode') || 'grid')
   const [search, setSearch] = useState('')
+  const [debouncedSearch, setDebouncedSearch] = useState('')
+  const searchTimer = useRef(null)
   const [category, setCategory] = useState('all')
   const [statusFilter, setStatusFilter] = useState('Все статусы')
   const [allUnits, setAllUnits] = useState([])
@@ -53,7 +58,19 @@ export default function UnitsPage() {
   const [cells, setCells] = useState([])
 
   useEffect(() => {
-    unitsApi.list().then(data => setAllUnits(data.units || [])).catch(() => {}).finally(() => setLoading(false))
+    clearTimeout(searchTimer.current)
+    searchTimer.current = setTimeout(() => setDebouncedSearch(search), 300)
+    return () => clearTimeout(searchTimer.current)
+  }, [search])
+
+  useEffect(() => {
+    const params = {}
+    if (debouncedSearch.trim()) params.search = debouncedSearch.trim()
+    setLoading(true)
+    unitsApi.list(params).then(data => setAllUnits(data.units || [])).catch(() => {}).finally(() => setLoading(false))
+  }, [debouncedSearch])
+
+  useEffect(() => {
     warehousesApi.list().then(d => setWarehouses(d.warehouses || [])).catch(() => {})
     if (searchParams.get('add') === '1') {
       setForm(EMPTY_FORM); setPhotos([]); setAddError(''); setAddStep(1); setSizeType('clothing'); setShowAdd(true)
@@ -70,12 +87,9 @@ export default function UnitsPage() {
   }, [form.warehouse_id])
 
   const filtered = allUnits.filter(u => {
-    const matchSearch = !search ||
-      (u.name || '').toLowerCase().includes(search.toLowerCase()) ||
-      (u.serial || '').toLowerCase().includes(search.toLowerCase())
     const matchCat = category === 'all' || u.category === category
     const matchStatus = statusFilter === 'Все статусы' || u.status === STATUS_KEY[statusFilter]
-    return matchSearch && matchCat && matchStatus
+    return matchCat && matchStatus
   })
 
   async function onFilesSelected(e) {
@@ -182,7 +196,7 @@ export default function UnitsPage() {
   }
 
   return (
-    <WarehouseLayout>
+    <Layout>
       <div style={{ padding: '24px 32px' }}>
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 20, gap: 12, flexWrap: 'wrap' }}>
           <h1 style={{ fontSize: 20, fontWeight: 600 }}>Склад</h1>
@@ -292,7 +306,7 @@ export default function UnitsPage() {
                     <div style={{ fontSize: 12, color: 'var(--muted)', marginTop: 2 }}>{u.serial ? `${u.serial} · ` : ''}{categoryLabel(u.category)}</div>
                   </div>
                   <div style={{ fontSize: 12, color: 'var(--muted)', textAlign: 'right', flexShrink: 0 }}>
-                    {u.cell_name && <div>Ячейка {u.cell_name}</div>}
+                    {u.cell_name && <div>Полка {u.cell_name}</div>}
                     {u.warehouse_name && <div style={{ marginTop: 2 }}>{u.warehouse_name}</div>}
                   </div>
                   <div style={{ flexShrink: 0 }}>
@@ -486,7 +500,7 @@ export default function UnitsPage() {
                     </select>
                   </div>
                   <div>
-                    <FL>Ячейка</FL>
+                    <FL>Полка</FL>
                     <select value={form.cell_id} onChange={e => setForm(f => ({ ...f, cell_id: e.target.value }))}
                       disabled={!form.warehouse_id || cells.length === 0}
                       style={{ width: '100%', height: 38, padding: '0 10px', border: '1px solid var(--border)', borderRadius: 'var(--radius-btn)', fontSize: 13, background: 'var(--white)' }}>
@@ -512,7 +526,7 @@ export default function UnitsPage() {
       {cardId && <UnitCardModal unitId={cardId} onClose={() => setCardId(null)} onChanged={() => {
         unitsApi.list().then(d => setAllUnits(d.units || [])).catch(() => {})
       }} />}
-    </WarehouseLayout>
+    </Layout>
   )
 }
 

@@ -20,9 +20,23 @@ const upload = multer({
   },
 })
 
+// Role → list types mapping for auto-import
+const ROLE_LIST_TYPES = {
+  production_designer:    ['props','art_fill','dummy','auto','decoration','costumes','makeup','stunts','pyrotechnics'],
+  art_director_assistant: ['props','art_fill','dummy','auto','decoration','costumes','makeup','stunts','pyrotechnics'],
+  props_master:           ['props','art_fill','dummy','auto','costumes'],
+  props_assistant:        ['props','art_fill','dummy','auto','costumes'],
+  decorator:              ['decoration','props','art_fill','dummy'],
+  costumer:               ['costumes'],
+  costume_assistant:      ['costumes'],
+  makeup_artist:          ['makeup'],
+  stunt_coordinator:      ['stunts'],
+  pyrotechnician:         ['pyrotechnics'],
+}
+
 // Roles that can upload
 const UPLOAD_KPP_ROLES = [
-  'project_director', 'project_deputy_upload', 'director', 'assistant_director',
+  'producer', 'project_director', 'project_deputy_upload', 'director', 'assistant_director',
   'production_designer', 'art_director_assistant',
   'props_master', 'props_assistant', 'decorator', 'costumer', 'costume_assistant',
   'makeup_artist', 'stunt_coordinator', 'pyrotechnician',
@@ -55,72 +69,86 @@ router.post('/upload', verifyJWT, upload.single('file'), async (req, res) => {
   if (!canUpload) return res.status(403).json({ error: 'No upload permission' })
 
   try {
+    console.log(`[UPLOAD] Start: type=${type}, project=${project_id}, user=${req.user.role}`)
+
     // Get latest version for this project+type
     const { rows: latest } = await db.query(
       `SELECT * FROM documents WHERE project_id=$1 AND type=$2 ORDER BY version DESC LIMIT 1`,
       [project_id, type]
     )
     const version = latest.length ? latest[0].version + 1 : 1
+    console.log(`[UPLOAD] Version: ${version}`)
 
     // Parse document (xlsx/docx → JSON)
     let parsed_content = null
     try {
       parsed_content = await parseDocumentFile(req.file.buffer, req.file.originalname, type)
+      console.log(`[UPLOAD] Parsed: ${parsed_content?.scenes?.length || 0} scenes`)
     } catch (err) {
-      console.error('Document parse error:', err.message)
+      console.error('[UPLOAD] Document parse error:', err.message)
       return res.status(400).json({ error: `Ошибка парсинга: ${err.message}` })
     }
 
-    // Match props/costumes against warehouse units (kpp and scenario only)
+    // Quick: match units (fast DB query)
     let matched_units = null
     if (type !== 'callsheet' && parsed_content) {
       try {
         matched_units = await matchUnits(parsed_content, project_id)
+        console.log(`[UPLOAD] Matched units: ${matched_units?.length || 0}`)
       } catch (err) {
-        console.error('Unit matching error:', err.message)
+        console.error('[UPLOAD] Unit matching error:', err.message)
       }
     }
 
-    // Compute deltas and AI parsing (kpp and scenario only)
+    // Scene-level delta (fast, no AI)
     let delta = null
-    let parsed_data = null
-    if (type !== 'callsheet' && parsed_content) {
-      // Build rich text for Groq AI analysis
-      try {
-        const allText = parsed_content.scenes.map(s => {
-          let t = `Сцена ${s.id}. ${s.int_nat || ''} ${s.object}. ${s.mode || ''}. СД ${s.day}`
-          if (s.synopsis) t += `\nСинопсис: ${s.synopsis}`
-          if (s.text) t += `\n${s.text.substring(0, 300)}`
-          if (s.characters?.length) t += `\nПерсонажи: ${s.characters.join(', ')}`
-          if (s.props?.length) t += `\nРеквизит: ${s.props.join(', ')}`
-          if (s.costumes?.length) t += `\nКостюм: ${s.costumes.join(', ')}`
-          if (s.makeup?.length) t += `\nГрим: ${s.makeup.join(', ')}`
-          if (s.vehicles?.length) t += `\nИгровой транспорт: ${s.vehicles.join(', ')}`
-          if (s.extras) t += `\nМассовка: ${s.extras}`
-          return t
-        }).join('\n\n')
-
-        parsed_data = await parseDocument(allText.slice(0, 12000))
-
-        // Groq-level delta (for production lists categories)
-        if (latest.length && latest[0].parsed_data) {
-          delta = computeDelta(latest[0].parsed_data, parsed_data)
-        }
-      } catch (err) {
-        console.error('Groq parse error:', err.message)
-      }
-
-      // Scene-level delta (for document viewer) — merge with Groq delta
-      if (latest.length && latest[0].parsed_content?.scenes) {
-        const sceneDelta = computeSceneDelta(latest[0].parsed_content.scenes, parsed_content.scenes)
-        if (delta) {
-          delta.scene_changes = sceneDelta
-        } else {
-          delta = { scene_changes: sceneDelta }
-        }
-      }
+    if (type !== 'callsheet' && latest.length && latest[0].parsed_content?.scenes && parsed_content?.scenes) {
+      const sceneDelta = computeSceneDelta(latest[0].parsed_content.scenes, parsed_content.scenes)
+      delta = { scene_changes: sceneDelta }
     }
 
+    // Auto-import from parsed_content (direct from Excel/DOCX — no AI needed)
+    // This is fast because data is already extracted by the parser
+    const ALL_LIST_TYPES = ['props','art_fill','dummy','auto','decoration','costumes','makeup','stunts','pyrotechnics']
+    const CATEGORY_MAP_IMPORT = {
+      props: 'props', costumes: 'costumes', makeup: 'makeup',
+      vehicles: 'auto', stunts: 'stunts',
+    }
+
+    // Build parsed_data from scenes (no AI call — direct extraction)
+    let parsed_data = null
+    if (type !== 'callsheet' && parsed_content?.scenes) {
+      // Map scene → shoot date from shoot_days
+      const sceneDateMap = {}
+      for (const sd of (parsed_content.shoot_days || [])) {
+        for (const sid of (sd.scenes || [])) {
+          sceneDateMap[sid] = sd.date || ''
+        }
+      }
+
+      parsed_data = { props: [], costumes: [], makeup: [], auto: [], stunts: [], decoration: [], pyrotechnics: [], art_fill: [], dummy: [] }
+      const seen = {}
+      for (const s of parsed_content.scenes) {
+        const shootDate = sceneDateMap[s.id] || ''
+        const sceneText = s.object || s.synopsis || ''
+        for (const [field, cat] of Object.entries(CATEGORY_MAP_IMPORT)) {
+          for (const item of (s[field] || [])) {
+            const name = (item || '').trim()
+            if (!name || seen[cat + ':' + name.toLowerCase()]) continue
+            seen[cat + ':' + name.toLowerCase()] = true
+            parsed_data[cat].push({
+              name, scene: s.id, day: shootDate, source: type,
+              time: `СД ${s.day || '?'}`,
+              location: s.location || '',
+              note: sceneText,
+            })
+          }
+        }
+      }
+      console.log(`[UPLOAD] Extracted items: ${Object.entries(parsed_data).map(([k,v]) => `${k}:${v.length}`).join(', ')}`)
+    }
+
+    // Save document with extracted data
     const { rows } = await db.query(
       `INSERT INTO documents (project_id, type, version, file_url, parsed_data, parsed_content, matched_units, delta, uploaded_by, original_name, status)
        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) RETURNING *`,
@@ -133,21 +161,127 @@ router.post('/upload', verifyJWT, upload.single('file'), async (req, res) => {
        parsed_content ? 'parsed' : 'uploaded']
     )
     const doc = rows[0]
+    console.log(`[UPLOAD] Saved doc ${doc.id}`)
 
-    // Notify all project users (except no-notify roles)
+    // When scenario uploaded — attach scene texts to existing list items
+    if (type === 'scenario' && parsed_content?.scenes) {
+      // Extract series number from filename: "01 серия", "серия 01", "сер 1", etc.
+      const fnLower = (req.file.originalname || '').toLowerCase()
+      const seriesMatch = fnLower.match(/(\d{1,2})\s*сер/) || fnLower.match(/сер[а-я]*\s*(\d{1,2})/) || fnLower.match(/^(\d{1,2})[._\s-]/)
+      const seriesNum = seriesMatch ? seriesMatch[1].padStart(2, '0') : ''
+      console.log(`[UPLOAD] Scenario series: "${seriesNum}" from "${req.file.originalname}"`)
+
+      if (seriesNum) {
+        // Build map: "XX-YY" → scene text
+        const sceneTextMap = {}
+        for (const s of parsed_content.scenes) {
+          const sceneId = `${seriesNum}-${(s.id || s.scene || '').replace(/^0+/, '')}`
+          sceneTextMap[sceneId] = s.text || s.synopsis || s.object || ''
+          // Also try with zero-padded scene number
+          const paddedId = `${seriesNum}-${String(s.id || s.scene || '').padStart(2, '0')}`
+          sceneTextMap[paddedId] = sceneTextMap[sceneId]
+        }
+        console.log(`[UPLOAD] Scene text map: ${Object.keys(sceneTextMap).length} scenes`)
+
+        // Update existing list items that have matching scene IDs
+        const { rows: allItems } = await db.query(
+          `SELECT pli.id, pli.scene, pli.note FROM production_list_items pli
+           JOIN production_lists pl ON pl.id = pli.list_id
+           WHERE pl.project_id = $1 AND pli.scene IS NOT NULL`,
+          [project_id]
+        )
+        let updated = 0
+        for (const item of allItems) {
+          const scenarioText = sceneTextMap[item.scene]
+          if (!scenarioText) continue
+          // Append scenario text to note, separated
+          const existingNote = (item.note || '').trim()
+          const separator = existingNote ? '\n---\n' : ''
+          const newNote = existingNote + separator + '📝 ' + scenarioText.substring(0, 500)
+          await db.query(`UPDATE production_list_items SET note = $1 WHERE id = $2`, [newNote, item.id])
+          updated++
+        }
+        console.log(`[UPLOAD] Updated ${updated} list items with scenario text`)
+      }
+    }
+
+    // Auto-import into production lists for all project users
+    if (parsed_data && (type === 'kpp' || type === 'scenario')) {
+      const { rows: projectMembers } = await db.query(
+        `SELECT id, role FROM users WHERE project_id=$1`, [project_id]
+      )
+      for (const member of projectMembers) {
+        const isFullAccess = ['producer', 'project_director'].includes(member.role)
+        const ownTypes = isFullAccess ? ALL_LIST_TYPES : (ROLE_LIST_TYPES[member.role] || [])
+        if (!ownTypes.length) continue
+        for (const listType of ownTypes) {
+          const items = parsed_data[listType] || []
+          if (!items.length) continue
+          await db.query(
+            `INSERT INTO production_lists (project_id, user_id, type) VALUES ($1,$2,$3) ON CONFLICT DO NOTHING`,
+            [project_id, member.id, listType]
+          )
+          const { rows: lr } = await db.query(
+            `SELECT id FROM production_lists WHERE project_id=$1 AND user_id=$2 AND type=$3`,
+            [project_id, member.id, listType]
+          )
+          for (const item of items) {
+            const { rows: ex } = await db.query(
+              `SELECT id FROM production_list_items WHERE list_id=$1 AND name=$2`, [lr[0].id, item.name]
+            )
+            if (ex.length) continue
+            await db.query(
+              `INSERT INTO production_list_items (list_id, name, scene, day, time, location, qty, source, note)
+               VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
+              [lr[0].id, item.name, item.scene||null, item.day||null, item.time||null,
+               item.location||null, 1, item.source||type, item.note||null]
+            )
+          }
+        }
+      }
+      console.log(`[UPLOAD] Auto-import done`)
+    }
+
+    // Notify project users
     const { rows: projectUsers } = await db.query(
       `SELECT id, role FROM users WHERE project_id=$1`, [project_id]
     )
+    const deltaText = delta?.scene_changes
+      ? ` — ${(delta.scene_changes.added||[]).length} сцен добавлено, ${(delta.scene_changes.changed||[]).length} изменено`
+      : ''
     for (const u of projectUsers) {
       if (NO_NOTIFY_ROLES.includes(u.role)) continue
       await db.query(
         `INSERT INTO notifications (user_id, type, text, entity_id, entity_type)
          VALUES ($1,'new_version',$2,$3,'document')`,
-        [u.id, `Новая версия ${type.toUpperCase()} (v${version}) — загружено ${new Date().toLocaleDateString('ru-RU')}`, doc.id]
+        [u.id, `Новая версия ${type.toUpperCase()} (v${version})${deltaText}`, doc.id]
       )
     }
 
     res.status(201).json({ document: doc })
+  } catch (err) {
+    console.error(err)
+    res.status(500).json({ error: 'Server error' })
+  }
+})
+
+// GET /documents/all — list docs across all projects (producer only)
+router.get('/all', verifyJWT, async (req, res) => {
+  if (req.user.role !== 'producer') return res.status(403).json({ error: 'Producer only' })
+  const { type } = req.query
+  try {
+    let q = `
+      SELECT d.*, u.name AS uploaded_by_name, p.name AS project_name
+      FROM documents d
+      LEFT JOIN users u ON u.id = d.uploaded_by
+      LEFT JOIN projects p ON p.id = d.project_id
+      WHERE 1=1
+    `
+    const params = []
+    if (type) { params.push(type); q += ` AND d.type = $${params.length}` }
+    q += ` ORDER BY d.created_at DESC`
+    const { rows } = await db.query(q, params)
+    res.json({ documents: rows })
   } catch (err) {
     console.error(err)
     res.status(500).json({ error: 'Server error' })

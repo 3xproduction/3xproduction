@@ -7,6 +7,7 @@ import Button from '../shared/Button'
 import { units as unitsApi, requests as requestsApi, issuances as issuancesApi, rent as rentApi } from '../../services/api'
 import { useNotifications } from '../../hooks/useNotifications'
 import { useAuth } from '../../hooks/useAuth'
+import { ROLES } from '../../constants/roles'
 
 const css = `
 .dash-page { padding: 28px 32px; max-width: 1100px; }
@@ -167,7 +168,7 @@ export default function DashboardPage() {
             <p className="dash-sub">{today}</p>
           </div>
           <div className="dash-header-actions">
-            {user?.role === 'warehouse_director' && (
+            {ROLES[user?.role]?.canPublicLink && (
               <Button variant="secondary" onClick={async () => {
                 try {
                   const data = await rentApi.generateLink()

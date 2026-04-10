@@ -32,10 +32,10 @@ const SYSTEM_PROMPT = `Ты — система анализа кинопроиз
 async function parseDocument(text) {
   const response = await client.messages.create({
     model: MODEL,
-    max_tokens: 8192,
+    max_tokens: 16384,
     system: SYSTEM_PROMPT,
     messages: [
-      { role: 'user', content: `Документ для анализа:\n\n${text.slice(0, 12000)}` },
+      { role: 'user', content: `Документ для анализа:\n\n${text.slice(0, 17000)}` },
     ],
   })
 

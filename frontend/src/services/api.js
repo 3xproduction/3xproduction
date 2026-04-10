@@ -119,6 +119,10 @@ export const documents = {
     const q = type ? `?type=${type}` : ''
     return request('GET', `/documents/${projectId}${q}`)
   },
+  listAll: (type) => {
+    const q = type ? `?type=${type}` : ''
+    return request('GET', `/documents/all${q}`)
+  },
   upload:  (formData)  => request('POST', '/documents/upload', formData),
   view:    (projectId, docId) => request('GET', `/documents/${projectId}/view/${docId}`),
   delta:   (id)        => request('GET',  `/documents/${id}/delta`),
@@ -184,6 +188,7 @@ export const lists = {
   addItem:    (type, body) => request('POST', `/lists/${type}/items`, body),
   updateItem: (id, body)   => request('PATCH', `/lists/items/${id}`, body),
   deleteItem: (id)         => request('DELETE', `/lists/items/${id}`),
+  matchedUnits: (projectId) => request('GET', `/lists/matched-units?project_id=${projectId}`),
 }
 
 // ─── Debts ──────────────────────────────────────────────────────────────────
@@ -192,6 +197,61 @@ export const debts = {
   create: (body)   => request('POST', '/debts', body),
   close:  (id)     => request('POST', `/debts/${id}/close`),
   stats:  ()       => request('GET', '/debts/stats'),
+}
+
+// ─── Locations ──────────────────────────────────────────────────────────────
+export const locations = {
+  list:   (params = {}) => {
+    const q = new URLSearchParams(params).toString()
+    return request('GET', `/locations${q ? '?' + q : ''}`)
+  },
+  get:         (id)          => request('GET',    `/locations/${id}`),
+  create:      (body)        => request('POST',   '/locations', body),
+  update:      (id, body)    => request('PUT',    `/locations/${id}`, body),
+  delete:      (id)          => request('DELETE', `/locations/${id}`),
+  uploadPhoto: (id, formData) => request('POST',  `/locations/${id}/photos`, formData),
+}
+
+// ─── Decorations ────────────────────────────────────────────────────────────
+export const decorations = {
+  list:   (params = {}) => {
+    const q = new URLSearchParams(params).toString()
+    return request('GET', `/decorations${q ? '?' + q : ''}`)
+  },
+  get:         (id)          => request('GET',    `/decorations/${id}`),
+  create:      (body)        => request('POST',   '/decorations', body),
+  update:      (id, body)    => request('PUT',    `/decorations/${id}`, body),
+  delete:      (id)          => request('DELETE', `/decorations/${id}`),
+  uploadPhoto: (id, formData) => request('POST',  `/decorations/${id}/photos`, formData),
+  linkUnits:   (id, unit_ids) => request('POST',  `/decorations/${id}/units`, { unit_ids }),
+  unlinkUnit:  (id, unitId)   => request('DELETE', `/decorations/${id}/units/${unitId}`),
+}
+
+// ─── Vehicles ───────────────────────────────────────────────────────────────
+export const vehicles = {
+  list:   (params = {}) => {
+    const q = new URLSearchParams(params).toString()
+    return request('GET', `/vehicles${q ? '?' + q : ''}`)
+  },
+  get:         (id)          => request('GET',    `/vehicles/${id}`),
+  create:      (body)        => request('POST',   '/vehicles', body),
+  update:      (id, body)    => request('PUT',    `/vehicles/${id}`, body),
+  delete:      (id)          => request('DELETE', `/vehicles/${id}`),
+  uploadPhoto: (id, formData) => request('POST',  `/vehicles/${id}/photos`, formData),
+}
+
+// ─── Casting ────────────────────────────────────────────────────────────────
+export const casting = {
+  list:   (params = {}) => {
+    const q = new URLSearchParams(params).toString()
+    return request('GET', `/casting${q ? '?' + q : ''}`)
+  },
+  get:         (id)          => request('GET',    `/casting/${id}`),
+  create:      (body)        => request('POST',   '/casting', body),
+  update:      (id, body)    => request('PUT',    `/casting/${id}`, body),
+  delete:      (id)          => request('DELETE', `/casting/${id}`),
+  uploadPhoto: (id, formData) => request('POST',  `/casting/${id}/photos`, formData),
+  deletePhoto: (id, photoId) => request('DELETE', `/casting/${id}/photos/${photoId}`),
 }
 
 // ─── Analytics ───────────────────────────────────────────────────────────────

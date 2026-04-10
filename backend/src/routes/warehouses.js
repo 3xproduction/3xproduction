@@ -58,7 +58,7 @@ router.get('/:id/cells', verifyJWT, async (req, res) => {
 
 // POST /sections — create section with cells
 router.post('/sections', verifyJWT, checkRole(...DIRECTOR_ROLES), async (req, res) => {
-  const { warehouse_id, name, category, rows: numRows, shelves, cells } = req.body
+  const { warehouse_id, name, category, rows: numRows, shelves, cells, type } = req.body
   if (!warehouse_id || !name || !category) return res.status(400).json({ error: 'Missing fields' })
 
   const client = await db.getClient()
@@ -66,9 +66,9 @@ router.post('/sections', verifyJWT, checkRole(...DIRECTOR_ROLES), async (req, re
     await client.query('BEGIN')
 
     const { rows: sec } = await client.query(
-      `INSERT INTO warehouse_sections (warehouse_id, name, category, rows, shelves)
-       VALUES ($1,$2,$3,$4,$5) RETURNING *`,
-      [warehouse_id, name, category, numRows || 1, shelves || 1]
+      `INSERT INTO warehouse_sections (warehouse_id, name, category, rows, shelves, type)
+       VALUES ($1,$2,$3,$4,$5,$6) RETURNING *`,
+      [warehouse_id, name, category, numRows || 1, shelves || 1, type || 'shelf']
     )
     const section = sec[0]
 

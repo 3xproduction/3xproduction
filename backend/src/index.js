@@ -94,7 +94,25 @@ app.use('/public',     require('./routes/publicRent')) // only public endpoints,
 app.use('/analytics',  require('./routes/analytics'))
 app.use('/team',       require('./routes/team'))
 app.use('/lists',      require('./routes/lists'))
-app.use('/debts',      require('./routes/debts'))
+app.use('/debts',        require('./routes/debts'))
+app.use('/locations',    require('./routes/locations'))
+app.use('/decorations',  require('./routes/decorations'))
+app.use('/vehicles',     require('./routes/vehicles'))
+app.use('/casting',      require('./routes/casting'))
+
+// POST /admin/reset-docs — clear documents and lists for fresh re-import
+app.post('/admin/reset-docs', require('./middleware/auth').verifyJWT, async (req, res) => {
+  if (req.user.role !== 'producer') return res.status(403).json({ error: 'Producer only' })
+  try {
+    await db.query('DELETE FROM production_list_items')
+    await db.query('DELETE FROM production_lists')
+    await db.query('DELETE FROM documents')
+    res.json({ ok: true, message: 'Cleared documents and lists' })
+  } catch (err) {
+    console.error(err)
+    res.status(500).json({ error: 'Server error' })
+  }
+})
 
 // GET /projects — list all projects
 app.get('/projects', require('./middleware/auth').verifyJWT, async (req, res) => {

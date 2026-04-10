@@ -1,6 +1,9 @@
 import { useState, useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
 import WarehouseLayout from '../warehouse/WarehouseLayout'
+import ProductionLayout from '../production/ProductionLayout'
+import { useAuth } from '../../hooks/useAuth'
+import { ROLES } from '../../constants/roles'
 import Badge from '../shared/Badge'
 import Button from '../shared/Button'
 import Input from '../shared/Input'
@@ -12,6 +15,8 @@ import { rent as rentApi, units as unitsApi, warehouses as warehousesApi } from 
 const DEAL_FILTERS = ['Все', 'Активные', 'Завершённые', 'Сдали']
 
 export default function RentPage() {
+  const { user } = useAuth()
+  const Layout = ROLES[user?.role]?.world === 'production' ? ProductionLayout : WarehouseLayout
   const [tab, setTab] = useState('list')
   const [dealFilter, setDealFilter] = useState('Все')
   const [deals, setDeals] = useState([])
@@ -32,7 +37,7 @@ export default function RentPage() {
   })
 
   return (
-    <WarehouseLayout>
+    <Layout>
       <div style={{ padding: '24px 32px', maxWidth: 900 }}>
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 24 }}>
           <h1 style={{ fontSize: 20, fontWeight: 600 }}>Аренда</h1>
@@ -53,7 +58,7 @@ export default function RentPage() {
         {tab === 'list' && <DealsList deals={filtered} allDeals={deals} filter={dealFilter} setFilter={setDealFilter} loading={loading} onRefresh={loadDeals} />}
         {tab === 'new' && <NewDeal onDone={() => { setTab('list'); loadDeals() }} />}
       </div>
-    </WarehouseLayout>
+    </Layout>
   )
 }
 
