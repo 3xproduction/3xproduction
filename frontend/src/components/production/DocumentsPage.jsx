@@ -940,27 +940,21 @@ export default function DocumentsPage() {
                                         const STOP_WORDS = new Set(['на','от','из','за','по','для','при','без','над','под','про','как','что','это','или','так','все','вот','его','они','она','уже','еще','тут','там','мне','мой','наш','ваш','где','кто','чем','чей','той','тех','эти','тем','нас','вас','них','нем','ней','ним','вам','нам','все','всё'])
                                         const itemName = item.name.trim()
                                         if (itemName.length < 3) return block.text
-                                        const words = itemName.split(/\s+/).filter(w => w.length >= 4 && !STOP_WORDS.has(w.toLowerCase()))
-                                        if (!words.length) {
-                                          // Fallback: try full name as single stem if all words are short
-                                          const full = itemName.replace(/[^а-яёa-zА-ЯЁA-Z0-9\s]/gi, '').trim()
-                                          if (full.length < 3) return block.text
-                                          const stem = full.length <= 5 ? full : full.slice(0, Math.max(4, Math.ceil(full.length * 0.7)))
-                                          const esc = stem.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
-                                          const rx = new RegExp(`(${esc}[а-яёa-z]*)`, 'gi')
-                                          const ps = block.text.split(rx)
-                                          if (ps.length === 1) return block.text
-                                          const chk = new RegExp(`^${esc}[а-яёa-z]*$`, 'i')
-                                          return ps.map((p, pi) => chk.test(p) ? <mark key={pi} style={{ background: '#fef08a', borderRadius: 2, padding: '0 2px' }}>{p}</mark> : p)
-                                        }
-                                        const cleanStems = words.map(w => {
+                                        // Build phrase-level stem pattern (words joined with \s+ not |)
+                                        const words = itemName.split(/\s+/).filter(w => w.length >= 3 && !STOP_WORDS.has(w.toLowerCase()))
+                                        if (!words.length) return block.text
+                                        const stems = words.map(w => {
                                           const cleaned = w.replace(/[^а-яёa-zА-ЯЁA-Z0-9]/gi, '')
-                                          if (cleaned.length < 4) return null
-                                          const stem = cleaned.length <= 5 ? cleaned : cleaned.slice(0, Math.max(4, Math.ceil(cleaned.length * 0.7)))
-                                          return stem.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+                                          if (cleaned.length < 3) return null
+                                          const stem = cleaned.length <= 4 ? cleaned : cleaned.slice(0, Math.max(4, Math.ceil(cleaned.length * 0.7)))
+                                          return stem.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '[а-яёa-z]*'
                                         }).filter(Boolean)
-                                        if (!cleanStems.length) return block.text
-                                        const pattern = cleanStems.map(s => s + '[а-яёa-z]*').join('|')
+                                        if (!stems.length) return block.text
+                                        // Multi-word: phrase pattern (коробка лето → короб\s+.*лет)
+                                        // Single-word: just the stem
+                                        const pattern = stems.length > 1
+                                          ? stems.join('[^.!?]*?\\s+')
+                                          : stems[0]
                                         const regex = new RegExp(`(${pattern})`, 'gi')
                                         const parts = block.text.split(regex)
                                         if (parts.length === 1) return block.text

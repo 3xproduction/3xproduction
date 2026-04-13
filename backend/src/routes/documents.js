@@ -119,6 +119,7 @@ router.post('/upload', verifyJWT, upload.single('file'), async (req, res) => {
       props: 'props', costumes: 'costumes', makeup: 'makeup',
       vehicles: 'auto', stunts: 'stunts', pyrotechnics: 'pyrotechnics',
       consultant: 'consultant', locations: 'locations',
+      decoration: 'decoration',
     }
 
     // Build parsed_data from scenes (no AI call — direct extraction)
@@ -195,6 +196,26 @@ router.post('/upload', verifyJWT, upload.single('file'), async (req, res) => {
         `UPDATE scenes SET kpp_document_id = $1 WHERE project_id = $2 AND kpp_document_id IS NULL AND updated_at >= NOW() - INTERVAL '5 minutes'`,
         [doc.id, project_id]
       )
+      // Auto-update dates for existing items that have no date yet
+      const { dateMap, timeMap, slotMap } = await getSceneLookupMaps(project_id)
+      const { rows: datelessItems } = await db.query(
+        `SELECT pli.id, pli.scene FROM production_list_items pli
+         JOIN production_lists pl ON pl.id = pli.list_id
+         WHERE pl.project_id = $1 AND pli.scene IS NOT NULL AND (pli.day IS NULL OR pli.day = '')`,
+        [project_id]
+      )
+      let dateFixed = 0
+      for (const item of datelessItems) {
+        const nScene = normalizeSceneId(item.scene) || item.scene
+        const day = dateMap[nScene] || dateMap[item.scene]
+        if (!day) continue
+        const dayLabel = timeMap[nScene] || timeMap[item.scene] || null
+        const slot = slotMap[nScene] || slotMap[item.scene] || ''
+        const time = dayLabel && slot ? `${dayLabel} · ${slot}` : dayLabel
+        await db.query(`UPDATE production_list_items SET day=$1, time=COALESCE($2, time) WHERE id=$3`, [day, time, item.id])
+        dateFixed++
+      }
+      if (dateFixed) console.log(`[UPLOAD] Auto-fixed dates for ${dateFixed} existing items`)
     }
     if (type === 'scenario' && parsed_content?.scenes) {
       await db.query(
@@ -230,45 +251,96 @@ router.post('/upload', verifyJWT, upload.single('file'), async (req, res) => {
       }
       console.log(`[UPLOAD] Updated ${updated} list items with scenario text`)
 
-      // Enqueue AI tasks (processed by worker with retry) instead of inline calls
+      // Synchronous AI analysis with async retry on failure
       if (process.env.ANTHROPIC_API_KEY) {
-        const { rows: existingItems } = await db.query(
-          `SELECT DISTINCT LOWER(TRIM(pli.name)) AS name FROM production_list_items pli
-           JOIN production_lists pl ON pl.id = pli.list_id
-           WHERE pl.project_id = $1`, [project_id]
-        )
-        const existingNames = existingItems.map(r => r.name)
-        const sceneTexts = parsed_content.scenes.map(s => {
-          const id = s.id || s.scene || ''
-          const text = s.text || s.synopsis || s.object || ''
-          return `Сцена ${id}: ${text.substring(0, 300)}`
-        }).join('\n')
-        const fullSceneTexts = parsed_content.scenes.map(s => {
-          const id = s.id || s.scene || ''
-          const text = s.text || s.synopsis || s.object || ''
-          return `Сцена ${id}:\n${text.substring(0, 600)}`
-        }).join('\n\n')
+        try {
+          console.log(`[AI] Starting synchronous scenario analysis`)
+          const { rows: existingItems } = await db.query(
+            `SELECT DISTINCT LOWER(TRIM(pli.name)) AS name FROM production_list_items pli
+             JOIN production_lists pl ON pl.id = pli.list_id
+             WHERE pl.project_id = $1`, [project_id]
+          )
+          const existingNames = existingItems.map(r => r.name)
+          const sceneTexts = parsed_content.scenes.map(s => {
+            const id = s.id || s.scene || ''
+            const text = s.text || s.synopsis || s.object || ''
+            return `Сцена ${id}: ${text.substring(0, 300)}`
+          }).join('\n')
 
-        // Create analyze_scenario task
-        await db.query(
-          `INSERT INTO ai_tasks (project_id, document_id, task_type, params)
-           VALUES ($1, $2, 'analyze_scenario', $3)`,
-          [project_id, doc.id, JSON.stringify({
-            seriesNum: dataSeries,
-            sceneTexts: sceneTexts.substring(0, 14000),
-            existingNames,
-          })]
-        )
-        // Create cross_scenes task
-        await db.query(
-          `INSERT INTO ai_tasks (project_id, document_id, task_type, params)
-           VALUES ($1, $2, 'cross_scenes', $3)`,
-          [project_id, doc.id, JSON.stringify({
-            seriesNum: dataSeries,
-            fullSceneTexts: fullSceneTexts.substring(0, 17000),
-          })]
-        )
-        console.log(`[AI] Enqueued 2 AI tasks for doc ${doc.id}`)
+          const { dateMap: aiDateMap, timeMap: aiTimeMap, slotMap: aiSlotMap, textMap: aiTextMap } = await getSceneLookupMaps(project_id)
+
+          const aiPrompt = `Вот текст сценария:\n${sceneTexts.substring(0, 14000)}\n\nВот предметы, которые УЖЕ ЕСТЬ в списке (не дублируй их):\n${existingNames.join(', ')}\n\nНайди предметы реквизита, костюмы, грим, декорации, транспорт которые УПОМИНАЮТСЯ В ТЕКСТЕ СЦЕН, но ОТСУТСТВУЮТ в списке выше. Верни ТОЛЬКО НОВЫЕ позиции. ОБЯЗАТЕЛЬНО укажи номер сцены в поле scene.\n\nДля КАЖДОГО предмета ОБЯЗАТЕЛЬНО заполни поле "reason" — кратко объясни ПОЧЕМУ этот предмет нужен, процитируй фрагмент сценария где он упоминается.`
+
+          const timeout = new Promise((_, reject) => setTimeout(() => reject(new Error('AI timeout 60s')), 60000))
+          const aiResult = await Promise.race([parseDocument(aiPrompt), timeout])
+          console.log(`[AI] Result: ${aiResult ? Object.keys(aiResult).filter(k => (aiResult[k]||[]).length).join(', ') : 'none'}`)
+
+          if (aiResult) {
+            const { rows: members } = await db.query(`SELECT id, role FROM users WHERE project_id=$1`, [project_id])
+            const projectNamesSet = new Set(existingNames)
+            let aiImported = 0
+            for (const cat of ALL_LIST_TYPES) {
+              for (const ai of (aiResult[cat] || [])) {
+                const aiName = (ai.name || ai.item || '').replace(/\s+/g, ' ').trim()
+                if (!aiName) continue
+                const aiNameLower = aiName.toLowerCase()
+                if (projectNamesSet.has(aiNameLower)) continue
+                const sceneId = normalizeSceneId(ai.scene, dataSeries)
+                const aiDay = (sceneId && aiDateMap[sceneId]) || null
+                const aiDayLabel = (sceneId && aiTimeMap[sceneId]) || null
+                const aiSlot = (sceneId && aiSlotMap[sceneId]) || ''
+                const aiTime = aiDayLabel && aiSlot ? `${aiDayLabel} · ${aiSlot}` : aiDayLabel
+                const aiReason = ai.reason || ai.note || ''
+                const scenarioSnippet = sceneId ? (aiTextMap[sceneId] || '') : ''
+                const noteParts = []
+                if (aiReason) noteParts.push('🤖 ' + aiReason)
+                if (scenarioSnippet) noteParts.push('📝 ' + scenarioSnippet)
+                const aiNote = noteParts.join('\n---\n') || null
+                for (const m of members) {
+                  const own = ['producer','project_director'].includes(m.role) ? ALL_LIST_TYPES : (ROLE_LIST_TYPES[m.role] || [])
+                  if (!own.includes(cat)) continue
+                  await db.query(`INSERT INTO production_lists (project_id, user_id, type) VALUES ($1,$2,$3) ON CONFLICT DO NOTHING`, [project_id, m.id, cat])
+                  const { rows: lr } = await db.query(`SELECT id FROM production_lists WHERE project_id=$1 AND user_id=$2 AND type=$3`, [project_id, m.id, cat])
+                  await db.query(`INSERT INTO production_list_items (list_id, name, scene, day, time, location, qty, source, note) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
+                    [lr[0].id, aiName, sceneId, aiDay, aiTime, ai.location||null, 1, 'ai', aiNote])
+                  aiImported++
+                }
+                projectNamesSet.add(aiNameLower)
+              }
+            }
+            console.log(`[AI] Imported ${aiImported} items synchronously`)
+          }
+
+          // Cross-scenes in parallel (non-blocking, with queue fallback)
+          const fullSceneTexts = parsed_content.scenes.map(s => {
+            const id = s.id || s.scene || ''
+            const text = s.text || s.synopsis || s.object || ''
+            return `Сцена ${id}:\n${text.substring(0, 600)}`
+          }).join('\n\n')
+          analyzeCrossScenes(fullSceneTexts).then(async crossResult => {
+            if (crossResult?.cross_scenes?.length) {
+              const crossScenes = crossResult.cross_scenes.map(cs => ({
+                ...cs,
+                scenes: (cs.scenes || []).map(sc => normalizeSceneId(sc, dataSeries) || String(sc).replace(/^0+/, ''))
+              }))
+              await db.query(`UPDATE documents SET parsed_data = jsonb_set(COALESCE(parsed_data,'{}')::jsonb, '{cross_scenes}', $1::jsonb) WHERE id = $2`,
+                [JSON.stringify(crossScenes), doc.id])
+              console.log(`[AI] Cross-scenes: ${crossScenes.length} items`)
+            }
+          }).catch(e => console.error('[AI] Cross-scene error:', e.message))
+
+        } catch (aiErr) {
+          console.error('[AI] Sync error, enqueueing for retry:', aiErr.message)
+          // Fallback: enqueue for async retry
+          const sceneTexts = parsed_content.scenes.map(s => `Сцена ${s.id||''}: ${(s.text||s.synopsis||'').substring(0, 300)}`).join('\n')
+          const fullSceneTexts = parsed_content.scenes.map(s => `Сцена ${s.id||''}:\n${(s.text||s.synopsis||'').substring(0, 600)}`).join('\n\n')
+          const { rows: ei } = await db.query(`SELECT DISTINCT LOWER(TRIM(pli.name)) AS name FROM production_list_items pli JOIN production_lists pl ON pl.id=pli.list_id WHERE pl.project_id=$1`, [project_id])
+          await db.query(`INSERT INTO ai_tasks (project_id, document_id, task_type, params) VALUES ($1,$2,'analyze_scenario',$3)`,
+            [project_id, doc.id, JSON.stringify({ seriesNum: dataSeries, sceneTexts: sceneTexts.substring(0, 14000), existingNames: ei.map(r => r.name) })])
+          await db.query(`INSERT INTO ai_tasks (project_id, document_id, task_type, params) VALUES ($1,$2,'cross_scenes',$3)`,
+            [project_id, doc.id, JSON.stringify({ seriesNum: dataSeries, fullSceneTexts: fullSceneTexts.substring(0, 17000) })])
+          console.log(`[AI] Enqueued 2 tasks for async retry`)
+        }
       }
     }
 

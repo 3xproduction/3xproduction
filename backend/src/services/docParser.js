@@ -197,8 +197,8 @@ function parseRightColumn(text) {
   const meta = { characters: [], extras: '', props: [], costumes: [], makeup: [], vehicles: [], stunts: [], pyrotechnics: [], consultant: [], decoration: [], notes: '' }
   if (!text) return meta
 
-  // Split by known markers
-  const parts = text.split(/(?=Персонажи:|Реквизит:|Костюм:|Грим:|Игровой транспорт:|Спецэффекты:|Массовка:)/i)
+  // Split by known markers (expanded to cover all possible scenario markers)
+  const parts = text.split(/(?=Персонажи:|Реквизит:|Бутафория:|Наполнение:|Костюм[ыи]?:|Грим:|(?:Игровой\s+)?[Тт]ранспорт:|Спецэффекты:|Пиротехник[аи]?:|Массовка:|Декораци[яи]?:|Каскад[её]р[ыи]?:|Консультант[ыи]?:)/i)
 
   for (const part of parts) {
     const t = part.trim()
@@ -206,14 +206,26 @@ function parseRightColumn(text) {
       meta.characters = t.replace(/^Персонажи:\s*/i, '').split(/[\n,]+/).map(s => s.trim()).filter(s => s && s.length > 1)
     } else if (/^Реквизит:/i.test(t)) {
       meta.props = t.replace(/^Реквизит:\s*/i, '').split(/,\s*/).map(s => s.trim()).filter(Boolean)
-    } else if (/^Костюм:/i.test(t)) {
-      meta.costumes = t.replace(/^Костюм:\s*/i, '').split(/,\s*/).map(s => s.trim()).filter(Boolean)
+    } else if (/^Бутафория:/i.test(t)) {
+      meta.props.push(...t.replace(/^Бутафория:\s*/i, '').split(/,\s*/).map(s => s.trim()).filter(Boolean))
+    } else if (/^Наполнение:/i.test(t)) {
+      meta.props.push(...t.replace(/^Наполнение:\s*/i, '').split(/,\s*/).map(s => s.trim()).filter(Boolean))
+    } else if (/^Костюм/i.test(t)) {
+      meta.costumes = t.replace(/^Костюм[ыи]?:\s*/i, '').split(/,\s*/).map(s => s.trim()).filter(Boolean)
     } else if (/^Грим:/i.test(t)) {
-      meta.makeup = [t.replace(/^Грим:\s*/i, '').trim()].filter(Boolean)
-    } else if (/^Игровой транспорт:/i.test(t)) {
-      meta.vehicles = t.replace(/^Игровой транспорт:\s*/i, '').split(/\s{2,}|\n/).map(s => s.trim()).filter(Boolean)
+      meta.makeup = t.replace(/^Грим:\s*/i, '').split(/,\s*/).map(s => s.trim()).filter(Boolean)
+    } else if (/^(?:Игровой\s+)?[Тт]ранспорт:/i.test(t)) {
+      meta.vehicles = t.replace(/^(?:Игровой\s+)?[Тт]ранспорт:\s*/i, '').split(/[,\n]|\s{2,}/).map(s => s.trim()).filter(Boolean)
     } else if (/^Спецэффекты:/i.test(t)) {
-      meta.notes = t.replace(/^Спецэффекты:\s*/i, '').trim()
+      meta.pyrotechnics = t.replace(/^Спецэффекты:\s*/i, '').split(/,\s*/).map(s => s.trim()).filter(Boolean)
+    } else if (/^Пиротехник/i.test(t)) {
+      meta.pyrotechnics.push(...t.replace(/^Пиротехник[аи]?:\s*/i, '').split(/,\s*/).map(s => s.trim()).filter(Boolean))
+    } else if (/^Декораци/i.test(t)) {
+      meta.decoration = t.replace(/^Декораци[яи]?:\s*/i, '').split(/,\s*/).map(s => s.trim()).filter(Boolean)
+    } else if (/^Каскад/i.test(t)) {
+      meta.stunts = t.replace(/^Каскад[её]р[ыи]?:\s*/i, '').split(/,\s*/).map(s => s.trim()).filter(Boolean)
+    } else if (/^Консультант/i.test(t)) {
+      meta.consultant = t.replace(/^Консультант[ыи]?:\s*/i, '').split(/,\s*/).map(s => s.trim()).filter(Boolean)
     } else if (/^Массовка:/i.test(t)) {
       meta.extras = t.replace(/^Массовка:\s*/i, '').trim()
     }

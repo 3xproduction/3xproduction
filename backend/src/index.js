@@ -174,6 +174,7 @@ app.post('/projects/:id/rebuild-positions', require('./middleware/auth').verifyJ
       props: 'props', costumes: 'costumes', makeup: 'makeup',
       vehicles: 'auto', stunts: 'stunts', pyrotechnics: 'pyrotechnics',
       consultant: 'consultant', locations: 'locations',
+      decoration: 'decoration',
     }
     const ALL_TYPES = ['props','art_fill','dummy','auto','decoration','costumes','makeup','stunts','pyrotechnics','consultant','locations']
 
@@ -650,9 +651,8 @@ async function processAnalyzeScenario(task, params) {
       const aiName = (ai.name || ai.item || '').replace(/\s+/g, ' ').trim()
       if (!aiName) continue
       const aiNameLower = aiName.toLowerCase()
-      const isDupe = [...projectNamesSet].some(existing =>
-        existing === aiNameLower || existing.includes(aiNameLower) || aiNameLower.includes(existing)
-      )
+      // Exact match only — substring matching was too aggressive (e.g. "кресло" ≠ "кресло-качалка")
+      const isDupe = projectNamesSet.has(aiNameLower)
       if (isDupe) continue
 
       const sceneId = normalizeSceneId(ai.scene, seriesNum)
@@ -688,9 +688,7 @@ async function processAnalyzeScenario(task, params) {
     const sugCat = sug.category || 'props'
     if (!sugName) continue
     const sugNameLower = sugName.toLowerCase()
-    const sugIsDupe = [...projectNamesSet].some(existing =>
-      existing === sugNameLower || existing.includes(sugNameLower) || sugNameLower.includes(existing)
-    )
+    const sugIsDupe = projectNamesSet.has(sugNameLower)
     if (sugIsDupe) continue
 
     const sugScene = normalizeSceneId(sug.scene, seriesNum)

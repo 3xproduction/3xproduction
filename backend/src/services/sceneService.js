@@ -152,7 +152,7 @@ async function upsertScenesFromScenario(projectId, parsedContent, documentId, se
 
 /**
  * Get lookup maps from the scenes table for a project.
- * Replaces inline sceneDateMap/sceneTimeMap/kppSlotMap construction.
+ * Falls back to reading from KPP parsed_content if scenes table is empty.
  */
 async function getSceneLookupMaps(projectId) {
   const { rows } = await db.query(
@@ -161,10 +161,10 @@ async function getSceneLookupMaps(projectId) {
     [projectId]
   )
 
-  const dateMap = {}   // canonical_id → date string
-  const timeMap = {}   // canonical_id → "СД X" label
-  const slotMap = {}   // canonical_id → time_slot
-  const textMap = {}   // canonical_id → scenario_text
+  const dateMap = {}
+  const timeMap = {}
+  const slotMap = {}
+  const textMap = {}
 
   for (const r of rows) {
     const cid = r.canonical_id
@@ -174,19 +174,91 @@ async function getSceneLookupMaps(projectId) {
     if (r.scenario_text) textMap[cid] = r.scenario_text
   }
 
+  // FALLBACK: if scenes table is empty, read directly from latest KPP parsed_content
+  if (!Object.keys(dateMap).length) {
+    const { rows: kd } = await db.query(
+      `SELECT parsed_content FROM documents WHERE project_id=$1 AND type='kpp' AND parsed_content IS NOT NULL ORDER BY version DESC LIMIT 1`,
+      [projectId]
+    )
+    if (kd.length) {
+      const pc = typeof kd[0].parsed_content === 'string' ? JSON.parse(kd[0].parsed_content) : kd[0].parsed_content
+      if (pc?.shoot_days) {
+        for (const sd of pc.shoot_days) {
+          for (const sid of (sd.scenes || [])) {
+            dateMap[sid] = sd.date || ''
+            if (sd.day_number) timeMap[sid] = `СД ${sd.day_number}`
+          }
+        }
+      }
+      if (pc?.scenes) {
+        for (const sc of pc.scenes) {
+          if (sc.id && sc.time_slot) slotMap[sc.id] = sc.time_slot
+        }
+      }
+    }
+    // Also read scenario texts from latest scenario document
+    const { rows: sd } = await db.query(
+      `SELECT parsed_content, original_name FROM documents WHERE project_id=$1 AND type='scenario' AND parsed_content IS NOT NULL ORDER BY version DESC LIMIT 1`,
+      [projectId]
+    )
+    if (sd.length) {
+      const spc = typeof sd[0].parsed_content === 'string' ? JSON.parse(sd[0].parsed_content) : sd[0].parsed_content
+      const seriesNum = extractSeriesFromFilename(sd[0].original_name)
+      for (const s of (spc?.scenes || [])) {
+        const rawId = (s.id || s.scene || '').replace(/^0+/, '')
+        const text = s.text || s.synopsis || s.object || ''
+        if (!rawId || !text) continue
+        if (seriesNum) {
+          const sn = parseInt(seriesNum)
+          textMap[`${sn}-${rawId}`] = text
+        }
+        textMap[rawId] = text
+      }
+    }
+  }
+
   return { dateMap, timeMap, slotMap, textMap }
 }
 
 /**
- * Get series number for a project from existing scenes.
- * Fallback when filename doesn't contain series info.
+ * Get series number for a project.
+ * Checks: 1) scenes table, 2) production_list_items, 3) KPP parsed_content
  */
 async function getProjectSeries(projectId) {
+  // Try scenes table first
   const { rows } = await db.query(
     `SELECT DISTINCT series FROM scenes WHERE project_id = $1 AND series IS NOT NULL LIMIT 1`,
     [projectId]
   )
-  return rows.length ? String(rows[0].series).padStart(2, '0') : ''
+  if (rows.length) return String(rows[0].series).padStart(2, '0')
+
+  // Fallback: extract from existing production_list_items scene IDs (e.g. "46-22" → 46)
+  const { rows: items } = await db.query(
+    `SELECT DISTINCT pli.scene FROM production_list_items pli
+     JOIN production_lists pl ON pl.id = pli.list_id
+     WHERE pl.project_id = $1 AND pli.scene IS NOT NULL AND pli.scene LIKE '%-%'
+     LIMIT 1`,
+    [projectId]
+  )
+  if (items.length) {
+    const m = items[0].scene.match(/^(\d+)-/)
+    if (m) return m[1].padStart(2, '0')
+  }
+
+  // Fallback: extract from KPP parsed_content scene IDs
+  const { rows: kd } = await db.query(
+    `SELECT parsed_content FROM documents WHERE project_id=$1 AND type='kpp' AND parsed_content IS NOT NULL ORDER BY version DESC LIMIT 1`,
+    [projectId]
+  )
+  if (kd.length) {
+    const pc = typeof kd[0].parsed_content === 'string' ? JSON.parse(kd[0].parsed_content) : kd[0].parsed_content
+    if (pc?.scenes?.length) {
+      const m = (pc.scenes[0].id || '').match(/^(\d+)-/)
+      if (m) return m[1].padStart(2, '0')
+    }
+  }
+
+  return ''
 }
 
 module.exports = {
