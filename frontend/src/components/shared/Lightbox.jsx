@@ -97,7 +97,7 @@ export default function Lightbox({ photos = [], startIndex = 0, onClose }) {
   return (
     <>
       <style>{css}</style>
-      <div className="lb-overlay" onClick={onClose}>
+      <div className="lb-overlay" onClick={e => { e.stopPropagation(); onClose() }}>
         <div onClick={e => e.stopPropagation()}>
           <img className="lb-img" src={src} alt="" />
         </div>

@@ -35,6 +35,7 @@ import LocationsPage from './components/warehouse/LocationsPage'
 import DecorationsPage from './components/warehouse/DecorationsPage'
 import VehiclesPage from './components/warehouse/VehiclesPage'
 import CastingPage from './components/production/CastingPage'
+import ProjectAnalyticsPage from './components/production/ProjectAnalyticsPage'
 import SeedPage from './components/dev/SeedPage'
 
 // Requires auth only
@@ -142,6 +143,7 @@ function App() {
         <Route path="/production/casting"         element={<ProductionRoute><CastingPage /></ProductionRoute>} />
         <Route path="/production/staff"          element={<ProductionRoute><StaffPage /></ProductionRoute>} />
         <Route path="/analytics/producer"      element={<ProductionRoute><ProducerDashboardPage /></ProductionRoute>} />
+        <Route path="/production/analytics"   element={<ProductionRoute><ProjectAnalyticsPage /></ProductionRoute>} />
 
         {/* Shared routes (any authenticated user) */}
         <Route path="/notifications"           element={<PrivateRoute><NotificationsPage /></PrivateRoute>} />

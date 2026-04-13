@@ -4,7 +4,8 @@ const db       = require('../db')
 const { verifyJWT } = require('../middleware/auth')
 const { parseDocumentFile } = require('../services/docParser')
 const { matchUnits } = require('../services/unitMatcher')
-const { parseDocument, computeDelta } = require('../services/groq')
+const { parseDocument, computeDelta, analyzeCrossScenes } = require('../services/groq')
+const { normalizeSceneId, extractSeriesFromFilename, upsertScenesFromKpp, upsertScenesFromScenario, getSceneLookupMaps, getProjectSeries } = require('../services/sceneService')
 
 const ALLOWED_DOC_TYPES = [
   'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',       // .xlsx
@@ -22,17 +23,20 @@ const upload = multer({
 
 // Role → list types mapping for auto-import
 const ROLE_LIST_TYPES = {
-  production_designer:      ['props','art_fill','dummy','auto','decoration','costumes','makeup','stunts','pyrotechnics'],
-  art_director_assistant:   ['props','art_fill','dummy','auto','decoration','costumes','makeup','stunts','pyrotechnics'],
-  first_assistant_director: ['props','art_fill','dummy','auto','decoration','costumes','makeup','stunts','pyrotechnics'],
-  props_master:             ['props','art_fill','dummy','auto','costumes'],
-  props_assistant:        ['props','art_fill','dummy','auto','costumes'],
-  decorator:              ['decoration','props','art_fill','dummy'],
-  costumer:               ['costumes'],
-  costume_assistant:      ['costumes'],
-  makeup_artist:          ['makeup'],
-  stunt_coordinator:      ['stunts'],
-  pyrotechnician:         ['pyrotechnics'],
+  production_designer:      ['props','art_fill','dummy','auto','decoration','costumes','makeup','stunts','pyrotechnics','consultant'],
+  art_director_assistant:   ['props','art_fill','dummy','auto','decoration','costumes','makeup','stunts','pyrotechnics','consultant'],
+  first_assistant_director: ['props','art_fill','dummy','auto','decoration','costumes','makeup','stunts','pyrotechnics','consultant'],
+  director:                 ['auto','decoration','stunts','pyrotechnics','consultant','makeup'],
+  assistant_director:       ['auto','decoration','stunts','pyrotechnics','consultant','makeup'],
+  props_master:             ['props','art_fill','dummy','auto','decoration','pyrotechnics','consultant','costumes'],
+  props_assistant:          ['props','art_fill','dummy','auto','decoration','pyrotechnics','costumes'],
+  decorator:                ['decoration','props','art_fill','dummy','consultant'],
+  costumer:                 ['costumes'],
+  costume_assistant:        ['costumes'],
+  makeup_artist:            ['makeup'],
+  stunt_coordinator:        ['stunts'],
+  pyrotechnician:           ['pyrotechnics'],
+  location_manager:         ['locations'],
 }
 
 // Roles that can upload
@@ -40,7 +44,7 @@ const UPLOAD_KPP_ROLES = [
   'producer', 'project_director', 'project_deputy_upload', 'director', 'assistant_director',
   'production_designer', 'art_director_assistant',
   'props_master', 'props_assistant', 'decorator', 'costumer', 'costume_assistant',
-  'makeup_artist', 'stunt_coordinator', 'pyrotechnician',
+  'makeup_artist', 'stunt_coordinator', 'pyrotechnician', 'location_manager',
 ]
 const UPLOAD_CALLSHEET_ROLES = [
   ...UPLOAD_KPP_ROLES, 'set_admin',
@@ -51,7 +55,7 @@ const NO_NOTIFY_ROLES = ['driver', 'camera_mechanic', 'playback']
 
 // POST /documents/upload
 router.post('/upload', verifyJWT, upload.single('file'), async (req, res) => {
-  const { project_id, type } = req.body
+  const { project_id, type, group_id } = req.body
   if (!project_id || !type) return res.status(400).json({ error: 'Missing project_id or type' })
   if (!['kpp', 'scenario', 'callsheet'].includes(type)) return res.status(400).json({ error: 'Invalid type' })
   if (!req.file) return res.status(400).json({ error: 'No file uploaded' })
@@ -110,73 +114,58 @@ router.post('/upload', verifyJWT, upload.single('file'), async (req, res) => {
 
     // Auto-import from parsed_content (direct from Excel/DOCX — no AI needed)
     // This is fast because data is already extracted by the parser
-    const ALL_LIST_TYPES = ['props','art_fill','dummy','auto','decoration','costumes','makeup','stunts','pyrotechnics']
+    const ALL_LIST_TYPES = ['props','art_fill','dummy','auto','decoration','costumes','makeup','stunts','pyrotechnics','consultant','locations']
     const CATEGORY_MAP_IMPORT = {
       props: 'props', costumes: 'costumes', makeup: 'makeup',
-      vehicles: 'auto', stunts: 'stunts',
+      vehicles: 'auto', stunts: 'stunts', pyrotechnics: 'pyrotechnics',
+      consultant: 'consultant', locations: 'locations',
     }
 
     // Build parsed_data from scenes (no AI call — direct extraction)
     let parsed_data = null
+    let dataSeries = ''
     if (type !== 'callsheet' && parsed_content?.scenes) {
-      // Map scene → shoot date from shoot_days (KPP format)
-      const sceneDateMap = {}
-      const sceneTimeMap = {}
-      for (const sd of (parsed_content.shoot_days || [])) {
-        for (const sid of (sd.scenes || [])) {
-          sceneDateMap[sid] = sd.date || ''
-          sceneTimeMap[sid] = `СД ${sd.day_number || '?'}`
-        }
+      // Upsert scenes into canonical table + get lookup maps
+      if (type === 'kpp') {
+        const upserted = await upsertScenesFromKpp(project_id, parsed_content, null) // doc.id set after INSERT
+        console.log(`[UPLOAD] Upserted ${upserted} KPP scenes`)
+      } else if (type === 'scenario') {
+        dataSeries = extractSeriesFromFilename(req.file.originalname)
+        if (!dataSeries) dataSeries = await getProjectSeries(project_id)
+        const upserted = await upsertScenesFromScenario(project_id, parsed_content, null, dataSeries)
+        console.log(`[UPLOAD] Upserted ${upserted} scenario scenes, series="${dataSeries}"`)
       }
 
-      // For scenario: get series number and KPP dates to map correctly
-      let dataSeries = ''
-      if (type === 'scenario') {
-        const fnLower = (req.file.originalname || '').toLowerCase()
-        const sm = fnLower.match(/(\d{1,2})\s*сер/) || fnLower.match(/сер[а-я]*\s*(\d{1,2})/) || fnLower.match(/^(\d{1,2})[._\s-]/)
-        dataSeries = sm ? sm[1].padStart(2, '0') : ''
-        // Fallback: get series from existing KPP scenes in DB
-        if (!dataSeries) {
-          const { rows: kppItems } = await db.query(
-            `SELECT DISTINCT pli.scene FROM production_list_items pli
-             JOIN production_lists pl ON pl.id = pli.list_id
-             WHERE pl.project_id=$1 AND pli.scene LIKE '%-%' LIMIT 1`, [project_id])
-          if (kppItems.length) { const m2 = kppItems[0].scene.match(/^(\d+)-/); if (m2) dataSeries = m2[1].padStart(2, '0') }
-        }
-        // Load KPP date map if scenario has no shoot_days
-        if (!Object.keys(sceneDateMap).length) {
-          const { rows: kd } = await db.query(
-            `SELECT parsed_content FROM documents WHERE project_id=$1 AND type='kpp' ORDER BY version DESC LIMIT 1`, [project_id])
-          if (kd.length && kd[0].parsed_content?.shoot_days) {
-            for (const sd of kd[0].parsed_content.shoot_days) {
-              for (const sid of (sd.scenes || [])) {
-                sceneDateMap[sid] = sd.date || ''
-                sceneTimeMap[sid] = `СД ${sd.day_number || '?'}`
-              }
-            }
-          }
-        }
-      }
+      // Get unified lookup maps from scenes table
+      const { dateMap: sceneDateMap, timeMap: sceneTimeMap, slotMap: kppSlotMap } = await getSceneLookupMaps(project_id)
 
-      parsed_data = { props: [], costumes: [], makeup: [], auto: [], stunts: [], decoration: [], pyrotechnics: [], art_fill: [], dummy: [] }
+      parsed_data = { props: [], costumes: [], makeup: [], auto: [], stunts: [], decoration: [], pyrotechnics: [], art_fill: [], dummy: [], consultant: [], locations: [] }
       const seen = {}
       for (const s of parsed_content.scenes) {
-        // For scenario: prefix series to scene ID
         const rawId = (s.id || '').replace(/^0+/, '')
-        const fullSceneId = (type === 'scenario' && dataSeries && rawId) ? `${parseInt(dataSeries)}-${rawId}` : s.id
-        const shootDate = sceneDateMap[fullSceneId] || sceneDateMap[s.id] || ''
-        const shootTime = sceneTimeMap[fullSceneId] || sceneTimeMap[s.id] || `СД ${s.day || '?'}`
-        const sceneText = s.object || s.synopsis || ''
+        const fullSceneId = (type === 'scenario' && dataSeries)
+          ? normalizeSceneId(rawId, dataSeries)
+          : normalizeSceneId(s.id) || s.id
+        const shootDate = sceneDateMap[fullSceneId] || ''
+        const shootDayLabel = sceneTimeMap[fullSceneId] || `СД ${s.day || '?'}`
+        const slotTime = s.time_slot || kppSlotMap[fullSceneId] || ''
+        const shootTime = slotTime ? `${shootDayLabel} · ${slotTime}` : shootDayLabel
+        const sceneLocation = s.object || s.synopsis || ''
+        const sceneFullText = s.text || ''
         for (const [field, cat] of Object.entries(CATEGORY_MAP_IMPORT)) {
           for (const item of (s[field] || [])) {
             const name = (item || '').replace(/\s+/g, ' ').trim()
-            if (!name || seen[cat + ':' + name.toLowerCase()]) continue
-            seen[cat + ':' + name.toLowerCase()] = true
+            const seenKey = cat + ':' + name.toLowerCase() + ':' + (fullSceneId || '')
+            if (!name || seen[seenKey]) continue
+            seen[seenKey] = true
+            let itemNote = type === 'scenario'
+              ? (sceneFullText ? '📝 ' + sceneFullText : '')
+              : sceneLocation
             parsed_data[cat].push({
               name, scene: fullSceneId, day: shootDate, source: type,
               time: shootTime,
               location: s.location || '',
-              note: sceneText,
+              note: itemNote,
             })
           }
         }
@@ -186,57 +175,38 @@ router.post('/upload', verifyJWT, upload.single('file'), async (req, res) => {
 
     // Save document with extracted data
     const { rows } = await db.query(
-      `INSERT INTO documents (project_id, type, version, file_url, parsed_data, parsed_content, matched_units, delta, uploaded_by, original_name, status)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) RETURNING *`,
+      `INSERT INTO documents (project_id, type, version, file_url, parsed_data, parsed_content, matched_units, delta, uploaded_by, original_name, status, group_id)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12) RETURNING *`,
       [project_id, type, version, null,
        parsed_data ? JSON.stringify(parsed_data) : null,
        parsed_content ? JSON.stringify(parsed_content) : null,
        matched_units ? JSON.stringify(matched_units) : null,
        delta ? JSON.stringify(delta) : null,
        req.user.id, req.file.originalname,
-       parsed_content ? 'parsed' : 'uploaded']
+       parsed_content ? 'parsed' : 'uploaded',
+       group_id || null]
     )
     const doc = rows[0]
     console.log(`[UPLOAD] Saved doc ${doc.id}`)
 
-    // When scenario uploaded — attach scene texts to existing list items
+    // Update scenes table with document ID (was null before INSERT)
+    if (type === 'kpp' && parsed_content?.scenes) {
+      await db.query(
+        `UPDATE scenes SET kpp_document_id = $1 WHERE project_id = $2 AND kpp_document_id IS NULL AND updated_at >= NOW() - INTERVAL '5 minutes'`,
+        [doc.id, project_id]
+      )
+    }
     if (type === 'scenario' && parsed_content?.scenes) {
-      // Extract series number: 1) from filename, 2) from KPP scene IDs in DB
-      const fnLower = (req.file.originalname || '').toLowerCase()
-      const seriesMatch = fnLower.match(/(\d{1,2})\s*сер/) || fnLower.match(/сер[а-я]*\s*(\d{1,2})/) || fnLower.match(/^(\d{1,2})[._\s-]/)
-      let seriesNum = seriesMatch ? seriesMatch[1].padStart(2, '0') : ''
+      await db.query(
+        `UPDATE scenes SET scenario_document_id = $1 WHERE project_id = $2 AND scenario_document_id IS NULL AND updated_at >= NOW() - INTERVAL '5 minutes'`,
+        [doc.id, project_id]
+      )
+    }
 
-      // Fallback: get series number from existing KPP list items (e.g. scene "46-38" → series "46")
-      if (!seriesNum) {
-        const { rows: kppItems } = await db.query(
-          `SELECT DISTINCT pli.scene FROM production_list_items pli
-           JOIN production_lists pl ON pl.id = pli.list_id
-           WHERE pl.project_id = $1 AND pli.scene IS NOT NULL AND pli.scene LIKE '%-%'
-           LIMIT 1`,
-          [project_id]
-        )
-        if (kppItems.length) {
-          const m = kppItems[0].scene.match(/^(\d+)-/)
-          if (m) seriesNum = m[1].padStart(2, '0')
-        }
-      }
-      console.log(`[UPLOAD] Scenario series: "${seriesNum}" from "${req.file.originalname}"`)
-
-      // Build map: multiple key formats for reliable matching
-      const sceneTextMap = {}
-      for (const s of parsed_content.scenes) {
-        const rawId = (s.id || s.scene || '').replace(/^0+/, '')
-        const text = s.text || s.synopsis || s.object || ''
-        if (!rawId || !text) continue
-        // Key formats: "46-38", "46-038", "38" (raw)
-        if (seriesNum) {
-          sceneTextMap[`${seriesNum}-${rawId}`] = text
-          sceneTextMap[`${parseInt(seriesNum)}-${rawId}`] = text
-          sceneTextMap[`${seriesNum}-${String(rawId).padStart(2, '0')}`] = text
-        }
-        sceneTextMap[rawId] = text
-      }
-      console.log(`[UPLOAD] Scene text map: ${Object.keys(sceneTextMap).length} entries`)
+    // When scenario uploaded — attach scene texts to existing list items using scenes table
+    if (type === 'scenario' && parsed_content?.scenes) {
+      const { textMap: sceneTextMap } = await getSceneLookupMaps(project_id)
+      console.log(`[UPLOAD] Scene text map from scenes table: ${Object.keys(sceneTextMap).length} entries`)
 
       // Update existing list items that have matching scene IDs
       const { rows: allItems } = await db.query(
@@ -247,106 +217,58 @@ router.post('/upload', verifyJWT, upload.single('file'), async (req, res) => {
       )
       let updated = 0
       for (const item of allItems) {
-        if ((item.note || '').includes('\n---\n')) continue // already has scenario text
-        const scenarioText = sceneTextMap[item.scene] || sceneTextMap[item.scene.replace(/^0+/, '')]
+        if ((item.note || '').includes('\n---\n📝 ')) continue
+        // Normalize item's scene ID and look up in scenes table map
+        const normalizedScene = normalizeSceneId(item.scene) || item.scene
+        const scenarioText = sceneTextMap[normalizedScene] || sceneTextMap[item.scene]
         if (!scenarioText) continue
         const existingNote = (item.note || '').trim()
         const separator = existingNote ? '\n---\n' : ''
-        const newNote = existingNote + separator + '📝 ' + scenarioText.substring(0, 500)
+        const newNote = existingNote + separator + '📝 ' + scenarioText
         await db.query(`UPDATE production_list_items SET note = $1 WHERE id = $2`, [newNote, item.id])
         updated++
       }
       console.log(`[UPLOAD] Updated ${updated} list items with scenario text`)
 
-      // AI analysis: find items in scenario text NOT already in KPP lists
+      // Enqueue AI tasks (processed by worker with retry) instead of inline calls
       if (process.env.ANTHROPIC_API_KEY) {
-        try {
-          console.log(`[AI] Starting scenario analysis`)
-          // Get existing item names to tell AI what's already known
-          const { rows: existingItems } = await db.query(
-            `SELECT DISTINCT LOWER(TRIM(pli.name)) AS name FROM production_list_items pli
-             JOIN production_lists pl ON pl.id = pli.list_id
-             WHERE pl.project_id = $1`, [project_id]
-          )
-          const existingNames = existingItems.map(r => r.name)
+        const { rows: existingItems } = await db.query(
+          `SELECT DISTINCT LOWER(TRIM(pli.name)) AS name FROM production_list_items pli
+           JOIN production_lists pl ON pl.id = pli.list_id
+           WHERE pl.project_id = $1`, [project_id]
+        )
+        const existingNames = existingItems.map(r => r.name)
+        const sceneTexts = parsed_content.scenes.map(s => {
+          const id = s.id || s.scene || ''
+          const text = s.text || s.synopsis || s.object || ''
+          return `Сцена ${id}: ${text.substring(0, 300)}`
+        }).join('\n')
+        const fullSceneTexts = parsed_content.scenes.map(s => {
+          const id = s.id || s.scene || ''
+          const text = s.text || s.synopsis || s.object || ''
+          return `Сцена ${id}:\n${text.substring(0, 600)}`
+        }).join('\n\n')
 
-          const sceneTexts = parsed_content.scenes.map(s => {
-            const id = s.id || s.scene || ''
-            const text = s.text || s.synopsis || s.object || ''
-            return `Сцена ${id}: ${text.substring(0, 300)}`
-          }).join('\n')
-
-          // Build scene→date map from KPP data for AI items
-          const { rows: kppDocs } = await db.query(
-            `SELECT parsed_content FROM documents WHERE project_id=$1 AND type='kpp' ORDER BY version DESC LIMIT 1`, [project_id]
-          )
-          const aiSceneDateMap = {}
-          const aiSceneTimeMap = {}
-          if (kppDocs.length && kppDocs[0].parsed_content?.shoot_days) {
-            for (const sd of kppDocs[0].parsed_content.shoot_days) {
-              for (const sid of (sd.scenes || [])) {
-                aiSceneDateMap[sid] = sd.date || ''
-                aiSceneTimeMap[sid] = `СД ${sd.day_number || '?'}`
-              }
-            }
-          }
-
-          const aiPrompt = `Вот текст сценария:\n${sceneTexts.substring(0, 14000)}\n\nВот предметы, которые УЖЕ ЕСТЬ в списке (не дублируй их):\n${existingNames.join(', ')}\n\nНайди предметы реквизита, костюмы, грим, декорации, транспорт которые УПОМИНАЮТСЯ В ТЕКСТЕ СЦЕН, но ОТСУТСТВУЮТ в списке выше. Верни ТОЛЬКО НОВЫЕ позиции. ОБЯЗАТЕЛЬНО укажи номер сцены в поле scene.`
-
-          const { parseDocument } = require('../services/groq')
-          const aiPromise = parseDocument(aiPrompt)
-          const timeout = new Promise((_, reject) => setTimeout(() => reject(new Error('AI timeout 60s')), 60000))
-          const aiResult = await Promise.race([aiPromise, timeout])
-          console.log(`[AI] Result categories: ${aiResult ? Object.keys(aiResult).filter(k => (aiResult[k]||[]).length).join(', ') : 'none'}`)
-
-          if (aiResult) {
-            const { rows: members } = await db.query(`SELECT id, role FROM users WHERE project_id=$1`, [project_id])
-            let aiImported = 0
-            for (const cat of ALL_LIST_TYPES) {
-              for (const ai of (aiResult[cat] || [])) {
-                const aiName = (ai.name || ai.item || '').replace(/\s+/g, ' ').trim()
-                if (!aiName) continue
-                for (const m of members) {
-                  const own = ['producer','project_director'].includes(m.role) ? ALL_LIST_TYPES : (ROLE_LIST_TYPES[m.role] || [])
-                  if (!own.includes(cat)) continue
-                  await db.query(`INSERT INTO production_lists (project_id, user_id, type) VALUES ($1,$2,$3) ON CONFLICT DO NOTHING`, [project_id, m.id, cat])
-                  const { rows: lr } = await db.query(`SELECT id FROM production_lists WHERE project_id=$1 AND user_id=$2 AND type=$3`, [project_id, m.id, cat])
-                  const { rows: ex } = await db.query(`SELECT id FROM production_list_items WHERE list_id=$1 AND LOWER(TRIM(name))=LOWER($2)`, [lr[0].id, aiName.toLowerCase()])
-                  if (ex.length) continue
-                  const rawScene = (ai.scene||'').replace(/^0+/, '')
-                  const sceneId = seriesNum && rawScene ? `${parseInt(seriesNum)}-${rawScene}` : (rawScene || null)
-                  const aiDay = (sceneId && aiSceneDateMap[sceneId]) || ai.day || null
-                  const aiTime = (sceneId && aiSceneTimeMap[sceneId]) || ai.time || null
-                  await db.query(`INSERT INTO production_list_items (list_id, name, scene, day, time, location, qty, source, note) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
-                    [lr[0].id, aiName, sceneId, aiDay, aiTime, ai.location||null, 1, 'ai', ai.note||null])
-                  aiImported++
-                }
-              }
-            }
-            for (const sug of (aiResult.ai_suggestions || [])) {
-              const sugName = (sug.item || '').replace(/\s+/g, ' ').trim()
-              const sugCat = sug.category || 'props'
-              if (!sugName) continue
-              for (const m of members) {
-                const own = ['producer','project_director'].includes(m.role) ? ALL_LIST_TYPES : (ROLE_LIST_TYPES[m.role] || [])
-                if (!own.includes(sugCat)) continue
-                await db.query(`INSERT INTO production_lists (project_id, user_id, type) VALUES ($1,$2,$3) ON CONFLICT DO NOTHING`, [project_id, m.id, sugCat])
-                const { rows: lr } = await db.query(`SELECT id FROM production_lists WHERE project_id=$1 AND user_id=$2 AND type=$3`, [project_id, m.id, sugCat])
-                const { rows: ex } = await db.query(`SELECT id FROM production_list_items WHERE list_id=$1 AND LOWER(TRIM(name))=LOWER($2)`, [lr[0].id, sugName.toLowerCase()])
-                if (ex.length) continue
-                const sugScene = sug.scene ? (seriesNum ? `${parseInt(seriesNum)}-${(sug.scene||'').replace(/^0+/,'')}` : sug.scene) : null
-                const sugDay = (sugScene && aiSceneDateMap[sugScene]) || null
-                const sugTime = (sugScene && aiSceneTimeMap[sugScene]) || null
-                await db.query(`INSERT INTO production_list_items (list_id, name, scene, day, time, qty, source, note) VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
-                  [lr[0].id, sugName, sugScene, sugDay, sugTime, 1, 'ai', sug.reason||null])
-                aiImported++
-              }
-            }
-            console.log(`[AI] Imported ${aiImported} new items from scenario`)
-          }
-        } catch (aiErr) {
-          console.error('[AI] Scenario analysis error:', aiErr.message)
-        }
+        // Create analyze_scenario task
+        await db.query(
+          `INSERT INTO ai_tasks (project_id, document_id, task_type, params)
+           VALUES ($1, $2, 'analyze_scenario', $3)`,
+          [project_id, doc.id, JSON.stringify({
+            seriesNum: dataSeries,
+            sceneTexts: sceneTexts.substring(0, 14000),
+            existingNames,
+          })]
+        )
+        // Create cross_scenes task
+        await db.query(
+          `INSERT INTO ai_tasks (project_id, document_id, task_type, params)
+           VALUES ($1, $2, 'cross_scenes', $3)`,
+          [project_id, doc.id, JSON.stringify({
+            seriesNum: dataSeries,
+            fullSceneTexts: fullSceneTexts.substring(0, 17000),
+          })]
+        )
+        console.log(`[AI] Enqueued 2 AI tasks for doc ${doc.id}`)
       }
     }
 
@@ -443,9 +365,10 @@ router.get('/:projectId', verifyJWT, async (req, res) => {
   if (!uuidRe.test(req.params.projectId)) return res.status(400).json({ error: 'Invalid project ID' })
   try {
     let q = `
-      SELECT d.*, u.name AS uploaded_by_name
+      SELECT d.*, u.name AS uploaded_by_name, g.name AS group_name
       FROM documents d
       LEFT JOIN users u ON u.id = d.uploaded_by
+      LEFT JOIN document_groups g ON g.id = d.group_id
       WHERE d.project_id = $1
     `
     const params = [req.params.projectId]
@@ -471,7 +394,24 @@ router.get('/:projectId/view/:id', verifyJWT, async (req, res) => {
       [req.params.id, req.params.projectId]
     )
     if (!rows.length) return res.status(404).json({ error: 'Document not found' })
-    res.json({ document: rows[0] })
+
+    // Fetch all project item names for cross-source highlighting
+    const { rows: allItems } = await db.query(
+      `SELECT DISTINCT LOWER(TRIM(pli.name)) AS name, pli.scene
+       FROM production_list_items pli
+       JOIN production_lists pl ON pl.id = pli.list_id
+       WHERE pl.project_id = $1`,
+      [req.params.projectId]
+    )
+
+    // Fetch AI task statuses for this document
+    const { rows: aiTasks } = await db.query(
+      `SELECT task_type, status, attempts, max_attempts, error FROM ai_tasks
+       WHERE document_id = $1 ORDER BY created_at DESC`,
+      [req.params.id]
+    )
+
+    res.json({ document: rows[0], allProjectItems: allItems, aiTasks })
   } catch (err) {
     console.error(err)
     res.status(500).json({ error: 'Server error' })
@@ -711,5 +651,131 @@ function computeSceneDelta(oldScenes, newScenes) {
 
   return delta
 }
+
+// DELETE /documents/:id — delete a single document and its list items
+router.delete('/:id', verifyJWT, async (req, res) => {
+  if (req.user.role !== 'producer') return res.status(403).json({ error: 'Producer only' })
+  try {
+    const { rows } = await db.query(`SELECT id, project_id, type FROM documents WHERE id = $1`, [req.params.id])
+    if (!rows.length) return res.status(404).json({ error: 'Not found' })
+    const doc = rows[0]
+
+    // Delete list items that came from this document (by matching source and project)
+    await db.query(
+      `DELETE FROM production_list_items WHERE list_id IN (
+        SELECT id FROM production_lists WHERE project_id = $1
+      ) AND source = $2`,
+      [doc.project_id, doc.type === 'kpp' ? 'kpp' : doc.type === 'scenario' ? 'scenario' : 'manual']
+    )
+
+    // Also delete AI items if scenario
+    if (doc.type === 'scenario') {
+      await db.query(
+        `DELETE FROM production_list_items WHERE list_id IN (
+          SELECT id FROM production_lists WHERE project_id = $1
+        ) AND source = 'ai'`,
+        [doc.project_id]
+      )
+    }
+
+    await db.query(`DELETE FROM documents WHERE id = $1`, [req.params.id])
+    res.json({ ok: true })
+  } catch (err) {
+    console.error(err)
+    res.status(500).json({ error: 'Server error' })
+  }
+})
+
+// ============================================================
+// Document Groups (Blocks) CRUD
+// ============================================================
+
+// GET /documents/groups/:projectId — list groups for a project
+router.get('/groups/:projectId', verifyJWT, async (req, res) => {
+  try {
+    const { rows } = await db.query(
+      `SELECT g.*,
+              (SELECT COUNT(*) FROM documents d WHERE d.group_id = g.id) AS doc_count
+       FROM document_groups g
+       WHERE g.project_id = $1
+       ORDER BY g.sort_order, g.created_at`,
+      [req.params.projectId]
+    )
+    res.json({ groups: rows })
+  } catch (err) {
+    console.error(err)
+    res.status(500).json({ error: 'Server error' })
+  }
+})
+
+// POST /documents/groups — create a group
+router.post('/groups', verifyJWT, async (req, res) => {
+  if (!['producer', 'project_director'].includes(req.user.role))
+    return res.status(403).json({ error: 'Only producer/project_director' })
+  const { project_id, name } = req.body
+  if (!project_id || !name?.trim()) return res.status(400).json({ error: 'Missing project_id or name' })
+  try {
+    const { rows: maxSort } = await db.query(
+      `SELECT COALESCE(MAX(sort_order), 0) + 1 AS next FROM document_groups WHERE project_id = $1`, [project_id])
+    const { rows } = await db.query(
+      `INSERT INTO document_groups (project_id, name, sort_order) VALUES ($1, $2, $3) RETURNING *`,
+      [project_id, name.trim(), maxSort[0].next]
+    )
+    res.status(201).json({ group: rows[0] })
+  } catch (err) {
+    console.error(err)
+    res.status(500).json({ error: 'Server error' })
+  }
+})
+
+// PATCH /documents/groups/:id — update a group
+router.patch('/groups/:id', verifyJWT, async (req, res) => {
+  if (!['producer', 'project_director'].includes(req.user.role))
+    return res.status(403).json({ error: 'Only producer/project_director' })
+  const { name, sort_order } = req.body
+  try {
+    const { rows } = await db.query(
+      `UPDATE document_groups SET name = COALESCE($1, name), sort_order = COALESCE($2, sort_order) WHERE id = $3 RETURNING *`,
+      [name || null, sort_order ?? null, req.params.id]
+    )
+    if (!rows.length) return res.status(404).json({ error: 'Not found' })
+    res.json({ group: rows[0] })
+  } catch (err) {
+    console.error(err)
+    res.status(500).json({ error: 'Server error' })
+  }
+})
+
+// DELETE /documents/groups/:id — delete a group (unlinks documents, doesn't delete them)
+router.delete('/groups/:id', verifyJWT, async (req, res) => {
+  if (!['producer', 'project_director'].includes(req.user.role))
+    return res.status(403).json({ error: 'Only producer/project_director' })
+  try {
+    await db.query(`UPDATE documents SET group_id = NULL WHERE group_id = $1`, [req.params.id])
+    await db.query(`DELETE FROM document_groups WHERE id = $1`, [req.params.id])
+    res.json({ ok: true })
+  } catch (err) {
+    console.error(err)
+    res.status(500).json({ error: 'Server error' })
+  }
+})
+
+// PATCH /documents/:id/group — assign document to a group
+router.patch('/:id/group', verifyJWT, async (req, res) => {
+  if (!['producer', 'project_director'].includes(req.user.role))
+    return res.status(403).json({ error: 'Only producer/project_director' })
+  const { group_id } = req.body
+  try {
+    const { rows } = await db.query(
+      `UPDATE documents SET group_id = $1 WHERE id = $2 RETURNING id, group_id`,
+      [group_id || null, req.params.id]
+    )
+    if (!rows.length) return res.status(404).json({ error: 'Not found' })
+    res.json({ ok: true, document: rows[0] })
+  } catch (err) {
+    console.error(err)
+    res.status(500).json({ error: 'Server error' })
+  }
+})
 
 module.exports = router

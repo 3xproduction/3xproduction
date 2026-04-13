@@ -69,6 +69,13 @@ function parseSheetAsKpp(ws) {
     // Parse props/costumes/makeup from combined column
     const { props, costumes, makeup, notes } = parsePropsColumn(propsCol)
 
+    // Parse column M: Каскадеры/Пиротехник/Консультант
+    const colM = (vals[12] || '').trim()
+    const { stunts: stuntsList, pyrotechnics, consultant } = parseStuntsColumn(colM)
+
+    // Parse object as location name
+    const objectName = synopsis.split('\n')[0] || ''
+
     const scene = {
       id,
       series,
@@ -78,7 +85,7 @@ function parseSheetAsKpp(ws) {
       duration: (vals[3] || '').trim(),
       int_nat: (vals[4] || '').trim(),
       day: col5,
-      object: synopsis.split('\n')[0] || '',
+      object: objectName,
       synopsis: synopsis.includes('Синопсис:')
         ? synopsis.split('Синопсис:')[1]?.trim() || ''
         : synopsis,
@@ -89,7 +96,11 @@ function parseSheetAsKpp(ws) {
       costumes,
       makeup,
       vehicles: parseList(vals[11]),
-      stunts: (vals[12] || '').trim(),
+      stunts: stuntsList,
+      pyrotechnics,
+      consultant,
+      decoration: [],
+      locations: objectName ? [objectName] : [],
       notes,
       platform: currentPlatform,
     }
@@ -158,6 +169,10 @@ async function parseScenario(buffer) {
       makeup: meta.makeup,
       vehicles: meta.vehicles,
       stunts: meta.stunts,
+      pyrotechnics: meta.pyrotechnics,
+      consultant: meta.consultant,
+      decoration: [],
+      locations: [headerMatch[3].trim()],
       notes: meta.notes,
       text: bodyText,
     })
@@ -167,11 +182,19 @@ async function parseScenario(buffer) {
 }
 
 function stripHtml(html) {
-  return html.replace(/<br\s*\/?>/g, '\n').replace(/<[^>]+>/g, '').replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').trim()
+  return html
+    .replace(/<br\s*\/?>/g, '\n')
+    .replace(/<\/p>/gi, '\n')
+    .replace(/<\/div>/gi, '\n')
+    .replace(/<\/li>/gi, '\n')
+    .replace(/<[^>]+>/g, '')
+    .replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&nbsp;/g, ' ')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim()
 }
 
 function parseRightColumn(text) {
-  const meta = { characters: [], extras: '', props: [], costumes: [], makeup: [], vehicles: [], stunts: '', notes: '' }
+  const meta = { characters: [], extras: '', props: [], costumes: [], makeup: [], vehicles: [], stunts: [], pyrotechnics: [], consultant: [], decoration: [], notes: '' }
   if (!text) return meta
 
   // Split by known markers
@@ -347,6 +370,39 @@ function cellText(cell) {
 function parseList(val) {
   if (!val) return []
   return String(val).split(/[\n,]+/).map(s => s.trim()).filter(Boolean)
+}
+
+function parseStuntsColumn(text) {
+  const stunts = []
+  const pyrotechnics = []
+  const consultant = []
+
+  if (!text) return { stunts, pyrotechnics, consultant }
+
+  // Try splitting by markers
+  const hasMarkers = /Каскад[её]р|Пиротехни|Консультант/i.test(text)
+  if (hasMarkers) {
+    const parts = text.split(/(?=Каскад[её]р[ыа-я]*:|Пиротехни[ка-я]*:|Консультант[а-я]*:)/i)
+    for (const part of parts) {
+      const t = part.trim()
+      if (/^Каскад[её]р/i.test(t)) {
+        stunts.push(...t.replace(/^Каскад[её]р[ыа-я]*:\s*/i, '').split(/,\s*/).map(s => s.trim()).filter(Boolean))
+      } else if (/^Пиротехни/i.test(t)) {
+        pyrotechnics.push(...t.replace(/^Пиротехни[ка-я]*:\s*/i, '').split(/,\s*/).map(s => s.trim()).filter(Boolean))
+      } else if (/^Консультант/i.test(t)) {
+        consultant.push(...t.replace(/^Консультант[а-я]*:\s*/i, '').split(/,\s*/).map(s => s.trim()).filter(Boolean))
+      } else if (t) {
+        // Before first marker — put in all three
+        const items = t.split(/,\s*/).map(s => s.trim()).filter(Boolean)
+        stunts.push(...items)
+      }
+    }
+  } else if (text) {
+    // No markers — treat entire text as stunt description
+    stunts.push(text)
+  }
+
+  return { stunts, pyrotechnics, consultant }
 }
 
 function parsePropsColumn(text) {

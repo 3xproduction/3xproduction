@@ -130,6 +130,14 @@ export const documents = {
   lists:      (projectId, role) => request('GET', `/documents/lists/${projectId}/${role}`),
   parsed:     (projectId)      => request('GET',  `/documents/${projectId}/parsed`),
   importToList: (docId)        => request('POST', `/documents/${docId}/import`),
+  resetAll:     ()             => request('POST', '/admin/reset-docs'),
+  remove:       (id)           => request('DELETE', `/documents/${id}`),
+  // Document Groups (Blocks)
+  groups:       (projectId) => request('GET', `/documents/groups/${projectId}`),
+  createGroup:  (body)      => request('POST', '/documents/groups', body),
+  updateGroup:  (id, body)  => request('PATCH', `/documents/groups/${id}`, body),
+  deleteGroup:  (id)        => request('DELETE', `/documents/groups/${id}`),
+  assignGroup:  (docId, group_id) => request('PATCH', `/documents/${docId}/group`, { group_id }),
 }
 
 // ─── Rent ────────────────────────────────────────────────────────────────────
@@ -155,6 +163,9 @@ export const publicApi = {
 export const projects = {
   list:   () => request('GET',  '/projects'),
   create: (name) => request('POST', '/projects', { name }),
+  rename: (id, name) => request('PATCH', `/projects/${id}`, { name }),
+  remove: (id, move_docs_to) => request('DELETE', `/projects/${id}`, { move_docs_to }),
+  reimport: (docId) => request('POST', `/documents/${docId}/reimport`),
 }
 
 // ─── Notifications ───────────────────────────────────────────────────────────
@@ -176,6 +187,8 @@ export const push = {
 export const team = {
   list: () => request('GET', '/team'),
   remove: (userId) => request('DELETE', `/team/${userId}`),
+  moveToProject: (userId, project_id) => request('PATCH', `/team/${userId}/project`, { project_id }),
+  bulkMove: (project_id) => request('POST', '/team/bulk-move', { project_id }),
 }
 
 // ─── Production Lists ─────────────────────────────────────────────────────────
@@ -189,6 +202,20 @@ export const lists = {
   updateItem: (id, body)   => request('PATCH', `/lists/items/${id}`, body),
   deleteItem: (id)         => request('DELETE', `/lists/items/${id}`),
   matchedUnits: (projectId) => request('GET', `/lists/matched-units?project_id=${projectId}`),
+  assignScene: (itemId, canonical_id) => request('PATCH', `/lists/items/${itemId}/assign-scene`, { canonical_id }),
+}
+
+// ─── Scenes ──────────────────────────────────────────────────────────────────
+export const scenes = {
+  list:      (projectId) => request('GET', `/scenes?project_id=${projectId}`),
+  aiTasks:   (projectId) => request('GET', `/scenes/ai-tasks?project_id=${projectId}`),
+  retryTask: (taskId)    => request('POST', `/scenes/ai-tasks/${taskId}/retry`),
+}
+
+// ─── Rebuild ─────────────────────────────────────────────────────────────────
+export const admin = {
+  rebuildPositions: (projectId) => request('POST', `/projects/${projectId}/rebuild-positions`),
+  backfillScenes:   () => request('POST', '/admin/backfill-scenes'),
 }
 
 // ─── Debts ──────────────────────────────────────────────────────────────────
@@ -261,4 +288,5 @@ export const analytics = {
     const q = projectId ? `?project_id=${projectId}` : ''
     return request('GET', `/analytics/producer${q}`)
   },
+  project:   (projectId) => request('GET', `/analytics/project/${projectId}`),
 }

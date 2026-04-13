@@ -3,8 +3,9 @@ import { useNavigate } from 'react-router-dom'
 import ProductionLayout from './ProductionLayout'
 import Badge from '../shared/Badge'
 import Button from '../shared/Button'
-import { documents as docsApi, lists as listsApi, requests as requestsApi, projects as projectsApi } from '../../services/api'
+import { documents as docsApi, lists as listsApi, requests as requestsApi, projects as projectsApi, scenes as scenesApi, admin as adminApi } from '../../services/api'
 import UnitCardModal from '../shared/UnitCardModal'
+import ConfirmModal from '../shared/ConfirmModal'
 import { useAuth } from '../../hooks/useAuth'
 import { ROLES } from '../../constants/roles'
 import { categoryLabel } from '../../constants/categories'
@@ -20,10 +21,13 @@ const LIST_TYPES = {
   art_fill:     { label: 'Худ. наполнение', icon: '🖼️' },
   dummy:        { label: 'Бутафория',       icon: '🪆' },
   auto:         { label: 'Автомобили',      icon: '🚗' },
+  decoration:   { label: 'Декорации',       icon: '🏗️' },
   costumes:     { label: 'Костюмы',         icon: '👗' },
   makeup:       { label: 'Грим',            icon: '💄' },
   stunts:       { label: 'Трюки',           icon: '🤸' },
   pyrotechnics: { label: 'Пиротехника',     icon: '🔥' },
+  consultant:   { label: 'Консультант',     icon: '🎓' },
+  locations:    { label: 'Локейшн',         icon: '📍' },
 }
 
 const SOURCE_BADGE = {
@@ -53,7 +57,7 @@ export default function DocumentsPage() {
   const { user } = useAuth()
   const role = user?.role || ''
   const allowedFirst = ROLES[role]?.readDocs?.[0] || 'kpp'
-  const [tab, setTab] = useState(allowedFirst)
+  const [tab, setTab] = useState('my_list')
 
   // Doc state
   const [docs, setDocs] = useState([])
@@ -61,7 +65,7 @@ export default function DocumentsPage() {
   const [activeCallDate, setActiveCallDate] = useState(null)
   const [docSearch, setDocSearch] = useState('')
   const [blockFilter, setBlockFilter] = useState('')
-  const [seasonFilter, setSeasonFilter] = useState('')
+  // seasonFilter removed — replaced by group-based filtering
   const [showUpload, setShowUpload] = useState(false)
   const [dragging, setDragging] = useState(false)
   const [uploadType, setUploadType] = useState('kpp')
@@ -96,6 +100,16 @@ export default function DocumentsPage() {
   const [cartSending, setCartSending] = useState(false)
   const [cartSuccess, setCartSuccess] = useState(false)
   const [showScrollTop, setShowScrollTop] = useState(false)
+  const [confirmAction, setConfirmAction] = useState(null) // { title, message, onConfirm }
+  const [projectScenes, setProjectScenes] = useState([])
+  const [rebuilding, setRebuilding] = useState(false)
+
+  // Groups (blocks) state
+  const [groups, setGroups] = useState([])
+  const [showGroupForm, setShowGroupForm] = useState(false)
+  const [groupName, setGroupName] = useState('')
+  const [uploadGroupId, setUploadGroupId] = useState('')
+  const [collapsedGroups, setCollapsedGroups] = useState({})
 
   const canUpload = tab === 'callsheet'
     ? UPLOAD_CALLSHEET_ROLES.includes(role)
@@ -134,9 +148,45 @@ export default function DocumentsPage() {
     promise.then(data => {
       setDocs(data.documents || [])
     }).finally(() => setLoading(false))
+    // Load groups
+    if (projectId) {
+      docsApi.groups(projectId).then(d => setGroups(d.groups || [])).catch(() => {})
+    }
   }
 
   useEffect(() => { loadDocs() }, [projectId])
+
+  // Load project scenes for "Без даты" scene picker
+  useEffect(() => {
+    if (projectId) {
+      scenesApi.list(projectId).then(d => setProjectScenes(d.scenes || [])).catch(() => {})
+    }
+  }, [projectId])
+
+  async function handleCreateGroup() {
+    if (!groupName.trim() || !projectId) return
+    try {
+      await docsApi.createGroup({ project_id: projectId, name: groupName.trim() })
+      setGroupName('')
+      setShowGroupForm(false)
+      loadDocs()
+    } catch (e) { alert(e.message || 'Ошибка') }
+  }
+
+  async function handleDeleteGroup(groupId, groupNameStr) {
+    setConfirmAction({
+      title: 'Удалить блок',
+      message: `Удалить блок «${groupNameStr}»? Документы не будут удалены.`,
+      onConfirm: async () => {
+        setConfirmAction(null)
+        try { await docsApi.deleteGroup(groupId); loadDocs() } catch (e) { alert(e.message || 'Ошибка') }
+      },
+    })
+  }
+
+  async function handleAssignGroup(docId, groupId) {
+    try { await docsApi.assignGroup(docId, groupId || null); loadDocs() } catch (e) { alert(e.message || 'Ошибка') }
+  }
 
   function loadListItems() {
     if (!activeListType || !projectId) return
@@ -157,12 +207,19 @@ export default function DocumentsPage() {
 
   function getMatch(itemName) {
     if (!itemName || !matchedUnits.length) return null
-    const lower = itemName.toLowerCase()
-    return matchedUnits.find(m =>
-      m.text?.toLowerCase() === lower ||
-      m.unit_name?.toLowerCase().includes(lower) ||
-      lower.includes(m.unit_name?.toLowerCase() || '')
-    )
+    const lower = itemName.toLowerCase().trim()
+    const words = lower.split(/\s+/).filter(w => w.length > 2)
+    return matchedUnits.find(m => {
+      const text = (m.text || '').toLowerCase()
+      const unitName = (m.unit_name || '').toLowerCase()
+      // Exact match
+      if (text === lower || unitName === lower) return true
+      // All significant words from item name must appear in unit name (or vice versa)
+      const unitWords = unitName.split(/\s+/).filter(w => w.length > 2)
+      const allItemWordsInUnit = words.length > 0 && words.every(w => unitName.includes(w))
+      const allUnitWordsInItem = unitWords.length > 0 && unitWords.every(w => lower.includes(w))
+      return allItemWordsInUnit || allUnitWordsInItem
+    })
   }
 
   async function handleAddItem() {
@@ -183,12 +240,15 @@ export default function DocumentsPage() {
     } catch (e) { alert(e.message || 'Ошибка') }
   }
 
-  async function handleDeleteItem(id) {
-    if (!window.confirm('Удалить позицию?')) return
-    try {
-      await listsApi.deleteItem(id)
-      loadListItems()
-    } catch (e) { alert(e.message || 'Ошибка') }
+  function handleDeleteItem(id, name) {
+    setConfirmAction({
+      title: 'Удалить позицию',
+      message: name ? `Удалить «${name}» из списка?` : 'Удалить позицию из списка?',
+      onConfirm: async () => {
+        setConfirmAction(null)
+        try { await listsApi.deleteItem(id); loadListItems() } catch (e) { alert(e.message || 'Ошибка') }
+      },
+    })
   }
 
   function addToCart(unitId) {
@@ -225,12 +285,15 @@ export default function DocumentsPage() {
     new Date(d.created_at).toISOString().split('T')[0] === curDate)
 
   const UPLOAD_MESSAGES = [
-    'ИИ читает документ...',
-    'Секундочку...',
-    'Ждём магию...',
+    'Расслабьтесь...',
+    'Ищем реквизит...',
+    'Ищем костюмы...',
+    'Ищем грим...',
+    'Ищем всё подряд...',
+    'Мы — ищейки...',
+    'Делаем вашу работу...',
     'Анализируем сцены...',
     'Раскладываем по полочкам...',
-    'Ищем реквизит...',
     'Почти готово...',
   ]
 
@@ -259,6 +322,7 @@ export default function DocumentsPage() {
       fd.append('file', uploadFile)
       fd.append('project_id', pid)
       fd.append('type', uploadType)
+      if (uploadGroupId) fd.append('group_id', uploadGroupId)
       await docsApi.upload(fd)
       setShowUpload(false)
       setUploadFile(null)
@@ -347,31 +411,88 @@ export default function DocumentsPage() {
         {/* КПП / Сценарий */}
         {(tab === 'kpp' || tab === 'scenario') && (
           <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-            <div className="doc-filters" style={{ display: 'flex', gap: 8, marginBottom: 4, flexWrap: 'wrap' }}>
+            <div className="doc-filters" style={{ display: 'flex', gap: 8, marginBottom: 4, flexWrap: 'wrap', alignItems: 'center' }}>
               <input value={docSearch} onChange={e => setDocSearch(e.target.value)}
                 placeholder="Поиск по названию, серии, блоку..."
                 style={{ flex: 1, minWidth: 140, height: 40, padding: '0 12px', border: '1px solid var(--border)', borderRadius: 'var(--radius-btn)', fontSize: 13, outline: 'none', boxSizing: 'border-box' }} />
-              <select value={blockFilter} onChange={e => setBlockFilter(e.target.value)}
-                style={{ height: 40, padding: '0 10px', border: '1px solid var(--border)', borderRadius: 'var(--radius-btn)', fontSize: 13, background: blockFilter ? 'var(--blue-dim)' : 'var(--white)', color: blockFilter ? 'var(--blue)' : 'var(--text)', cursor: 'pointer' }}>
-                <option value="">Блок</option>
-                {Array.from({ length: 50 }, (_, i) => i + 1).map(n => <option key={n} value={n}>Блок {n}</option>)}
-              </select>
-              <select value={seasonFilter} onChange={e => setSeasonFilter(e.target.value)}
-                style={{ height: 40, padding: '0 10px', border: '1px solid var(--border)', borderRadius: 'var(--radius-btn)', fontSize: 13, background: seasonFilter ? 'var(--blue-dim)' : 'var(--white)', color: seasonFilter ? 'var(--blue)' : 'var(--text)', cursor: 'pointer' }}>
-                <option value="">Сезон</option>
-                {Array.from({ length: 10 }, (_, i) => i + 1).map(n => <option key={n} value={n}>Сезон {n}</option>)}
-              </select>
+              {groups.length > 0 && (
+                <select value={blockFilter} onChange={e => setBlockFilter(e.target.value)}
+                  style={{ height: 40, padding: '0 10px', border: '1px solid var(--border)', borderRadius: 'var(--radius-btn)', fontSize: 13, background: blockFilter ? 'var(--blue-dim)' : 'var(--white)', color: blockFilter ? 'var(--blue)' : 'var(--text)', cursor: 'pointer' }}>
+                  <option value="">Все блоки</option>
+                  {groups.map(g => <option key={g.id} value={g.id}>{g.name}</option>)}
+                  <option value="_none">Без блока</option>
+                </select>
+              )}
+              {(isProducer || role === 'project_director') && (
+                showGroupForm ? (
+                  <div style={{ display: 'flex', gap: 4 }}>
+                    <input value={groupName} onChange={e => setGroupName(e.target.value)} placeholder="Название блока"
+                      style={{ height: 40, padding: '0 10px', border: '1px solid var(--border)', borderRadius: 'var(--radius-btn)', fontSize: 13, width: 160 }}
+                      onKeyDown={e => e.key === 'Enter' && handleCreateGroup()} />
+                    <Button style={{ height: 40, fontSize: 13 }} onClick={handleCreateGroup}>OK</Button>
+                    <Button variant="secondary" style={{ height: 40, fontSize: 13 }} onClick={() => { setShowGroupForm(false); setGroupName('') }}>X</Button>
+                  </div>
+                ) : (
+                  <Button variant="secondary" style={{ height: 40, fontSize: 13 }} onClick={() => setShowGroupForm(true)}>+ Блок</Button>
+                )
+              )}
             </div>
-            {tabDocs.filter(d => {
-              if (docSearch) {
-                const words = docSearch.toLowerCase().split(/\s+/).filter(Boolean)
-                const haystack = [d.original_name, d.file_url, d.uploaded_by_name, `v${d.version}`].filter(Boolean).join(' ').toLowerCase()
-                if (!words.every(w => haystack.includes(w))) return false
+
+            {/* Group headers and docs */}
+            {(() => {
+              const filteredDocs = tabDocs.filter(d => {
+                if (docSearch) {
+                  const words = docSearch.toLowerCase().split(/\s+/).filter(Boolean)
+                  const haystack = [d.original_name, d.file_url, d.uploaded_by_name, `v${d.version}`, d.group_name].filter(Boolean).join(' ').toLowerCase()
+                  if (!words.every(w => haystack.includes(w))) return false
+                }
+                if (blockFilter && blockFilter !== '_none' && d.group_id !== blockFilter) return false
+                if (blockFilter === '_none' && d.group_id) return false
+                return true
+              })
+
+              // Group docs by group_id
+              const grouped = []
+              const byGroup = {}
+              for (const d of filteredDocs) {
+                const gid = d.group_id || '_none'
+                if (!byGroup[gid]) { byGroup[gid] = []; grouped.push(gid) }
+                byGroup[gid].push(d)
               }
-              if (blockFilter && !name.includes(`блок ${blockFilter}`)) return false
-              if (seasonFilter && !name.includes(`сезон ${seasonFilter}`)) return false
-              return true
-            }).map((doc, i) => (
+              // Sort: named groups first (by sort_order), then ungrouped
+              const sortedGroupIds = grouped.sort((a, b) => {
+                if (a === '_none') return 1
+                if (b === '_none') return -1
+                const ga = groups.find(g => g.id === a)
+                const gb = groups.find(g => g.id === b)
+                return (ga?.sort_order || 0) - (gb?.sort_order || 0)
+              })
+
+              return sortedGroupIds.map(gid => {
+                const groupDocs = byGroup[gid]
+                const group = groups.find(g => g.id === gid)
+                const isGroupCollapsed = collapsedGroups[gid]
+
+                return (
+                  <div key={gid}>
+                    {group && (
+                      <div onClick={() => setCollapsedGroups(prev => ({ ...prev, [gid]: !prev[gid] }))}
+                        style={{
+                          padding: '10px 14px', marginBottom: 6,
+                          background: 'var(--blue-dim)', borderRadius: 8, fontWeight: 600, fontSize: 13,
+                          display: 'flex', alignItems: 'center', gap: 10,
+                          borderLeft: '3px solid var(--blue)', cursor: 'pointer', userSelect: 'none',
+                        }}>
+                        <span style={{ fontSize: 12, transition: 'transform 0.15s', transform: isGroupCollapsed ? 'rotate(-90deg)' : 'rotate(0deg)' }}>▼</span>
+                        <span>{group.name}</span>
+                        <span style={{ fontSize: 11, color: 'var(--muted)', fontWeight: 400, marginLeft: 'auto' }}>{groupDocs.length} док.</span>
+                        {(isProducer || role === 'project_director') && (
+                          <button onClick={e => { e.stopPropagation(); handleDeleteGroup(gid, group.name) }}
+                            style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: 13, color: 'var(--muted)', padding: '2px 4px' }}>🗑️</button>
+                        )}
+                      </div>
+                    )}
+                    {(!group || !isGroupCollapsed) && groupDocs.map((doc, i) => (
               <div key={doc.id} style={{
                 background: 'var(--white)', border: '1px solid var(--border)',
                 borderRadius: 'var(--radius-card)', padding: '16px',
@@ -408,7 +529,7 @@ export default function DocumentsPage() {
                     })()}
                   </div>
 
-                  <div className="doc-item-actions" style={{ display: 'flex', gap: 8, flexShrink: 0 }}>
+                  <div className="doc-item-actions" style={{ display: 'flex', gap: 8, flexShrink: 0, alignItems: 'center' }}>
                     {doc.parsed_content && (
                       <Button variant="secondary" style={{ height: 34, fontSize: 13, padding: '0 12px' }}
                         onClick={() => navigate(`/production/documents/${projectId}/${doc.id}`)}>
@@ -420,10 +541,38 @@ export default function DocumentsPage() {
                         <Button variant="secondary" style={{ height: 34, fontSize: 13, padding: '0 12px' }}>Скачать</Button>
                       </a>
                     )}
+                    {(isProducer || role === 'project_director') && groups.length > 0 && (
+                      <select value={doc.group_id || ''} onChange={e => handleAssignGroup(doc.id, e.target.value)}
+                        onClick={e => e.stopPropagation()}
+                        style={{ height: 30, fontSize: 11, padding: '0 6px', border: '1px solid var(--border)', borderRadius: 6, background: doc.group_id ? 'var(--blue-dim)' : 'var(--white)', color: doc.group_id ? 'var(--blue)' : 'var(--muted)', cursor: 'pointer' }}>
+                        <option value="">Без блока</option>
+                        {groups.map(g => <option key={g.id} value={g.id}>{g.name}</option>)}
+                      </select>
+                    )}
+                    {isProducer && (
+                      <button onClick={e => {
+                        e.stopPropagation()
+                        setConfirmAction({
+                          title: `Удалить ${DOC_TYPES[doc.type]?.label || ''} v${doc.version}`,
+                          message: 'Документ и связанные позиции списка будут удалены.',
+                          onConfirm: () => {
+                            setConfirmAction(null)
+                            docsApi.remove(doc.id).then(() => { loadDocs(); loadListItems() }).catch(() => {})
+                          },
+                        })
+                      }} title="Удалить" style={{
+                        background: 'none', border: 'none', cursor: 'pointer', fontSize: 16,
+                        color: 'var(--muted)', padding: '4px', display: 'flex', alignItems: 'center',
+                      }}>🗑️</button>
+                    )}
                   </div>
                 </div>
               </div>
             ))}
+                  </div>
+                )
+              })
+            })()}
             {!loading && tabDocs.length === 0 && (
               <div style={{ textAlign: 'center', padding: '60px 0', color: 'var(--muted)', fontSize: 14 }}>
                 Нет документов
@@ -528,6 +677,23 @@ export default function DocumentsPage() {
                       style={{ width: '100%', height: 40, padding: '0 10px 0 32px', border: '1px solid var(--border)', borderRadius: 'var(--radius-btn)', fontSize: 13, background: 'var(--white)', outline: 'none', boxSizing: 'border-box' }} />
                   </div>
                   <Button onClick={() => setShowAddItem(true)} style={{ height: 40, fontSize: 13 }}>+ Добавить</Button>
+                  {isProducer && projectId && (
+                    <Button variant="secondary" disabled={rebuilding}
+                      style={{ height: 40, fontSize: 12 }}
+                      onClick={async () => {
+                        if (!confirm('Пересобрать все позиции проекта из документов? Ручные позиции сохранятся.')) return
+                        setRebuilding(true)
+                        try {
+                          const r = await adminApi.rebuildPositions(projectId)
+                          alert(`Готово! Удалено: ${r.deleted}, импортировано: ${r.imported}`)
+                          loadListItems()
+                          scenesApi.list(projectId).then(d => setProjectScenes(d.scenes || [])).catch(() => {})
+                        } catch (err) { alert('Ошибка: ' + (err.message || 'unknown')) }
+                        finally { setRebuilding(false) }
+                      }}>
+                      {rebuilding ? 'Пересборка...' : 'Пересобрать'}
+                    </Button>
+                  )}
                 </div>
 
                 <div className="doc-list-grid">
@@ -557,8 +723,21 @@ export default function DocumentsPage() {
                         return (a.scene || '').localeCompare(b.scene || '')
                       })
 
-                    // Group by shoot date (skip items without date)
+                    // Build cross-scene map from AI analysis (latest scenario doc)
+                    const crossSceneMap = {}
+                    const latestScenario = docs.filter(d => d.type === 'scenario' && (!isProducer || d.project_id === projectId)).sort((a, b) => b.version - a.version)[0]
+                    if (latestScenario) {
+                      const pd = typeof latestScenario.parsed_data === 'string' ? JSON.parse(latestScenario.parsed_data) : latestScenario.parsed_data
+                      if (pd?.cross_scenes) {
+                        for (const cs of pd.cross_scenes) {
+                          crossSceneMap[cs.name.toLowerCase().trim()] = { scenes: cs.scenes, reason: cs.reason, category: cs.category }
+                        }
+                      }
+                    }
+
+                    // Group by shoot date
                     const withDate = filtered.filter(i => i.day)
+                    const withoutDate = filtered.filter(i => !i.day)
                     const groups = []
                     let lastDay = null
                     for (const item of withDate) {
@@ -567,6 +746,9 @@ export default function DocumentsPage() {
                         lastDay = item.day
                       }
                       groups[groups.length - 1].items.push(item)
+                    }
+                    if (withoutDate.length) {
+                      groups.push({ day: '_nodate', time: '', items: withoutDate })
                     }
 
                     // Initialize all days as collapsed on first render
@@ -588,7 +770,7 @@ export default function DocumentsPage() {
                           borderLeft: '3px solid var(--blue)', cursor: 'pointer', userSelect: 'none',
                         }}>
                           <span style={{ fontSize: 12, transition: 'transform 0.15s', transform: isCollapsed ? 'rotate(-90deg)' : 'rotate(0deg)' }}>▼</span>
-                          <span>📅 {group.day}</span>
+                          <span>{group.day === '_nodate' ? '📎 Без даты' : `📅 ${group.day}`}</span>
                           {group.time && <span style={{ fontSize: 11, color: 'var(--blue)', fontWeight: 500 }}>{group.time}</span>}
                           <span style={{ fontSize: 11, color: 'var(--muted)', fontWeight: 400, marginLeft: 'auto' }}>{group.items.length} позиций</span>
                         </div>
@@ -628,14 +810,30 @@ export default function DocumentsPage() {
                         }}>
                           <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: match ? 8 : 0, flexWrap: 'wrap' }}>
                             <div style={{ flex: 1, minWidth: 0 }}>
-                              <div style={{ fontWeight: 500, fontSize: 13, cursor: 'pointer', color: item.note ? 'var(--blue)' : 'var(--text)' }}
-                                onClick={() => setExpandedItem(expandedItem === item.id ? null : item.id)}>
+                              <div style={{ fontWeight: 500, fontSize: 13, cursor: (item.note || item.source === 'ai' || item.scene) ? 'pointer' : 'default', color: (item.note || item.source === 'ai' || item.scene) ? 'var(--blue)' : 'var(--text)' }}
+                                onClick={() => (item.note || item.source === 'ai' || item.scene) && setExpandedItem(expandedItem === item.id ? null : item.id)}>
                                 {item.name}
-                                {item.note && <span style={{ fontSize: 10, marginLeft: 6, color: 'var(--muted)' }}>{expandedItem === item.id ? '▲' : '▼'}</span>}
+                                {(item.note || item.source === 'ai' || item.scene) && <span style={{ fontSize: 10, marginLeft: 6, color: 'var(--muted)' }}>{expandedItem === item.id ? '▲' : '▼'}</span>}
                               </div>
                               <div style={{ fontSize: 11, color: 'var(--muted)', marginTop: 2 }}>
                                 {[item.scene && `Сц. ${item.scene}`, item.time, item.location].filter(Boolean).join(' · ') || ''}
                               </div>
+                              {(() => {
+                                const cross = crossSceneMap[item.name.toLowerCase().trim()]
+                                if (!cross) return null
+                                return (
+                                  <div style={{ marginTop: 3 }}>
+                                    <div style={{
+                                      padding: '2px 8px', borderRadius: 12,
+                                      background: 'rgba(139,92,246,0.08)', color: '#7c3aed',
+                                      fontSize: 10, fontWeight: 500, display: 'inline-block',
+                                    }}>
+                                      Сквозная: сц. {cross.scenes.sort((a, b) => a.localeCompare(b, undefined, { numeric: true })).join(', ')}
+                                    </div>
+                                    {cross.reason && <div style={{ fontSize: 10, color: 'var(--muted)', marginTop: 2 }}>{cross.reason}</div>}
+                                  </div>
+                                )
+                              })()}
                             </div>
                             <div style={{ fontSize: 13, fontWeight: 500, flexShrink: 0 }}>{item.qty} шт.</div>
                             <span style={{
@@ -644,9 +842,33 @@ export default function DocumentsPage() {
                             }}>{src.label}</span>
                             <button onClick={() => { setEditingId(item.id); setEditForm({ name: item.name, scene: item.scene, day: item.day, qty: item.qty, note: item.note }) }}
                               style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: 14, color: 'var(--muted)', padding: '2px 4px' }} title="Редактировать">✏️</button>
-                            <button onClick={() => handleDeleteItem(item.id)}
+                            <button onClick={() => handleDeleteItem(item.id, item.name)}
                               style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: 14, color: 'var(--muted)', padding: '2px 4px' }} title="Удалить">🗑️</button>
                           </div>
+
+                          {/* Scene picker for "Без даты" items */}
+                          {group.day === '_nodate' && projectScenes.length > 0 && (
+                            <div style={{ marginTop: 6, marginBottom: 4 }}>
+                              <select
+                                style={{ height: 30, fontSize: 11, padding: '0 8px', border: '1px solid var(--border)', borderRadius: 6, color: 'var(--muted)', background: 'var(--white)', cursor: 'pointer' }}
+                                defaultValue=""
+                                onChange={async (e) => {
+                                  if (!e.target.value) return
+                                  try {
+                                    await listsApi.assignScene(item.id, e.target.value)
+                                    loadListItems()
+                                  } catch (err) { console.error(err) }
+                                }}
+                              >
+                                <option value="">Привязать к сцене...</option>
+                                {projectScenes.map(s => (
+                                  <option key={s.canonical_id} value={s.canonical_id}>
+                                    {s.canonical_id} — {s.object || s.synopsis || '?'} {s.date ? `(${s.date})` : ''}
+                                  </option>
+                                ))}
+                              </select>
+                            </div>
+                          )}
 
                           {match && (
                             <div style={{
@@ -674,30 +896,84 @@ export default function DocumentsPage() {
                               )}
                             </div>
                           )}
-                          {expandedItem === item.id && item.note && (() => {
+                          {expandedItem === item.id && (item.note || item.source === 'ai' || item.scene) && (() => {
                             const parts = (item.note || '').split('\n---\n')
-                            const kppText = parts[0] || ''
-                            const scenarioText = parts[1]?.replace(/^📝\s*/, '') || ''
+                            const blocks = []
+                            for (const part of parts) {
+                              const trimmed = part.trim()
+                              if (!trimmed) continue
+                              if (trimmed.startsWith('🤖 ')) {
+                                blocks.push({ type: 'ai', text: trimmed.replace(/^🤖\s*/, '') })
+                              } else if (trimmed.startsWith('📝 ')) {
+                                blocks.push({ type: 'scenario', text: trimmed.replace(/^📝\s*/, '') })
+                              } else {
+                                blocks.push({ type: 'kpp', text: trimmed })
+                              }
+                            }
+                            if (item.source === 'ai' && !blocks.some(b => b.type === 'ai')) {
+                              blocks.unshift({ type: 'ai', text: 'Добавлено ИИ на основе анализа сценария' })
+                            }
+                            if (blocks.length === 0 && item.scene) {
+                              const infoText = [item.location, item.day && `День: ${item.day}`, item.time].filter(Boolean).join(' · ') || `Сцена ${item.scene}`
+                              blocks.push({ type: 'kpp', text: infoText })
+                            }
+                            const BLOCK_STYLES = {
+                              kpp: { border: 'var(--amber)', bg: 'var(--bg)', label: 'КПП' },
+                              scenario: { border: 'var(--blue)', bg: 'rgba(99,102,241,0.04)', label: 'Сценарий' },
+                              ai: { border: 'var(--green)', bg: 'rgba(34,197,94,0.04)', label: 'Пометка ИИ' },
+                            }
                             return (
                               <div style={{ marginTop: 8, display: 'flex', flexDirection: 'column', gap: 6 }}>
-                                {kppText && (
-                                  <div style={{
-                                    padding: '10px 12px', background: 'var(--bg)', borderRadius: 8,
-                                    borderLeft: '3px solid var(--amber)', fontSize: 12, lineHeight: 1.6,
-                                  }}>
-                                    <div style={{ fontSize: 10, fontWeight: 600, color: 'var(--amber)', marginBottom: 4 }}>КПП · Сцена {item.scene || '—'}</div>
-                                    {kppText}
-                                  </div>
-                                )}
-                                {scenarioText && (
-                                  <div style={{
-                                    padding: '10px 12px', background: 'rgba(99,102,241,0.04)', borderRadius: 8,
-                                    borderLeft: '3px solid var(--blue)', fontSize: 12, lineHeight: 1.6,
-                                  }}>
-                                    <div style={{ fontSize: 10, fontWeight: 600, color: 'var(--blue)', marginBottom: 4 }}>Сценарий · Сцена {item.scene || '—'}</div>
-                                    {scenarioText}
-                                  </div>
-                                )}
+                                {blocks.map((block, bi) => {
+                                  const s = BLOCK_STYLES[block.type]
+                                  return (
+                                    <div key={bi} style={{
+                                      padding: '10px 12px', background: s.bg, borderRadius: 8,
+                                      borderLeft: `3px solid ${s.border}`, fontSize: 12, lineHeight: 1.6,
+                                    }}>
+                                      <div style={{ fontSize: 10, fontWeight: 600, color: s.border, marginBottom: 4 }}>
+                                        {s.label} · Сцена {item.scene || '—'}
+                                      </div>
+                                      {(() => {
+                                        // Only highlight in scenario blocks
+                                        if (block.type !== 'scenario') return block.text
+                                        const STOP_WORDS = new Set(['на','от','из','за','по','для','при','без','над','под','про','как','что','это','или','так','все','вот','его','они','она','уже','еще','тут','там','мне','мой','наш','ваш','где','кто','чем','чей','той','тех','эти','тем','нас','вас','них','нем','ней','ним','вам','нам','все','всё'])
+                                        const itemName = item.name.trim()
+                                        if (itemName.length < 3) return block.text
+                                        const words = itemName.split(/\s+/).filter(w => w.length >= 4 && !STOP_WORDS.has(w.toLowerCase()))
+                                        if (!words.length) {
+                                          // Fallback: try full name as single stem if all words are short
+                                          const full = itemName.replace(/[^а-яёa-zА-ЯЁA-Z0-9\s]/gi, '').trim()
+                                          if (full.length < 3) return block.text
+                                          const stem = full.length <= 5 ? full : full.slice(0, Math.max(4, Math.ceil(full.length * 0.7)))
+                                          const esc = stem.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+                                          const rx = new RegExp(`(${esc}[а-яёa-z]*)`, 'gi')
+                                          const ps = block.text.split(rx)
+                                          if (ps.length === 1) return block.text
+                                          const chk = new RegExp(`^${esc}[а-яёa-z]*$`, 'i')
+                                          return ps.map((p, pi) => chk.test(p) ? <mark key={pi} style={{ background: '#fef08a', borderRadius: 2, padding: '0 2px' }}>{p}</mark> : p)
+                                        }
+                                        const cleanStems = words.map(w => {
+                                          const cleaned = w.replace(/[^а-яёa-zА-ЯЁA-Z0-9]/gi, '')
+                                          if (cleaned.length < 4) return null
+                                          const stem = cleaned.length <= 5 ? cleaned : cleaned.slice(0, Math.max(4, Math.ceil(cleaned.length * 0.7)))
+                                          return stem.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+                                        }).filter(Boolean)
+                                        if (!cleanStems.length) return block.text
+                                        const pattern = cleanStems.map(s => s + '[а-яёa-z]*').join('|')
+                                        const regex = new RegExp(`(${pattern})`, 'gi')
+                                        const parts = block.text.split(regex)
+                                        if (parts.length === 1) return block.text
+                                        const checkRegex = new RegExp(`^(?:${pattern})$`, 'i')
+                                        return parts.map((p, pi) =>
+                                          checkRegex.test(p)
+                                            ? <mark key={pi} style={{ background: '#fef08a', borderRadius: 2, padding: '0 2px' }}>{p}</mark>
+                                            : p
+                                        )
+                                      })()}
+                                    </div>
+                                  )
+                                })}
                               </div>
                             )
                           })()}
@@ -748,6 +1024,14 @@ export default function DocumentsPage() {
 
         {cardId && <UnitCardModal unitId={cardId} onClose={() => setCardId(null)} />}
 
+        <ConfirmModal
+          open={!!confirmAction}
+          title={confirmAction?.title}
+          message={confirmAction?.message}
+          onConfirm={confirmAction?.onConfirm || (() => setConfirmAction(null))}
+          onCancel={() => setConfirmAction(null)}
+        />
+
         {/* Upload modal */}
         {showUpload && (
           <div style={{
@@ -777,6 +1061,17 @@ export default function DocumentsPage() {
                   ))}
                 </div>
               </div>
+
+              {groups.length > 0 && (
+                <div style={{ marginBottom: 16 }}>
+                  <div style={{ fontSize: 13, fontWeight: 500, marginBottom: 8 }}>Блок (необязательно)</div>
+                  <select value={uploadGroupId} onChange={e => setUploadGroupId(e.target.value)}
+                    style={{ width: '100%', height: 38, padding: '0 10px', border: '1px solid var(--border)', borderRadius: 'var(--radius-btn)', fontSize: 13, cursor: 'pointer' }}>
+                    <option value="">Без блока</option>
+                    {groups.map(g => <option key={g.id} value={g.id}>{g.name}</option>)}
+                  </select>
+                </div>
+              )}
 
               <div
                 onDragOver={e => { e.preventDefault(); setDragging(true) }}

@@ -255,4 +255,122 @@ router.get('/producer', verifyJWT, checkRole('producer'), async (req, res) => {
   }
 })
 
+// GET /analytics/project/:projectId — project-specific analytics for producer
+router.get('/project/:projectId', verifyJWT, checkRole('producer', 'project_director'), async (req, res) => {
+  const pid = req.params.projectId
+  try {
+    // 1. Document stats
+    const { rows: docStats } = await db.query(`
+      SELECT type,
+             COUNT(*) AS versions,
+             MAX(version) AS latest_version,
+             MAX(created_at) AS last_upload
+      FROM documents WHERE project_id = $1
+      GROUP BY type
+    `, [pid])
+
+    // 2. List items by source
+    const { rows: itemsBySource } = await db.query(`
+      SELECT i.source, COUNT(*) AS count
+      FROM production_list_items i
+      JOIN production_lists l ON l.id = i.list_id
+      WHERE l.project_id = $1
+      GROUP BY i.source
+    `, [pid])
+
+    // 3. Items by category (list type)
+    const { rows: itemsByCategory } = await db.query(`
+      SELECT l.type, COUNT(i.id) AS count
+      FROM production_lists l
+      LEFT JOIN production_list_items i ON i.list_id = l.id
+      WHERE l.project_id = $1
+      GROUP BY l.type
+      ORDER BY count DESC
+    `, [pid])
+
+    // 4. Cross-scene items count
+    const { rows: crossDocs } = await db.query(`
+      SELECT parsed_data FROM documents
+      WHERE project_id = $1 AND type = 'scenario' AND parsed_data IS NOT NULL
+      ORDER BY version DESC LIMIT 1
+    `, [pid])
+    const crossScenes = crossDocs[0]?.parsed_data?.cross_scenes || []
+
+    // 5. Team activity
+    const { rows: uploaders } = await db.query(`
+      SELECT u.name, u.role, COUNT(d.id) AS uploads, MAX(d.created_at) AS last_upload
+      FROM documents d
+      JOIN users u ON u.id = d.uploaded_by
+      WHERE d.project_id = $1
+      GROUP BY u.id, u.name, u.role
+      ORDER BY uploads DESC
+    `, [pid])
+
+    // 6. Manual additions by user
+    const { rows: manualAdders } = await db.query(`
+      SELECT u.name, u.role, COUNT(i.id) AS manual_items
+      FROM production_list_items i
+      JOIN production_lists l ON l.id = i.list_id
+      JOIN users u ON u.id = l.user_id
+      WHERE l.project_id = $1 AND i.source = 'manual'
+      GROUP BY u.id, u.name, u.role
+      ORDER BY manual_items DESC
+      LIMIT 10
+    `, [pid])
+
+    // 7. Warehouse match rate
+    const { rows: matchData } = await db.query(`
+      SELECT matched_units FROM documents
+      WHERE project_id = $1 AND matched_units IS NOT NULL
+      ORDER BY version DESC LIMIT 1
+    `, [pid])
+    const matchedUnits = matchData[0]?.matched_units || []
+
+    const { rows: totalItems } = await db.query(`
+      SELECT COUNT(DISTINCT LOWER(TRIM(i.name))) AS total
+      FROM production_list_items i
+      JOIN production_lists l ON l.id = i.list_id
+      WHERE l.project_id = $1
+    `, [pid])
+
+    // 8. Team members
+    const { rows: teamMembers } = await db.query(`
+      SELECT id, name, role, created_at FROM users WHERE project_id = $1 ORDER BY name
+    `, [pid])
+
+    // 9. Document groups
+    const { rows: groupStats } = await db.query(`
+      SELECT g.id, g.name, g.sort_order,
+             COUNT(d.id) AS doc_count,
+             array_agg(DISTINCT d.type) FILTER (WHERE d.type IS NOT NULL) AS doc_types
+      FROM document_groups g
+      LEFT JOIN documents d ON d.group_id = g.id
+      WHERE g.project_id = $1
+      GROUP BY g.id, g.name, g.sort_order
+      ORDER BY g.sort_order
+    `, [pid])
+
+    res.json({
+      documents: docStats,
+      items_by_source: itemsBySource,
+      items_by_category: itemsByCategory,
+      cross_scenes: {
+        count: crossScenes.length,
+        top: crossScenes.sort((a, b) => (b.scenes?.length || 0) - (a.scenes?.length || 0)).slice(0, 5),
+      },
+      team_uploads: uploaders,
+      team_manual: manualAdders,
+      warehouse_match: {
+        matched: matchedUnits.filter(m => m.unit_id).length,
+        total: parseInt(totalItems[0]?.total || 0),
+      },
+      team: teamMembers,
+      groups: groupStats,
+    })
+  } catch (err) {
+    console.error(err)
+    res.status(500).json({ error: 'Server error' })
+  }
+})
+
 module.exports = router

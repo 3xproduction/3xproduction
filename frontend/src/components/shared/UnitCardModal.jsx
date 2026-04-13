@@ -113,7 +113,7 @@ export default function UnitCardModal({ unitId, onClose, onChanged }) {
   }
 
   if (loading) return (
-    <div style={styles.overlay} onClick={onClose}>
+    <div style={styles.overlay} onClick={e => { if (e.target === e.currentTarget) onClose() }}>
       <div style={styles.modal} onClick={e => e.stopPropagation()}>
         <div style={{ padding: 32, color: 'var(--muted)', fontSize: 14 }}>Загрузка...</div>
       </div>
@@ -132,7 +132,7 @@ export default function UnitCardModal({ unitId, onClose, onChanged }) {
   const cellLabel = unit.cell_custom || unit.cell_code || unit.cell_name || '—'
 
   return (
-    <div style={styles.overlay} onClick={onClose}>
+    <div style={styles.overlay} onClick={e => { if (e.target === e.currentTarget) onClose() }}>
       <div style={styles.modal} onClick={e => e.stopPropagation()}>
         {/* Header */}
         <div style={styles.header}>

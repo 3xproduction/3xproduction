@@ -85,6 +85,7 @@ export const ROLES = {
     label: 'Помощник режиссёра-постановщика',
     world: 'production',
     uploadCallsheet: true,
+    ownLists: ['auto', 'decoration', 'stunts', 'pyrotechnics', 'consultant', 'makeup'],
   },
   first_assistant_director: {
     label: '1-й ассистент режиссёра-постановщика',
@@ -100,6 +101,7 @@ export const ROLES = {
     world: 'production',
     readAllDocs: true,
     readAllLists: true,
+    ownLists: ['auto', 'decoration', 'stunts', 'pyrotechnics', 'consultant', 'makeup'],
   },
   production_designer: {
     label: 'Художник-постановщик',
@@ -125,7 +127,7 @@ export const ROLES = {
     uploadKpp: true,
     uploadScenario: true,
     uploadCallsheet: true,
-    ownLists: ['props', 'art_fill', 'dummy', 'auto', 'costumes'],
+    ownLists: ['props', 'art_fill', 'dummy', 'auto', 'decoration', 'pyrotechnics', 'consultant', 'costumes'],
   },
   props_assistant: {
     label: 'Ассистент художника по реквизиту',
@@ -133,7 +135,7 @@ export const ROLES = {
     uploadKpp: true,
     uploadScenario: true,
     uploadCallsheet: true,
-    ownLists: ['props', 'art_fill', 'dummy', 'auto', 'costumes'],
+    ownLists: ['props', 'art_fill', 'dummy', 'auto', 'decoration', 'pyrotechnics', 'costumes'],
   },
   decorator: {
     label: 'Декоратор',
@@ -141,7 +143,7 @@ export const ROLES = {
     uploadKpp: true,
     uploadScenario: true,
     uploadCallsheet: true,
-    ownLists: ['decoration', 'props', 'art_fill', 'dummy'],
+    ownLists: ['decoration', 'props', 'art_fill', 'dummy', 'consultant'],
   },
   costumer: {
     label: 'Костюмер',
@@ -227,5 +229,15 @@ export const ROLES = {
     world: 'production',
     readDocs: ['kpp', 'scenario', 'callsheet'],
     ownLists: ['all'],
+  },
+  location_manager: {
+    label: 'Локейшн-менеджер',
+    world: 'production',
+    readDocs: ['kpp', 'scenario', 'callsheet'],
+    uploadKpp: true,
+    uploadScenario: true,
+    uploadCallsheet: true,
+    ownLists: ['locations'],
+    canAddCatalogs: true,
   },
 }

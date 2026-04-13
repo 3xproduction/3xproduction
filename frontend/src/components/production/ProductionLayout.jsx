@@ -3,7 +3,7 @@ import { NavLink, useNavigate } from 'react-router-dom'
 import {
   FileText, Package, BarChart2, DollarSign,
   Bell, User, Menu, Users, Home, ChevronDown, Inbox,
-  Handshake, ClipboardList, MapPin, Clapperboard, Car, UserCheck
+  Handshake, ClipboardList, MapPin, Clapperboard, Car, UserCheck, FolderOpen
 } from 'lucide-react'
 import { useAuth } from '../../hooks/useAuth'
 import { ROLES } from '../../constants/roles'
@@ -176,8 +176,6 @@ function buildNav(role) {
   // Documents — everyone
   nav.push({ to: '/production/documents', icon: FileText, label: 'Записи' })
 
-  // Lists nav item removed — now embedded as tab inside Записи section
-
   // Warehouse view
   if (def.ownLists?.length || def.seeAllLists || role === 'project_director') {
     nav.push({ to: '/production/warehouse', icon: Package, label: 'Склад' })
@@ -190,9 +188,13 @@ function buildNav(role) {
     nav.push({ to: '/production/requests',  icon: Inbox,         label: 'Заявки' })
     nav.push({ to: '/production/rent',      icon: Handshake,     label: 'Аренда' })
     nav.push({ to: '/production/acts',      icon: ClipboardList, label: 'Акты' })
+    // Каталогизатор
+    nav.push({ section: 'Каталогизатор' })
     nav.push({ to: '/production/locations',    icon: MapPin,        label: 'Локации' })
     nav.push({ to: '/production/decorations',  icon: Clapperboard,  label: 'Декорации' })
     nav.push({ to: '/production/vehicles',     icon: Car,           label: 'Транспорт' })
+    nav.push({ to: '/production/analytics', icon: FolderOpen,    label: 'Проекты' })
+    nav.push({ section: '' })
     nav.push({ to: '/production/staff',     icon: Users,         label: 'Сотрудники' })
     nav.push({ to: '/analytics/producer',   icon: BarChart2,     label: 'Аналитика' })
     nav.push({ to: '/assets',              icon: DollarSign,     label: 'Активы' })
@@ -203,11 +205,18 @@ function buildNav(role) {
     nav.push({ to: '/production/casting', icon: UserCheck, label: 'Кастинг АМС' })
   }
 
-  // Catalogs for project director & deputy
+  // Catalogs for project director & deputy & location_manager
   if (role === 'project_director' || role === 'project_deputy' || role === 'project_deputy_upload') {
+    nav.push({ section: 'Каталогизатор' })
     nav.push({ to: '/production/locations',    icon: MapPin,        label: 'Локации' })
     nav.push({ to: '/production/decorations',  icon: Clapperboard,  label: 'Декорации' })
     nav.push({ to: '/production/vehicles',     icon: Car,           label: 'Транспорт' })
+    nav.push({ to: '/production/analytics', icon: FolderOpen,    label: 'Проекты' })
+  }
+
+  // Location manager — locations catalog
+  if (role === 'location_manager') {
+    nav.push({ to: '/production/locations', icon: MapPin, label: 'Локации' })
   }
 
   // Team (project director)
@@ -239,19 +248,25 @@ export default function ProductionLayout({ children }) {
       const HIDDEN = ['3xmedia', 'тестовый проект']
       const list = (d.projects || [])
         .filter(p => !HIDDEN.includes((p.name || '').toLowerCase()))
-        .map(p => p.name)
       setProjectsList(list)
+      const savedName = localStorage.getItem('project')
       if (!selectedProject && list.length) {
-        setSelectedProject(list[0])
-        localStorage.setItem('project', list[0])
+        const match = list.find(p => p.name === savedName) || list[0]
+        setSelectedProject(match.name)
+        localStorage.setItem('project', match.name)
       }
     }).catch(() => {})
   }, [])
 
-  function selectProject(p) {
-    localStorage.setItem('project', p)
-    setSelectedProject(p)
+  function selectProject(name) {
+    localStorage.setItem('project', name)
+    setSelectedProject(name)
     setProjectOpen(false)
+  }
+
+  function getSelectedProjectId() {
+    const proj = projectsList.find(p => p.name === selectedProject)
+    return proj?.id || user?.project_id || null
   }
 
   const [projectCreated, setProjectCreated] = useState(false)
@@ -260,9 +275,10 @@ export default function ProductionLayout({ children }) {
     if (!newProjectName.trim()) return
     setCreatingProject(true)
     try {
-      await projectsApi.create(newProjectName.trim())
-      setProjectsList(prev => [...prev, newProjectName.trim()])
-      selectProject(newProjectName.trim())
+      const res = await projectsApi.create(newProjectName.trim())
+      const newProj = res.project || { name: newProjectName.trim() }
+      setProjectsList(prev => [...prev, newProj])
+      selectProject(newProj.name)
       setProjectCreated(true)
     } catch (e) { alert(e.message || 'Ошибка') }
     setCreatingProject(false)
@@ -271,8 +287,9 @@ export default function ProductionLayout({ children }) {
   async function handleGenerateInvite() {
     setInviteLoading(true)
     try {
-      const proj = projectsList.find(p => p === selectedProject)
-      const d = await invitesApi.generate({ role: inviteRole, project_id: user?.project_id })
+      const pid = getSelectedProjectId()
+      if (!pid) { alert('Выберите проект'); setInviteLoading(false); return }
+      const d = await invitesApi.generate({ role: inviteRole, project_id: pid })
       setInviteLink(`${window.location.origin}/invite/${d.invite.token}`)
     } catch (e) { alert(e.message || 'Ошибка') }
     setInviteLoading(false)
@@ -283,9 +300,10 @@ export default function ProductionLayout({ children }) {
   const roleLabel = roleDef.label || role
   const nav = buildNav(role)
 
-  // Mobile: show first 3 nav items + burger
-  const mobileMain = nav.slice(0, 3)
-  const mobileBurger = nav.slice(3)
+  // Mobile: show first 3 link items + burger (skip section headers)
+  const navLinks = nav.filter(item => item.section === undefined)
+  const mobileMain = navLinks.slice(0, 3)
+  const mobileBurger = navLinks.slice(3)
 
   return (
     <>
@@ -302,30 +320,18 @@ export default function ProductionLayout({ children }) {
             <div className="pl-logo-sub">Production</div>
           </div>
 
-          <div className="pl-project">
-            <div>Проект</div>
-            <button className="pl-project-btn" onClick={() => setProjectOpen(o => !o)}>
-              <span className="pl-project-name">{selectedProject}</span>
-              <ChevronDown size={12} style={{ color: 'var(--sidebar-muted)', transform: projectOpen ? 'rotate(180deg)' : 'none', transition: '0.15s' }} />
-            </button>
-            {projectOpen && (
-              <div className="pl-project-dd">
-                {projectsList.map(p => (
-                  <button key={p} className={`pl-project-opt${selectedProject === p ? ' sel' : ''}`} onClick={() => selectProject(p)}>{p}</button>
-                ))}
-                {isProducer && (
-                  <button className="pl-project-opt" style={{ color: 'var(--accent)', borderTop: '1px solid rgba(255,255,255,0.08)' }}
-                    onClick={() => { setProjectOpen(false); setShowNewProject(true) }}>
-                    + Добавить новый
-                  </button>
-                )}
-              </div>
-            )}
-          </div>
+          {/* Project selector moved to Проекты page — hidden from sidebar */}
 
           <nav className="pl-nav">
             <div className="pl-section-label">Навигация</div>
-            {nav.map(item => (
+            {nav.map((item, idx) =>
+              item.section !== undefined ? (
+                item.section ? (
+                  <div key={'sec-' + idx} className="pl-section-label" style={{ marginTop: 10 }}>{item.section}</div>
+                ) : (
+                  <div key={'sep-' + idx} style={{ height: 1, background: 'var(--sidebar-border, rgba(255,255,255,0.08))', margin: '6px 12px' }} />
+                )
+              ) : (
               <NavLink
                 key={item.to + item.label}
                 to={item.to}
@@ -334,7 +340,8 @@ export default function ProductionLayout({ children }) {
                 <item.icon size={16} strokeWidth={1.8} />
                 <span>{item.label}</span>
               </NavLink>
-            ))}
+              )
+            )}
           </nav>
 
           <div className="pl-profile">

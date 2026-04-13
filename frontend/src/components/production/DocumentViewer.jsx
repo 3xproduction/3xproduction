@@ -60,10 +60,13 @@ export default function DocumentViewer() {
   const [selectedUnit, setSelectedUnit] = useState(null)
   const [expandedScene, setExpandedScene] = useState(sceneFromUrl || null)
 
+  const [allProjectItems, setAllProjectItems] = useState([])
+
   useEffect(() => {
     docsApi.view(projectId, docId)
       .then(d => {
         setDoc(d.document)
+        if (d.allProjectItems) setAllProjectItems(d.allProjectItems)
         if (sceneFromUrl) {
           setTimeout(() => {
             const el = document.getElementById(`scene-${sceneFromUrl}`)
@@ -76,6 +79,19 @@ export default function DocumentViewer() {
   }, [projectId, docId])
 
   const content = doc?.parsed_content
+
+  // Map: canonical scene ID → array of item names from ALL sources (KPP + Scenario + AI)
+  const sceneItemsMap = useMemo(() => {
+    if (!allProjectItems?.length) return {}
+    const map = {}
+    for (const item of allProjectItems) {
+      const sid = item.scene || ''
+      if (!map[sid]) map[sid] = []
+      map[sid].push(item.name)
+    }
+    return map
+  }, [allProjectItems])
+
   const matched = useMemo(() => {
     if (!doc?.matched_units) return {}
     const map = {}
@@ -165,7 +181,7 @@ export default function DocumentViewer() {
       <div className="dv-page" style={{ padding: '24px 32px', maxWidth: 960 }}>
         <BackHeader doc={doc} navigate={navigate} />
 
-        {delta && (delta.added?.length > 0 || delta.changed?.length > 0 || delta.removed?.length > 0) && (
+        {doc?.type === 'kpp' && delta && (delta.added?.length > 0 || delta.changed?.length > 0 || delta.removed?.length > 0) && (
           <DeltaBanner delta={delta} />
         )}
 
@@ -232,12 +248,13 @@ export default function DocumentViewer() {
                 <SceneCard
                   key={scene.id}
                   scene={scene}
-                  delta={delta}
+                  delta={doc?.type === 'kpp' ? delta : null}
                   expanded={expandedScene === scene.id}
                   onToggle={() => setExpandedScene(expandedScene === scene.id ? null : scene.id)}
                   matched={matched}
                   onUnitClick={setSelectedUnit}
                   onCharClick={c => setCharFilter(charFilter === c ? '' : c)}
+                  allItemsForScene={sceneItemsMap[scene.id] || []}
                 />
               ))}
             </div>
@@ -258,9 +275,49 @@ export default function DocumentViewer() {
 }
 
 /* ============================================================
+   Highlight helper — wraps matched item names in yellow <mark>
+   ============================================================ */
+function highlightItems(text, scene, allItemsForScene) {
+  const items = []
+  // Items from current document's scene
+  for (const key of ['props', 'costumes', 'makeup', 'vehicles', 'stunts', 'decoration', 'pyrotechnics']) {
+    for (const v of (scene[key] || [])) {
+      const t = v.trim()
+      if (t.length > 2) items.push(t)
+    }
+  }
+  // Items from ALL sources (KPP + Scenario + AI) for this scene
+  for (const name of (allItemsForScene || [])) {
+    const t = (name || '').trim()
+    if (t.length > 2 && !items.some(i => i.toLowerCase() === t.toLowerCase())) items.push(t)
+  }
+  if (!items.length) return text
+  // Build stem patterns for Russian morphology (70% of word or min 4 chars)
+  const stemPatterns = items.map(item => {
+    const words = item.split(/\s+/).filter(w => w.length >= 3)
+    if (!words.length) return null
+    const stems = words.map(w => {
+      const stem = w.length <= 4 ? w : w.slice(0, Math.max(4, Math.ceil(w.length * 0.7)))
+      return stem.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '[а-яёa-z]*'
+    })
+    return stems.join('\\s+')
+  }).filter(Boolean)
+  if (!stemPatterns.length) return text
+  stemPatterns.sort((a, b) => b.length - a.length)
+  const regex = new RegExp(`(${stemPatterns.join('|')})`, 'gi')
+  const parts = text.split(regex)
+  const checkRegex = new RegExp(`^(?:${stemPatterns.join('|')})$`, 'i')
+  return parts.map((part, i) =>
+    checkRegex.test(part)
+      ? <mark key={i} style={{ background: '#fef08a', borderRadius: 2, padding: '0 2px' }}>{part}</mark>
+      : part
+  )
+}
+
+/* ============================================================
    Scene Card
    ============================================================ */
-function SceneCard({ scene, delta, expanded, onToggle, matched, onUnitClick, onCharClick }) {
+function SceneCard({ scene, delta, expanded, onToggle, matched, onUnitClick, onCharClick, allItemsForScene }) {
   const sceneChange = delta?.changed?.find(c => c.id === scene.id)
   const isNew = delta?.added?.some(a => a.id === scene.id)
   const mode = MODE_COLORS[(scene.mode || '').toLowerCase()] || DEFAULT_MODE
@@ -355,7 +412,7 @@ function SceneCard({ scene, delta, expanded, onToggle, matched, onUnitClick, onC
               borderRadius: 'var(--radius-btn)', fontSize: 13, lineHeight: 1.7,
               whiteSpace: 'pre-wrap', maxHeight: 400, overflowY: 'auto',
             }}>
-              {scene.text}
+              {highlightItems(scene.text, scene, allItemsForScene)}
             </div>
           )}
 
@@ -759,7 +816,7 @@ function BackHeader({ doc, navigate }) {
           {doc.original_name || ''} · {doc.uploaded_by_name || ''} · {new Date(doc.created_at).toLocaleDateString('ru-RU')}
         </div>
       </div>
-      <Badge color={doc.status === 'parsed' ? 'green' : 'muted'}>{doc.status}</Badge>
+      <Badge color={doc.status === 'parsed' ? 'green' : 'muted'}>{{ parsed: 'Проверено', uploaded: 'Загружено' }[doc.status] || doc.status}</Badge>
     </div>
   )
 }

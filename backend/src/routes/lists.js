@@ -2,7 +2,7 @@ const router = require('express').Router()
 const db     = require('../db')
 const { verifyJWT } = require('../middleware/auth')
 
-const ALL_LIST_TYPES = ['props', 'art_fill', 'dummy', 'auto', 'decoration', 'costumes', 'makeup', 'stunts', 'pyrotechnics']
+const ALL_LIST_TYPES = ['props', 'art_fill', 'dummy', 'auto', 'decoration', 'costumes', 'makeup', 'stunts', 'pyrotechnics', 'consultant', 'locations']
 
 const ROLE_OWN_LISTS = {
   production_designer:      ALL_LIST_TYPES,
@@ -82,13 +82,19 @@ router.get('/:type/items', verifyJWT, async (req, res) => {
     // If seeAll and no specific user_id — return deduplicated items for this project+type
     if (seeAll && !targetUserId) {
       const items = await db.query(
-        `SELECT DISTINCT ON (LOWER(TRIM(i.name)), COALESCE(i.scene, ''))
-                i.*, u.name AS user_name
-         FROM production_list_items i
-         JOIN production_lists l ON l.id = i.list_id
-         LEFT JOIN users u ON u.id = l.user_id
-         WHERE l.project_id=$1 AND l.type=$2
-         ORDER BY LOWER(TRIM(i.name)), COALESCE(i.scene, ''), i.created_at`,
+        `SELECT sub.*, u.name AS user_name
+         FROM (
+           SELECT DISTINCT ON (LOWER(TRIM(i.name)), COALESCE(i.scene, ''))
+                  i.*
+           FROM production_list_items i
+           JOIN production_lists l ON l.id = i.list_id
+           WHERE l.project_id=$1 AND l.type=$2
+           ORDER BY LOWER(TRIM(i.name)), COALESCE(i.scene, ''),
+                    LENGTH(COALESCE(i.note,'')) DESC,
+                    i.created_at DESC
+         ) sub
+         LEFT JOIN production_lists l2 ON l2.id = sub.list_id
+         LEFT JOIN users u ON u.id = l2.user_id`,
         [projectId, type]
       )
       return res.json({ list: null, items: items.rows })
@@ -232,6 +238,60 @@ router.delete('/items/:id', verifyJWT, async (req, res) => {
     if (!check.length) return res.status(403).json({ error: 'Access denied' })
 
     await db.query(`DELETE FROM production_list_items WHERE id=$1`, [req.params.id])
+    res.json({ ok: true })
+  } catch (err) {
+    console.error(err)
+    res.status(500).json({ error: 'Server error' })
+  }
+})
+
+// PATCH /lists/items/:id/assign-scene — assign a scene to an item (fixes "Без даты")
+router.patch('/items/:id/assign-scene', verifyJWT, async (req, res) => {
+  const { canonical_id } = req.body
+  if (!canonical_id) return res.status(400).json({ error: 'Missing canonical_id' })
+  try {
+    // Find item's project
+    const { rows: itemInfo } = await db.query(
+      `SELECT pl.project_id FROM production_list_items pli
+       JOIN production_lists pl ON pl.id = pli.list_id
+       WHERE pli.id = $1`, [req.params.id]
+    )
+    if (!itemInfo.length) return res.status(404).json({ error: 'Item not found' })
+
+    // Look up scene data
+    const { rows: sceneRows } = await db.query(
+      `SELECT date, day_number, time_slot, scenario_text FROM scenes
+       WHERE project_id = $1 AND canonical_id = $2`,
+      [itemInfo[0].project_id, canonical_id]
+    )
+    const scene = sceneRows[0]
+    const dayLabel = scene?.day_number ? `СД ${scene.day_number}` : null
+    const slotTime = scene?.time_slot || ''
+    const time = dayLabel && slotTime ? `${dayLabel} · ${slotTime}` : dayLabel
+
+    // Update item with scene + date/time + scenario text
+    let noteUpdate = ''
+    if (scene?.scenario_text) {
+      const { rows: item } = await db.query(`SELECT note FROM production_list_items WHERE id = $1`, [req.params.id])
+      const existingNote = (item[0]?.note || '').trim()
+      if (!existingNote.includes('📝 ')) {
+        const separator = existingNote ? '\n---\n' : ''
+        noteUpdate = existingNote + separator + '📝 ' + scene.scenario_text
+      }
+    }
+
+    if (noteUpdate) {
+      await db.query(
+        `UPDATE production_list_items SET scene = $1, day = $2, time = $3, note = $4 WHERE id = $5`,
+        [canonical_id, scene?.date || null, time, noteUpdate, req.params.id]
+      )
+    } else {
+      await db.query(
+        `UPDATE production_list_items SET scene = $1, day = $2, time = $3 WHERE id = $4`,
+        [canonical_id, scene?.date || null, time, req.params.id]
+      )
+    }
+
     res.json({ ok: true })
   } catch (err) {
     console.error(err)

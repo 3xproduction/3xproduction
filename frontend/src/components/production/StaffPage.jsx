@@ -20,7 +20,7 @@ const ROLE_GROUPS = [
     label: 'Площадка',
     roles: [
       'project_director', 'production_designer', 'art_director_assistant',
-      'decorator', 'props_master', 'costumer',
+      'decorator', 'props_master', 'costumer', 'location_manager',
     ],
     color: 'green',
   },
