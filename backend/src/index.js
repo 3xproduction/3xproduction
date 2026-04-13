@@ -41,6 +41,9 @@ async function runMigrations() {
 
 const app = express()
 
+// Trust proxy (required for express-rate-limit behind Yandex Cloud load balancer)
+app.set('trust proxy', 1)
+
 // Security headers
 app.use(helmet({ contentSecurityPolicy: false }))
 
