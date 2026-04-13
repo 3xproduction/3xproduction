@@ -129,6 +129,8 @@ function App() {
         <Route path="/vehicles"                element={<PrivateRoute><VehiclesPage /></PrivateRoute>} />
 
         {/* Production routes */}
+        <Route path="/production" element={<Navigate to="/production/documents" replace />} />
+        <Route path="/production/"element={<Navigate to="/production/documents" replace />} />
         <Route path="/production/requests"      element={<ProductionRoute><RequestsProductionPage /></ProductionRoute>} />
         <Route path="/production/documents"    element={<ProductionRoute><DocumentsPage /></ProductionRoute>} />
         <Route path="/production/documents/:projectId/:docId" element={<ProductionRoute><DocumentViewer /></ProductionRoute>} />
