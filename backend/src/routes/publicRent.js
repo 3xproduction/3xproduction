@@ -8,6 +8,47 @@ const { uploadFile } = require('../services/r2')
 const publicLimiter = rateLimit({ windowMs: 60_000, max: 20, standardHeaders: true, legacyHeaders: false })
 router.use(publicLimiter)
 
+// GET /public/inn/:inn — proxy to FNS EGRUL for company lookup by INN
+router.get('/inn/:inn', async (req, res) => {
+  const inn = req.params.inn.replace(/\D/g, '')
+  if (inn.length !== 10 && inn.length !== 12) {
+    return res.status(400).json({ error: 'ИНН должен быть 10 или 12 цифр' })
+  }
+  try {
+    // Step 1: get search token from FNS
+    const searchRes = await fetch('https://egrul.nalog.ru/', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ query: inn }),
+    })
+    const searchData = await searchRes.json()
+    const token = searchData.t
+    if (!token) return res.json({ found: false })
+
+    // Step 2: wait and fetch result
+    await new Promise(r => setTimeout(r, 1500))
+    const resultRes = await fetch(`https://egrul.nalog.ru/search-result/${token}`)
+    const resultData = await resultRes.json()
+    const row = resultData.rows?.[0]
+
+    if (!row) return res.json({ found: false })
+
+    res.json({
+      found: true,
+      name: row.c || row.n || '',         // short or full name
+      fullName: row.n || '',               // full name
+      director: (row.g || '').replace(/^[^:]+:\s*/, ''), // strip role prefix
+      inn: row.i || inn,
+      kpp: row.p || '',
+      ogrn: row.o || '',
+      region: row.rn || '',
+    })
+  } catch (err) {
+    console.error('FNS lookup error:', err.message)
+    res.status(502).json({ error: 'Ошибка запроса к ФНС' })
+  }
+})
+
 // GET /public/warehouse/:token/my-deals — external user's deals (by phone)
 router.get('/warehouse/:token/my-deals', async (req, res) => {
   const { phone } = req.query

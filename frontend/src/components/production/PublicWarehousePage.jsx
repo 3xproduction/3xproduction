@@ -623,20 +623,16 @@ function InnInput({ value, onChange, onCompanyFound }) {
     setError('')
     setInfo(null)
     try {
-      const res = await fetch('https://suggestions.dadata.ru/suggestions/api/4_1/rs/findById/party', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'Authorization': 'Token 3ee0477e6a09dc2d22b9dade4c5a50ef4e2e8bc3' },
-        body: JSON.stringify({ query: inn }),
-      })
+      const res = await fetch(`${BASE}/public/inn/${inn}`)
       const data = await res.json()
-      const s = data.suggestions?.[0]
-      if (s) {
+      if (data.found) {
         const found = {
-          name: s.value || '',
-          address: s.data?.address?.unrestricted_value || s.data?.address?.value || '',
-          kpp: s.data?.kpp || '',
-          ogrn: s.data?.ogrn || '',
-          director: s.data?.management?.name || '',
+          name: data.name || data.fullName || '',
+          fullName: data.fullName || '',
+          address: data.region || '',
+          kpp: data.kpp || '',
+          ogrn: data.ogrn || '',
+          director: data.director || '',
         }
         setInfo(found)
         onCompanyFound?.(found)
