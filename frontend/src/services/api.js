@@ -152,12 +152,14 @@ export const rent = {
   status: (id, status)  => request('PUT',  `/rent/${id}/status`, { status }),
   return: (id, body)    => request('POST', `/rent/${id}/return`, body),
   generateLink: ()      => request('POST', '/rent/public/generate-link'),
+  review: (id, body)    => request('PUT',  `/rent/${id}/review`, body),
 }
 
 // ─── Public (no auth) ────────────────────────────────────────────────────────
 export const publicApi = {
   catalog: (token)       => request('GET',  `/public/warehouse/${token}`),
   sendRequest: (token, body) => request('POST', `/public/warehouse/${token}/request`, body),
+  submitCart:   (token, body) => request('POST', `/public/warehouse/${token}/cart-request`, body),
 }
 
 // ─── Projects ────────────────────────────────────────────────────────────────

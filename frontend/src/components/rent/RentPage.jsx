@@ -12,7 +12,7 @@ import PhotoUpload from '../shared/PhotoUpload'
 import { categoryLabel, CATEGORIES_FILTER } from '../../constants/categories'
 import { rent as rentApi, units as unitsApi, warehouses as warehousesApi } from '../../services/api'
 
-const DEAL_FILTERS = ['Все', 'Активные', 'Завершённые', 'Сдали']
+const DEAL_FILTERS = ['Все', 'Запросы', 'Активные', 'Завершённые', 'Сдали']
 
 export default function RentPage() {
   const { user } = useAuth()
@@ -30,6 +30,7 @@ export default function RentPage() {
 
   const filtered = deals.filter(d => {
     if (dealFilter === 'Все') return true
+    if (dealFilter === 'Запросы') return d.status === 'pending_review'
     if (dealFilter === 'Активные') return d.status === 'active' || d.status === 'overdue'
     if (dealFilter === 'Завершённые') return d.status === 'done'
     if (dealFilter === 'Сдали') return d.type === 'out'
@@ -63,17 +64,20 @@ export default function RentPage() {
 }
 
 function DealsList({ deals, allDeals, filter, setFilter, loading, onRefresh }) {
+  const pendingCount = allDeals.filter(d => d.status === 'pending_review').length
   const activeCount = allDeals.filter(d => d.status === 'active').length
-  const monthSum = allDeals.filter(d => d.status !== 'cancelled').reduce((a, d) => a + (Number(d.price_total) || 0), 0)
+  const monthSum = allDeals.filter(d => d.status !== 'cancelled' && d.status !== 'pending_review').reduce((a, d) => a + (Number(d.price_total) || 0), 0)
   const overdueCount = allDeals.filter(d => d.status === 'overdue').length
   const [returnDeal, setReturnDeal] = useState(null)
+  const [reviewDeal, setReviewDeal] = useState(null)
 
   return (
     <div>
       <div className="resp-3-col" style={{ marginBottom: 24 }}>
+        {pendingCount > 0 && <StatCard icon="📋" label="Новых запросов" value={pendingCount} color="amber" />}
         <StatCard icon="🤝" label="Активных сделок" value={activeCount} color="blue" />
         <StatCard icon="💰" label="Выручка" value={monthSum.toLocaleString('ru-RU') + ' ₽'} color="green" />
-        <StatCard icon="⚠️" label="Просрочено" value={overdueCount} color="red" />
+        {overdueCount > 0 && <StatCard icon="⚠️" label="Просрочено" value={overdueCount} color="red" />}
       </div>
 
       <div style={{ display: 'flex', gap: 6, marginBottom: 20, flexWrap: 'wrap' }}>
@@ -112,12 +116,23 @@ function DealsList({ deals, allDeals, filter, setFilter, loading, onRefresh }) {
             <div style={{ flex: 1, minWidth: 140 }}>
               <div style={{ fontWeight: 500, fontSize: 14 }}>{d.counterparty_name}</div>
               <div style={{ fontSize: 12, color: 'var(--muted)', marginTop: 2 }}>
-                {d.counterparty_type === 'company' ? 'Компания' : 'Физлицо'} · {d.type === 'out' ? 'Сдаём' : 'Берём'}
+                {d.status === 'pending_review'
+                  ? `${d.requester_project || 'Внешний запрос'} · ${d.counterparty_contact || ''}`
+                  : `${d.counterparty_type === 'company' ? 'Компания' : 'Физлицо'} · ${d.type === 'out' ? 'Сдаём' : 'Берём'}`
+                }
               </div>
+              {d.status === 'pending_review' && d.requester_message && (
+                <div style={{ fontSize: 11, color: 'var(--muted)', marginTop: 2, fontStyle: 'italic' }}>
+                  {d.requester_message.length > 80 ? d.requester_message.slice(0, 80) + '...' : d.requester_message}
+                </div>
+              )}
             </div>
 
             <div style={{ fontSize: 12, color: 'var(--muted)', flexShrink: 0 }}>
-              {new Date(d.period_start).toLocaleDateString('ru-RU')} — {new Date(d.period_end).toLocaleDateString('ru-RU')}
+              {d.period_start && d.period_end
+                ? `${new Date(d.period_start).toLocaleDateString('ru-RU')} — ${new Date(d.period_end).toLocaleDateString('ru-RU')}`
+                : d.status === 'pending_review' ? `${(d.unit_ids || []).length} ед.` : '—'
+              }
             </div>
 
             {d.price_total && (
@@ -126,13 +141,24 @@ function DealsList({ deals, allDeals, filter, setFilter, loading, onRefresh }) {
               </div>
             )}
 
-            <Badge color={d.status === 'active' ? 'blue' : d.status === 'done' ? 'green' : 'red'}>
-              {d.status === 'active' ? 'Активна' : d.status === 'done' ? 'Завершена' : d.status === 'overdue' ? 'Просрочено' : 'Отменена'}
+            <Badge color={d.status === 'pending_review' ? 'amber' : d.status === 'active' ? 'blue' : d.status === 'done' ? 'green' : 'red'}>
+              {d.status === 'pending_review' ? 'Ожидает' : d.status === 'active' ? 'Активна' : d.status === 'done' ? 'Завершена' : d.status === 'overdue' ? 'Просрочено' : 'Отменена'}
             </Badge>
             {d.sign_token && (
               <Badge color={d.sign_status === 'signed' ? 'green' : 'amber'}>
                 {d.sign_status === 'signed' ? '✓ Подписано' : 'Ожидает подписи'}
               </Badge>
+            )}
+            {d.status === 'pending_review' && (
+              <button
+                onClick={(e) => { e.stopPropagation(); setReviewDeal(d) }}
+                style={{
+                  padding: '5px 12px', fontSize: 12, fontWeight: 500,
+                  color: 'var(--blue)', background: 'var(--blue-dim)',
+                  border: '1px solid var(--blue)', borderRadius: 6, cursor: 'pointer',
+                }}>
+                Обработать
+              </button>
             )}
             {(d.status === 'active' || d.status === 'overdue') && (
               <button
@@ -154,6 +180,9 @@ function DealsList({ deals, allDeals, filter, setFilter, loading, onRefresh }) {
 
       {returnDeal && (
         <RentReturnModal deal={returnDeal} onClose={() => setReturnDeal(null)} onDone={() => { setReturnDeal(null); onRefresh() }} />
+      )}
+      {reviewDeal && (
+        <ReviewModal deal={reviewDeal} onClose={() => setReviewDeal(null)} onDone={() => { setReviewDeal(null); onRefresh() }} />
       )}
     </div>
   )
@@ -378,6 +407,121 @@ function RentReturnModal({ deal, onClose, onDone }) {
             <div style={{ fontSize: 13, color: 'var(--muted)' }}>Возврат оформлен, подписан обеими сторонами</div>
           </div>
         )}
+      </div>
+    </div>
+  )
+}
+
+function ReviewModal({ deal, onClose, onDone }) {
+  const [form, setForm] = useState({
+    period_start: '', period_end: '', price_total: '', deposit: '',
+    counterparty_email: '', counterparty_type: deal.counterparty_type || 'person',
+    inn: '', legal_address: '', extra_contact: '',
+  })
+  const [units, setUnits] = useState([])
+  const [saving, setSaving] = useState(false)
+  const [error, setError] = useState('')
+
+  useEffect(() => {
+    if (!deal.unit_ids?.length) return
+    unitsApi.list().then(d => {
+      const ids = deal.unit_ids.map(String)
+      setUnits((d.units || []).filter(u => ids.includes(String(u.id))))
+    }).catch(() => {})
+  }, [deal])
+
+  async function handleApprove() {
+    if (!form.period_start || !form.period_end) { setError('Укажите даты аренды'); return }
+    setSaving(true)
+    setError('')
+    try {
+      await rentApi.review(deal.id, {
+        period_start: form.period_start,
+        period_end: form.period_end,
+        price_total: form.price_total ? Number(form.price_total) : null,
+        deposit: form.deposit ? Number(form.deposit) : null,
+        counterparty_email: form.counterparty_email || null,
+        counterparty_type: form.counterparty_type,
+        inn: form.inn || null,
+        legal_address: form.legal_address || null,
+        extra_contact: form.extra_contact || null,
+      })
+      onDone()
+    } catch (err) {
+      setError(err.message || 'Ошибка обработки')
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  async function handleReject() {
+    setSaving(true)
+    try {
+      await rentApi.status(deal.id, 'cancelled')
+      onDone()
+    } catch (err) {
+      setError(err.message || 'Ошибка отклонения')
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  return (
+    <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.45)', zIndex: 400, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16 }}
+      onClick={onClose}>
+      <div style={{ background: 'var(--white)', borderRadius: 'var(--radius-card)', padding: 24, maxWidth: 520, width: '100%', maxHeight: '90vh', overflowY: 'auto' }}
+        onClick={e => e.stopPropagation()}>
+
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 20 }}>
+          <div style={{ fontWeight: 600, fontSize: 16 }}>Обработка заявки</div>
+          <button onClick={onClose} style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--muted)' }}>✕</button>
+        </div>
+
+        {/* Requester info */}
+        <div style={{ background: 'var(--bg)', borderRadius: 'var(--radius-btn)', padding: '14px 16px', marginBottom: 16 }}>
+          <div style={{ fontSize: 13, fontWeight: 500, marginBottom: 8, color: 'var(--text)' }}>Заявитель</div>
+          <div style={{ fontSize: 13 }}>{deal.requester_name || deal.counterparty_name}</div>
+          <div style={{ fontSize: 12, color: 'var(--muted)' }}>{deal.requester_phone || deal.counterparty_contact}</div>
+          {deal.requester_project && <div style={{ fontSize: 12, color: 'var(--muted)' }}>Проект: {deal.requester_project}</div>}
+          {deal.requester_message && <div style={{ fontSize: 12, color: 'var(--muted)', marginTop: 4, fontStyle: 'italic' }}>{deal.requester_message}</div>}
+        </div>
+
+        {/* Units */}
+        <div style={{ marginBottom: 16 }}>
+          <div style={{ fontSize: 13, fontWeight: 500, marginBottom: 8 }}>Запрошенные единицы ({(deal.unit_ids || []).length})</div>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+            {units.map(u => (
+              <div key={u.id} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '6px 10px', border: '1px solid var(--border)', borderRadius: 6, fontSize: 13 }}>
+                {u.photos?.[0] && <img src={u.photos[0].url || u.photos[0]} alt="" style={{ width: 32, height: 32, objectFit: 'cover', borderRadius: 4 }} />}
+                <div style={{ flex: 1, fontWeight: 500 }}>{u.name}</div>
+                <div style={{ fontSize: 11, color: 'var(--muted)' }}>{u.category}</div>
+              </div>
+            ))}
+            {units.length === 0 && <div style={{ fontSize: 12, color: 'var(--muted)' }}>{(deal.unit_ids || []).length} единиц</div>}
+          </div>
+        </div>
+
+        {/* Form */}
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10, marginBottom: 0 }}>
+          <Input label="Начало аренды *" type="date" value={form.period_start} onChange={e => setForm(f => ({ ...f, period_start: e.target.value }))} />
+          <Input label="Конец аренды *" type="date" value={form.period_end} onChange={e => setForm(f => ({ ...f, period_end: e.target.value }))} />
+        </div>
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10, marginBottom: 0 }}>
+          <Input label="Цена (руб)" type="number" value={form.price_total} onChange={e => setForm(f => ({ ...f, price_total: e.target.value }))} placeholder="0" />
+          <Input label="Залог (руб)" type="number" value={form.deposit} onChange={e => setForm(f => ({ ...f, deposit: e.target.value }))} placeholder="0" />
+        </div>
+        <Input label="Email контрагента" type="email" value={form.counterparty_email} onChange={e => setForm(f => ({ ...f, counterparty_email: e.target.value }))} placeholder="email@example.com" />
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10, marginBottom: 0 }}>
+          <Input label="ИНН" value={form.inn} onChange={e => setForm(f => ({ ...f, inn: e.target.value }))} placeholder="" />
+          <Input label="Юр. адрес" value={form.legal_address} onChange={e => setForm(f => ({ ...f, legal_address: e.target.value }))} placeholder="" />
+        </div>
+
+        {error && <div style={{ color: 'var(--red)', fontSize: 13, marginBottom: 12 }}>{error}</div>}
+
+        <div style={{ display: 'flex', gap: 8, marginTop: 8 }}>
+          <Button variant="danger" fullWidth onClick={handleReject} loading={saving}>Отклонить</Button>
+          <Button fullWidth onClick={handleApprove} loading={saving}>Подтвердить</Button>
+        </div>
       </div>
     </div>
   )

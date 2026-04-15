@@ -4,10 +4,10 @@ import { Bell, Plus, Package, ArrowRightLeft, AlertTriangle, Clock, MapPin } fro
 import WarehouseLayout from './WarehouseLayout'
 import Badge from '../shared/Badge'
 import Button from '../shared/Button'
-import { units as unitsApi, requests as requestsApi, issuances as issuancesApi, rent as rentApi } from '../../services/api'
+import { units as unitsApi, requests as requestsApi, issuances as issuancesApi } from '../../services/api'
 import { useNotifications } from '../../hooks/useNotifications'
 import { useAuth } from '../../hooks/useAuth'
-import { ROLES } from '../../constants/roles'
+// roles import removed — public link moved to UnitsPage
 
 const css = `
 .dash-page { padding: 28px 32px; max-width: 1100px; }
@@ -123,10 +123,8 @@ const today = new Date().toLocaleDateString('ru-RU', { weekday: 'long', day: 'nu
 
 export default function DashboardPage() {
   const navigate = useNavigate()
-  const { user } = useAuth()
+  useAuth()
   const { items: notifs, unreadCount } = useNotifications()
-  const [publicLink, setPublicLink] = useState('')
-  const [linkCopied, setLinkCopied] = useState(false)
   const [stats, setStats] = useState({ on_stock: 0, issued: 0, overdue: 0, pending: 0, no_cell: 0 })
   const [reqs, setReqs] = useState([])
   const [activeIssuances, setActiveIssuances] = useState([])
@@ -168,17 +166,6 @@ export default function DashboardPage() {
             <p className="dash-sub">{today}</p>
           </div>
           <div className="dash-header-actions">
-            {ROLES[user?.role]?.canPublicLink && (
-              <Button variant="secondary" onClick={async () => {
-                try {
-                  const data = await rentApi.generateLink()
-                  const url = data.url || data.link
-                  if (url) setPublicLink(`${window.location.origin}${url}`)
-                } catch (e) { alert(e.message || 'Ошибка') }
-              }}>
-                Публичная ссылка
-              </Button>
-            )}
             <Button variant="primary" onClick={() => navigate('/units?add=1')}>
               <Plus size={15} />
               Новое
@@ -274,23 +261,6 @@ export default function DashboardPage() {
           </div>
         </div>
       </div>
-      {publicLink && (
-        <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.45)', zIndex: 500, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16 }}
-          onClick={() => { setPublicLink(''); setLinkCopied(false) }}>
-          <div style={{ background: 'var(--white)', borderRadius: 'var(--radius-card)', padding: 24, maxWidth: 440, width: '100%' }}
-            onClick={e => e.stopPropagation()}>
-            <div style={{ fontWeight: 600, fontSize: 16, marginBottom: 8 }}>Публичная ссылка на склад</div>
-            <div style={{ fontSize: 13, color: 'var(--muted)', marginBottom: 16 }}>Отправьте эту ссылку для просмотра склада и подачи заявки</div>
-            <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 16 }}>
-              <input readOnly value={publicLink} style={{ flex: 1, height: 38, padding: '0 10px', border: '1px solid var(--border)', borderRadius: 'var(--radius-btn)', fontSize: 12, background: 'var(--bg)', fontFamily: 'monospace' }} />
-              <Button onClick={() => { navigator.clipboard.writeText(publicLink); setLinkCopied(true) }}>
-                {linkCopied ? '✓ Скопировано' : 'Копировать'}
-              </Button>
-            </div>
-            <Button variant="secondary" fullWidth onClick={() => { setPublicLink(''); setLinkCopied(false) }}>Закрыть</Button>
-          </div>
-        </div>
-      )}
     </WarehouseLayout>
   )
 }

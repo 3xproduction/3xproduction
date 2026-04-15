@@ -139,6 +139,94 @@ router.get('/:id', verifyJWT, checkRole(...RENT_ROLES, 'producer'), async (req, 
   }
 })
 
+// PUT /rent/:id/review — process a pending_review deal (approve with dates/price)
+router.put('/:id/review', verifyJWT, checkRole(...RENT_ROLES), async (req, res) => {
+  const {
+    period_start, period_end, price_total, deposit,
+    counterparty_email, counterparty_type, inn, legal_address, extra_contact,
+  } = req.body
+
+  if (!period_start || !period_end) {
+    return res.status(400).json({ error: 'Укажите даты аренды' })
+  }
+
+  const client = await db.getClient()
+  try {
+    await client.query('BEGIN')
+
+    const { rows } = await client.query(`SELECT * FROM rent_deals WHERE id=$1`, [req.params.id])
+    if (!rows.length) { await client.query('ROLLBACK'); return res.status(404).json({ error: 'Deal not found' }) }
+    const deal = rows[0]
+    if (deal.status !== 'pending_review') {
+      await client.query('ROLLBACK')
+      return res.status(400).json({ error: 'Сделка уже обработана' })
+    }
+
+    // Generate contract PDF
+    const { rows: units } = await client.query(`SELECT * FROM units WHERE id = ANY($1)`, [deal.unit_ids])
+    const { rows: issuer } = await client.query(`SELECT name FROM users WHERE id=$1`, [req.user.id])
+
+    const pdfBytes = await createIssuancePDF({
+      items: units,
+      issuedTo: deal.counterparty_name,
+      issuedBy: issuer[0]?.name || 'Склад',
+      deadline: period_end,
+      issuerStamp: true,
+      deposit: deposit || null,
+    })
+    const contract_pdf_url = await uploadFile(Buffer.from(pdfBytes), 'contract.pdf', 'contracts')
+
+    const signToken = crypto.randomBytes(20).toString('hex')
+
+    // Update deal
+    await client.query(
+      `UPDATE rent_deals SET
+         period_start=$1, period_end=$2, price_total=$3, deposit=$4,
+         counterparty_email=$5, counterparty_type=COALESCE($6, counterparty_type),
+         inn=$7, legal_address=$8, extra_contact=$9,
+         contract_pdf_url=$10, sign_token=$11, sign_status='pending', status='active'
+       WHERE id=$12`,
+      [period_start, period_end, price_total || null, deposit || null,
+       counterparty_email || null, counterparty_type || null,
+       inn || null, legal_address || null, extra_contact || null,
+       contract_pdf_url, signToken, req.params.id]
+    )
+
+    // Lock units
+    for (const uid of deal.unit_ids) {
+      await client.query(`UPDATE units SET status='issued' WHERE id=$1`, [uid])
+    }
+
+    await client.query('COMMIT')
+
+    // Send email
+    if (counterparty_email) {
+      const frontendUrl = process.env.FRONTEND_URL || ''
+      const signUrl = `${frontendUrl}/sign/${signToken}`
+      sendEmail({
+        to: counterparty_email,
+        subject: 'Договор аренды — 3XMedia Production',
+        html: `
+          <p>Здравствуйте, ${deal.counterparty_name}!</p>
+          <p>Договор аренды оформлен. Период: ${period_start} — ${period_end}.</p>
+          <p>Сумма: ${price_total ? Number(price_total).toLocaleString('ru-RU') + ' ₽' : 'по договорённости'}.</p>
+          <p>PDF договора: <a href="${contract_pdf_url}">Скачать</a></p>
+          <p><strong>Для подписания договора перейдите по ссылке:</strong><br><a href="${signUrl}">${signUrl}</a></p>
+        `,
+      }).catch(err => console.error('Email send error:', err.message))
+    }
+
+    const { rows: updated } = await db.query(`SELECT * FROM rent_deals WHERE id=$1`, [req.params.id])
+    res.json({ deal: updated[0], contract_pdf_url })
+  } catch (err) {
+    await client.query('ROLLBACK')
+    console.error(err)
+    res.status(500).json({ error: 'Server error' })
+  } finally {
+    client.release()
+  }
+})
+
 // PUT /rent/:id/status
 router.put('/:id/status', verifyJWT, checkRole(...RENT_ROLES), async (req, res) => {
   const { status } = req.body
@@ -154,8 +242,8 @@ router.put('/:id/status', verifyJWT, checkRole(...RENT_ROLES), async (req, res) 
 
     await client.query(`UPDATE rent_deals SET status=$1 WHERE id=$2`, [status, req.params.id])
 
-    // If done and we were renting out — return units to stock
-    if (status === 'done' && deal.type === 'out') {
+    // If done/cancelled and we were renting out — return units to stock
+    if ((status === 'done' || status === 'cancelled') && deal.type === 'out' && deal.status === 'active') {
       for (const uid of deal.unit_ids) {
         await client.query(`UPDATE units SET status='on_stock' WHERE id=$1`, [uid])
       }

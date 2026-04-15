@@ -9,7 +9,7 @@ import Badge from '../shared/Badge'
 import Button from '../shared/Button'
 import { STATUS_LABEL, STATUS_COLOR } from '../../constants/statuses'
 import { ALL_CATEGORIES, CATEGORY_MAP, categoryLabel } from '../../constants/categories'
-import { units as unitsApi, warehouses as warehousesApi } from '../../services/api'
+import { units as unitsApi, warehouses as warehousesApi, rent as rentApi } from '../../services/api'
 import { useAuth } from '../../hooks/useAuth'
 import { useToast } from '../shared/Toast'
 
@@ -40,6 +40,9 @@ export default function UnitsPage() {
   const [statusFilter, setStatusFilter] = useState('Все статусы')
   const [allUnits, setAllUnits] = useState([])
   const [loading, setLoading] = useState(true)
+
+  const [publicLink, setPublicLink] = useState('')
+  const [linkCopied, setLinkCopied] = useState(false)
 
   const [showAdd, setShowAdd] = useState(false)
   const [addStep, setAddStep] = useState(1) // 1=photos, 2=details, 3=source+warehouse, 4=preview
@@ -237,10 +240,23 @@ export default function UnitsPage() {
       <div style={{ padding: '24px 32px' }}>
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 20, gap: 12, flexWrap: 'wrap' }}>
           <h1 style={{ fontSize: 20, fontWeight: 600 }}>Склад</h1>
-          <Button onClick={() => {
-            setForm(EMPTY_FORM); setPhotos([]); setAddError(''); setAddStep(1); setSizeType('clothing'); setShowAdd(true)
-            warehousesApi.list().then(d => setWarehouses(d.warehouses || [])).catch(() => {})
-          }}>+ Новое</Button>
+          <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+            {ROLES[user?.role]?.canPublicLink && (
+              <Button variant="secondary" onClick={async () => {
+                try {
+                  const data = await rentApi.generateLink()
+                  const url = data.url || data.link
+                  if (url) setPublicLink(`${window.location.origin}${url}`)
+                } catch (e) { alert(e.message || 'Ошибка') }
+              }}>
+                Публичная ссылка
+              </Button>
+            )}
+            <Button onClick={() => {
+              setForm(EMPTY_FORM); setPhotos([]); setAddError(''); setAddStep(1); setSizeType('clothing'); setShowAdd(true)
+              warehousesApi.list().then(d => setWarehouses(d.warehouses || [])).catch(() => {})
+            }}>+ Новое</Button>
+          </div>
         </div>
 
         <div style={{ position: 'relative', marginBottom: 14 }}>
@@ -637,6 +653,23 @@ export default function UnitsPage() {
       {cardId && <UnitCardModal unitId={cardId} onClose={() => setCardId(null)} onChanged={() => {
         unitsApi.list().then(d => setAllUnits(d.units || [])).catch(() => {})
       }} />}
+      {publicLink && (
+        <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.45)', zIndex: 500, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16 }}
+          onClick={() => { setPublicLink(''); setLinkCopied(false) }}>
+          <div style={{ background: 'var(--white)', borderRadius: 'var(--radius-card)', padding: 24, maxWidth: 440, width: '100%' }}
+            onClick={e => e.stopPropagation()}>
+            <div style={{ fontWeight: 600, fontSize: 16, marginBottom: 8 }}>Публичная ссылка на склад</div>
+            <div style={{ fontSize: 13, color: 'var(--muted)', marginBottom: 16 }}>Отправьте эту ссылку для просмотра склада и подачи заявки на аренду</div>
+            <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 16 }}>
+              <input readOnly value={publicLink} style={{ flex: 1, height: 38, padding: '0 10px', border: '1px solid var(--border)', borderRadius: 'var(--radius-btn)', fontSize: 12, background: 'var(--bg)', fontFamily: 'monospace' }} />
+              <Button onClick={() => { navigator.clipboard.writeText(publicLink); setLinkCopied(true) }}>
+                {linkCopied ? '✓ Скопировано' : 'Копировать'}
+              </Button>
+            </div>
+            <Button variant="secondary" fullWidth onClick={() => { setPublicLink(''); setLinkCopied(false) }}>Закрыть</Button>
+          </div>
+        </div>
+      )}
     </Layout>
   )
 }

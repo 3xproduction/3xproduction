@@ -57,6 +57,53 @@ router.post('/warehouse/:token/request', async (req, res) => {
   }
 })
 
+// POST /public/warehouse/:token/cart-request — external cart-based rental request
+router.post('/warehouse/:token/cart-request', async (req, res) => {
+  const { name, phone, project_name, unit_ids, message } = req.body
+  if (!name || !phone || !unit_ids?.length) {
+    return res.status(400).json({ error: 'Укажите имя, телефон и выберите хотя бы одну единицу' })
+  }
+
+  try {
+    const { rows: tkn } = await db.query(
+      `SELECT id FROM public_tokens WHERE token=$1 AND expires_at > NOW()`,
+      [req.params.token]
+    )
+    if (!tkn.length) return res.status(404).json({ error: 'Invalid or expired link' })
+
+    // Create rent deal with pending_review status
+    const { rows } = await db.query(
+      `INSERT INTO rent_deals
+         (type, counterparty_name, counterparty_type, counterparty_contact,
+          unit_ids, status, requester_name, requester_phone, requester_project, requester_message)
+       VALUES ('out', $1, 'person', $2, $3, 'pending_review', $1, $2, $4, $5)
+       RETURNING id`,
+      [name, phone, unit_ids, project_name || null, message || null]
+    )
+    const dealId = rows[0].id
+
+    // Notify warehouse directors
+    const { rows: directors } = await db.query(
+      `SELECT id FROM users WHERE role IN ('warehouse_director','warehouse_deputy')`
+    )
+    const unitCount = unit_ids.length
+    const projectLabel = project_name ? ` · Проект: ${project_name}` : ''
+    const text = `Новая заявка на аренду от ${name} (${phone})${projectLabel} — ${unitCount} ед.`
+    for (const u of directors) {
+      await db.query(
+        `INSERT INTO notifications (user_id, type, text, entity_id, entity_type)
+         VALUES ($1, 'new_request', $2, $3, 'unit')`,
+        [u.id, text, dealId]
+      )
+    }
+
+    res.json({ ok: true, deal_id: dealId })
+  } catch (err) {
+    console.error(err)
+    res.status(500).json({ error: 'Server error' })
+  }
+})
+
 // GET /public/sign/:token — public, get deal info for signing
 router.get('/sign/:token', async (req, res) => {
   try {
