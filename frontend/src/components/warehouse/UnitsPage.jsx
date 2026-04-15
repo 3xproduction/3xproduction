@@ -4,6 +4,7 @@ import WarehouseLayout from './WarehouseLayout'
 import ProductionLayout from '../production/ProductionLayout'
 import { ROLES } from '../../constants/roles'
 import UnitCardModal from '../shared/UnitCardModal'
+import ConfirmModal from '../shared/ConfirmModal'
 import Badge from '../shared/Badge'
 import Button from '../shared/Button'
 import { STATUS_LABEL, STATUS_COLOR } from '../../constants/statuses'
@@ -49,6 +50,9 @@ export default function UnitsPage() {
   const [addError, setAddError] = useState('')
   const [cardId, setCardId] = useState(null)
   const [recognizing, setRecognizing] = useState(false)
+  const [selectionMode, setSelectionMode] = useState(false)
+  const [selectedIds, setSelectedIds] = useState(new Set())
+  const [showBulkConfirm, setShowBulkConfirm] = useState(false)
   const fileRef = useRef()
   const camRef = useRef()
 
@@ -126,6 +130,35 @@ export default function UnitsPage() {
   }
 
   const isDirector = ['warehouse_director', 'warehouse_deputy'].includes(user?.role)
+
+  function toggleSelection(id) {
+    setSelectedIds(prev => {
+      const next = new Set(prev)
+      if (next.has(id)) next.delete(id); else next.add(id)
+      return next
+    })
+  }
+
+  function toggleAll() {
+    const allVisible = filtered.map(u => u.id)
+    const allSelected = allVisible.every(id => selectedIds.has(id))
+    setSelectedIds(allSelected ? new Set() : new Set(allVisible))
+  }
+
+  async function handleBulkDelete() {
+    const count = selectedIds.size
+    try {
+      await unitsApi.bulkDelete([...selectedIds])
+      setSelectionMode(false)
+      setSelectedIds(new Set())
+      setShowBulkConfirm(false)
+      const d = await unitsApi.list()
+      setAllUnits(d.units || [])
+      toast?.(`Удалено ${count} ед.`, 'success')
+    } catch (err) {
+      toast?.(err.message || 'Ошибка удаления', 'error')
+    }
+  }
 
   function compressImage(file, maxSize = 1024, quality = 0.5) {
     return new Promise((resolve) => {
@@ -222,7 +255,16 @@ export default function UnitsPage() {
           }}>
             {CATEGORIES.map(k => <option key={k} value={k}>{catOption(k)}</option>)}
           </select>
-          <span style={{ marginLeft: 'auto', fontSize: 13, color: 'var(--muted)', alignSelf: 'center' }}>{filtered.length} ед.</span>
+          {isDirector && (
+            <button onClick={() => { setSelectionMode(m => !m); setSelectedIds(new Set()) }}
+              style={{
+                marginLeft: 'auto', height: 36, padding: '0 14px', border: '1px solid var(--border)',
+                borderRadius: 'var(--radius-btn)', fontSize: 13, cursor: 'pointer',
+                background: selectionMode ? 'var(--accent)' : 'var(--white)',
+                color: selectionMode ? '#fff' : 'var(--text)',
+              }}>{selectionMode ? 'Отмена' : 'Выбрать'}</button>
+          )}
+          <span style={{ fontSize: 13, color: 'var(--muted)', alignSelf: 'center', ...(!isDirector && { marginLeft: 'auto' }) }}>{filtered.length} ед.</span>
           <div style={{ display: 'flex', gap: 2, alignSelf: 'center' }}>
             {[
               { mode: 'grid', icon: '▦', title: 'Карточки' },
@@ -251,13 +293,23 @@ export default function UnitsPage() {
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(170px, 1fr))', gap: 12 }}>
             {filtered.map(u => {
               const isWrittenOff = u.status === 'written_off'
+              const isSelected = selectedIds.has(u.id)
               return (
-                <div key={u.id} onClick={() => setCardId(u.id)} style={{
+                <div key={u.id} onClick={() => selectionMode ? toggleSelection(u.id) : setCardId(u.id)} style={{
                   background: isWrittenOff ? 'var(--bg-secondary)' : 'var(--card)',
-                  borderRadius: 'var(--radius-card)', border: '1px solid var(--border)',
+                  borderRadius: 'var(--radius-card)', border: isSelected ? '2px solid var(--accent)' : '1px solid var(--border)',
                   filter: isWrittenOff ? 'grayscale(1)' : 'none', opacity: isWrittenOff ? 0.6 : 1,
-                  cursor: 'pointer', overflow: 'hidden',
+                  cursor: 'pointer', overflow: 'hidden', position: 'relative',
                 }}>
+                  {selectionMode && (
+                    <div onClick={e => { e.stopPropagation(); toggleSelection(u.id) }} style={{
+                      position: 'absolute', top: 8, left: 8, zIndex: 2, width: 22, height: 22,
+                      borderRadius: '50%', border: isSelected ? 'none' : '2px solid #ccc',
+                      background: isSelected ? 'var(--accent)' : '#fff',
+                      display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer',
+                      boxShadow: '0 1px 3px rgba(0,0,0,0.15)',
+                    }}>{isSelected && <span style={{ color: '#fff', fontSize: 13, fontWeight: 700, lineHeight: 1 }}>✓</span>}</div>
+                  )}
                   <div style={{
                     aspectRatio: '1', background: 'var(--bg)', display: 'flex',
                     alignItems: 'center', justifyContent: 'center', fontSize: 40, overflow: 'hidden',
@@ -283,14 +335,23 @@ export default function UnitsPage() {
             {filtered.map(u => {
               const isWrittenOff = u.status === 'written_off'
               const photo = u.photo_url
+              const isSelected = selectedIds.has(u.id)
               return (
                 <div key={u.id} style={{
                   display: 'flex', alignItems: 'center', gap: 14, padding: '14px 16px',
                   background: isWrittenOff ? 'var(--bg-secondary)' : 'var(--card)',
-                  borderRadius: 'var(--radius-card)', border: '1px solid var(--border)',
+                  borderRadius: 'var(--radius-card)', border: isSelected ? '2px solid var(--accent)' : '1px solid var(--border)',
                   filter: isWrittenOff ? 'grayscale(1)' : 'none', opacity: isWrittenOff ? 0.6 : 1,
                   cursor: 'pointer', position: 'relative',
-                }} onClick={() => setCardId(u.id)}>
+                }} onClick={() => selectionMode ? toggleSelection(u.id) : setCardId(u.id)}>
+                  {selectionMode && (
+                    <div onClick={e => { e.stopPropagation(); toggleSelection(u.id) }} style={{
+                      width: 22, height: 22, borderRadius: '50%', flexShrink: 0,
+                      border: isSelected ? 'none' : '2px solid #ccc',
+                      background: isSelected ? 'var(--accent)' : '#fff',
+                      display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer',
+                    }}>{isSelected && <span style={{ color: '#fff', fontSize: 13, fontWeight: 700, lineHeight: 1 }}>✓</span>}</div>
+                  )}
                   <div style={{
                     width: 48, height: 48, borderRadius: 8, flexShrink: 0,
                     background: 'var(--bg)', border: '1px solid var(--border)',
@@ -324,13 +385,22 @@ export default function UnitsPage() {
           <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
             {filtered.map(u => {
               const isWrittenOff = u.status === 'written_off'
+              const isSelected = selectedIds.has(u.id)
               return (
-                <div key={u.id} onClick={() => setCardId(u.id)} style={{
+                <div key={u.id} onClick={() => selectionMode ? toggleSelection(u.id) : setCardId(u.id)} style={{
                   display: 'flex', alignItems: 'center', gap: 12, padding: '8px 12px',
-                  background: isWrittenOff ? 'var(--bg-secondary)' : 'var(--card)',
+                  background: isWrittenOff ? 'var(--bg-secondary)' : isSelected ? 'rgba(59,130,246,0.06)' : 'var(--card)',
                   borderRadius: 'var(--radius-btn)', cursor: 'pointer',
                   filter: isWrittenOff ? 'grayscale(1)' : 'none', opacity: isWrittenOff ? 0.6 : 1,
                 }}>
+                  {selectionMode && (
+                    <div onClick={e => { e.stopPropagation(); toggleSelection(u.id) }} style={{
+                      width: 20, height: 20, borderRadius: '50%', flexShrink: 0,
+                      border: isSelected ? 'none' : '2px solid #ccc',
+                      background: isSelected ? 'var(--accent)' : '#fff',
+                      display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer',
+                    }}>{isSelected && <span style={{ color: '#fff', fontSize: 12, fontWeight: 700, lineHeight: 1 }}>✓</span>}</div>
+                  )}
                   <div style={{ flex: 1, minWidth: 0, fontSize: 13, fontWeight: 500, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', color: isWrittenOff ? 'var(--muted)' : 'var(--text)', textDecoration: isWrittenOff ? 'line-through' : 'none' }}>{u.name}</div>
                   {u.serial && <span style={{ fontSize: 12, color: 'var(--muted)', flexShrink: 0 }}>{u.serial}</span>}
                   <span style={{ fontSize: 12, color: 'var(--muted)', flexShrink: 0 }}>{categoryLabel(u.category)}</span>
@@ -340,7 +410,36 @@ export default function UnitsPage() {
             })}
           </div>
         )}
+        {/* Floating action bar */}
+        {selectionMode && selectedIds.size > 0 && (
+          <div style={{
+            position: 'fixed', bottom: 24, left: '50%', transform: 'translateX(-50%)', zIndex: 100,
+            background: '#fff', borderRadius: 16, padding: '12px 20px',
+            boxShadow: '0 4px 24px rgba(0,0,0,0.15)', display: 'flex', alignItems: 'center', gap: 14,
+            border: '1px solid var(--border)',
+          }}>
+            <span style={{ fontSize: 14, fontWeight: 500, whiteSpace: 'nowrap' }}>Выбрано: {selectedIds.size}</span>
+            <button onClick={toggleAll} style={{
+              height: 34, padding: '0 14px', border: '1px solid var(--border)',
+              borderRadius: 'var(--radius-btn)', fontSize: 13, cursor: 'pointer',
+              background: 'var(--white)', color: 'var(--text)',
+            }}>{filtered.length === selectedIds.size ? 'Снять все' : 'Выбрать все'}</button>
+            <button onClick={() => setShowBulkConfirm(true)} style={{
+              height: 34, padding: '0 14px', border: 'none',
+              borderRadius: 'var(--radius-btn)', fontSize: 13, cursor: 'pointer',
+              background: 'var(--red, #ef4444)', color: '#fff', fontWeight: 500,
+            }}>Удалить</button>
+          </div>
+        )}
       </div>
+
+      {/* Bulk delete confirm modal */}
+      <ConfirmModal
+        open={showBulkConfirm}
+        message={`Удалить ${selectedIds.size} единиц?`}
+        onConfirm={handleBulkDelete}
+        onCancel={() => setShowBulkConfirm(false)}
+      />
 
       {/* Add unit modal — 4-step wizard */}
       {showAdd && (

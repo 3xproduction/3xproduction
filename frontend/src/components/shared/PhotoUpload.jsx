@@ -36,7 +36,11 @@ export default function PhotoUpload({ label, onChange }) {
       }}
     >
       {preview ? (
-        <img src={preview} alt="" style={{ width: '100%', height: '100%', objectFit: 'contain' }} />
+        preview.startsWith('data:video') ? (
+          <video src={preview} style={{ width: '100%', height: '100%', objectFit: 'contain' }} controls />
+        ) : (
+          <img src={preview} alt="" style={{ width: '100%', height: '100%', objectFit: 'contain' }} />
+        )
       ) : (
         <>
           <span style={{ fontSize: 28, marginBottom: 8 }}>
@@ -55,7 +59,7 @@ export default function PhotoUpload({ label, onChange }) {
           display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 12,
         }}>✓</div>
       )}
-      <input ref={inputRef} type="file" accept="image/*" capture="environment"
+      <input ref={inputRef} type="file" accept="image/*,video/mp4,video/webm,video/quicktime"
         style={{ display: 'none' }} onChange={handleFile} />
     </div>
   )

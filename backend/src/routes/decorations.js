@@ -4,12 +4,12 @@ const db = require('../db')
 const { verifyJWT } = require('../middleware/auth')
 const { uploadFile } = require('../services/r2')
 
-const ALLOWED_IMAGE_TYPES = ['image/jpeg', 'image/png', 'image/webp']
+const ALLOWED_MEDIA_TYPES = ['image/jpeg', 'image/png', 'image/webp', 'video/mp4', 'video/webm', 'video/quicktime']
 const upload = multer({
   storage: multer.memoryStorage(),
-  limits: { fileSize: 20 * 1024 * 1024 },
+  limits: { fileSize: 100 * 1024 * 1024 },
   fileFilter: (req, file, cb) => {
-    cb(null, ALLOWED_IMAGE_TYPES.includes(file.mimetype))
+    cb(null, ALLOWED_MEDIA_TYPES.includes(file.mimetype))
   },
 })
 

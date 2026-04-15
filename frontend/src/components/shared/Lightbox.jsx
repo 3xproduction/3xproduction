@@ -69,6 +69,12 @@ const css = `
 }
 `
 
+function isVideoUrl(url) {
+  if (!url) return false
+  const lower = url.toLowerCase()
+  return lower.includes('.mp4') || lower.includes('.webm') || lower.includes('.mov')
+}
+
 export default function Lightbox({ photos = [], startIndex = 0, onClose }) {
   const [idx, setIdx] = useState(startIndex)
 
@@ -99,7 +105,11 @@ export default function Lightbox({ photos = [], startIndex = 0, onClose }) {
       <style>{css}</style>
       <div className="lb-overlay" onClick={e => { e.stopPropagation(); onClose() }}>
         <div onClick={e => e.stopPropagation()}>
-          <img className="lb-img" src={src} alt="" />
+          {isVideoUrl(src) ? (
+            <video className="lb-img" src={src} controls autoPlay style={{ outline: 'none' }} />
+          ) : (
+            <img className="lb-img" src={src} alt="" />
+          )}
         </div>
 
         <button className="lb-close" onClick={onClose}>
@@ -119,15 +129,20 @@ export default function Lightbox({ photos = [], startIndex = 0, onClose }) {
 
         {photos.length > 1 && (
           <div className="lb-thumbs">
-            {photos.map((p, i) => (
-              <img
-                key={i}
-                className={`lb-thumb${i === idx ? ' active' : ''}`}
-                src={typeof p === 'string' ? p : p?.url}
-                alt=""
-                onClick={e => { e.stopPropagation(); setIdx(i) }}
-              />
-            ))}
+            {photos.map((p, i) => {
+              const thumbSrc = typeof p === 'string' ? p : p?.url
+              return isVideoUrl(thumbSrc) ? (
+                <div key={i} className={`lb-thumb${i === idx ? ' active' : ''}`}
+                  style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', background: '#333', fontSize: 18 }}
+                  onClick={e => { e.stopPropagation(); setIdx(i) }}>
+                  {''}
+                </div>
+              ) : (
+                <img key={i} className={`lb-thumb${i === idx ? ' active' : ''}`}
+                  src={thumbSrc} alt=""
+                  onClick={e => { e.stopPropagation(); setIdx(i) }} />
+              )
+            })}
           </div>
         )}
 

@@ -67,6 +67,7 @@ export const units = {
   create:   (body) => request('POST', '/units', body),
   update:   (id, body) => request('PUT', `/units/${id}`, body),
   delete:   (id)       => request('DELETE', `/units/${id}`),
+  bulkDelete: (ids)    => request('POST', '/units/bulk-delete', { ids }),
   approvals: ()    => request('GET',  '/units/approvals'),
   approve:  (id, approval_id, valuation) => request('POST', `/units/${id}/approve`, { approval_id, valuation }),
   reject:   (id, approval_id, reason) => request('POST', `/units/${id}/reject`, { approval_id, reason }),

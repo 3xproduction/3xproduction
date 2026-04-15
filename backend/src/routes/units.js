@@ -6,12 +6,12 @@ const db     = require('../db')
 const { verifyJWT, checkRole } = require('../middleware/auth')
 const { uploadFile, deleteFile } = require('../services/r2')
 
-const ALLOWED_IMAGE_TYPES = ['image/jpeg', 'image/png', 'image/webp']
+const ALLOWED_MEDIA_TYPES = ['image/jpeg', 'image/png', 'image/webp', 'video/mp4', 'video/webm', 'video/quicktime']
 const upload = multer({
   storage: multer.memoryStorage(),
-  limits: { fileSize: 20 * 1024 * 1024 },
+  limits: { fileSize: 100 * 1024 * 1024 },
   fileFilter: (req, file, cb) => {
-    cb(null, ALLOWED_IMAGE_TYPES.includes(file.mimetype))
+    cb(null, ALLOWED_MEDIA_TYPES.includes(file.mimetype))
   },
 })
 
@@ -414,6 +414,41 @@ router.post('/:id/request-writeoff', verifyJWT, checkRole('warehouse_deputy', 'w
   } catch (err) {
     console.error(err)
     res.status(500).json({ error: 'Server error' })
+  }
+})
+
+// POST /units/bulk-delete — delete multiple units at once
+router.post('/bulk-delete', verifyJWT, checkRole('warehouse_director', 'warehouse_deputy'), async (req, res) => {
+  const { ids } = req.body
+  if (!Array.isArray(ids) || !ids.length) return res.status(400).json({ error: 'ids array required' })
+
+  const client = await db.getClient()
+  try {
+    await client.query('BEGIN')
+
+    // Delete photos from R2 for all units
+    const { rows: photos } = await client.query(
+      `SELECT url FROM unit_photos WHERE unit_id = ANY($1)`, [ids]
+    )
+    for (const p of photos) {
+      await deleteFile(p.url).catch(() => {})
+    }
+
+    // Clean up related records
+    await client.query(`DELETE FROM debts WHERE unit_id = ANY($1)`, [ids])
+    await client.query(`DELETE FROM approvals WHERE unit_id = ANY($1)`, [ids])
+    await client.query(`DELETE FROM unit_history WHERE unit_id = ANY($1)`, [ids])
+    await client.query(`DELETE FROM unit_photos WHERE unit_id = ANY($1)`, [ids])
+    const { rowCount } = await client.query(`DELETE FROM units WHERE id = ANY($1)`, [ids])
+
+    await client.query('COMMIT')
+    res.json({ ok: true, deleted: rowCount })
+  } catch (err) {
+    await client.query('ROLLBACK')
+    console.error(err)
+    res.status(500).json({ error: 'Server error' })
+  } finally {
+    client.release()
   }
 })
 
