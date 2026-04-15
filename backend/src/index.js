@@ -7,9 +7,19 @@ const fs          = require('fs')
 const path        = require('path')
 const { pool } = require('./db')
 
-// Run pending migrations on startup
+// Run pending migrations on startup (with retry for DNS resolution on cold start)
 async function runMigrations() {
-  const client = await pool.connect()
+  let client
+  for (let attempt = 1; attempt <= 5; attempt++) {
+    try {
+      client = await pool.connect()
+      break
+    } catch (err) {
+      console.log(`DB connect attempt ${attempt}/5 failed: ${err.code || err.message}`)
+      if (attempt === 5) throw err
+      await new Promise(r => setTimeout(r, 2000 * attempt))
+    }
+  }
   try {
     await client.query(`
       CREATE TABLE IF NOT EXISTS _migrations (
