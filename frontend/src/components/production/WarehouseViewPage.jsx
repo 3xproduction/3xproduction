@@ -33,6 +33,8 @@ export default function WarehouseViewPage() {
   const [cartSending, setCartSending] = useState(false)
   const [successPopup, setSuccessPopup] = useState(false)
   const [viewMode, setViewMode] = useState(() => localStorage.getItem('unitsViewMode') || 'grid')
+  const [publicLink, setPublicLink] = useState('')
+  const [linkCopied, setLinkCopied] = useState(false)
   const { user } = useAuth()
 
   useEffect(() => {
@@ -107,12 +109,8 @@ export default function WarehouseViewPage() {
                 try {
                   const data = await rentApi.generateLink()
                   const url = data.url || data.link
-                  if (url) {
-                    const full = `${window.location.origin}${url}`
-                    await navigator.clipboard.writeText(full)
-                    alert('Ссылка скопирована: ' + full)
-                  }
-                } catch (e) { alert(e.message || 'Ошибка') }
+                  if (url) setPublicLink(`${window.location.origin}${url}`)
+                } catch { /* silent */ }
               }}>Публичная ссылка</Button>
               <Button onClick={() => window.location.href = '/production/units?add=1'}>+ Новая единица</Button>
             </div>
@@ -369,6 +367,23 @@ export default function WarehouseViewPage() {
           fontWeight: 600, fontSize: 14, boxShadow: '0 4px 20px rgba(0,0,0,0.15)',
         }}>
           Заявка успешно оформлена
+        </div>
+      )}
+      {publicLink && (
+        <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.45)', zIndex: 500, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16 }}
+          onClick={() => { setPublicLink(''); setLinkCopied(false) }}>
+          <div style={{ background: 'var(--white)', borderRadius: 'var(--radius-card)', padding: 24, maxWidth: 440, width: '100%' }}
+            onClick={e => e.stopPropagation()}>
+            <div style={{ fontWeight: 600, fontSize: 16, marginBottom: 8 }}>Публичная ссылка на склад</div>
+            <div style={{ fontSize: 13, color: 'var(--muted)', marginBottom: 16 }}>Отправьте эту ссылку для просмотра склада и подачи заявки на аренду</div>
+            <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 16 }}>
+              <input readOnly value={publicLink} style={{ flex: 1, height: 38, padding: '0 10px', border: '1px solid var(--border)', borderRadius: 'var(--radius-btn)', fontSize: 12, background: 'var(--bg)', fontFamily: 'monospace' }} />
+              <Button onClick={() => { navigator.clipboard.writeText(publicLink); setLinkCopied(true) }}>
+                {linkCopied ? '✓ Скопировано' : 'Копировать'}
+              </Button>
+            </div>
+            <Button variant="secondary" fullWidth onClick={() => { setPublicLink(''); setLinkCopied(false) }}>Закрыть</Button>
+          </div>
         </div>
       )}
     </ProductionLayout>

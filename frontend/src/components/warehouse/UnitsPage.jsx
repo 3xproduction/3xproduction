@@ -247,7 +247,7 @@ export default function UnitsPage() {
                   const data = await rentApi.generateLink()
                   const url = data.url || data.link
                   if (url) setPublicLink(`${window.location.origin}${url}`)
-                } catch (e) { alert(e.message || 'Ошибка') }
+                } catch { /* silent */ }
               }}>
                 Публичная ссылка
               </Button>

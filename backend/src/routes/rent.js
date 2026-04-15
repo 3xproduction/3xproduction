@@ -352,7 +352,7 @@ router.post('/sign/:token', async (req, res) => {
 
 // Generate public token for warehouse (warehouse staff can share)
 router.post('/public/generate-link', verifyJWT,
-  checkRole('warehouse_director', 'warehouse_deputy', 'warehouse_staff'),
+  checkRole('warehouse_director', 'warehouse_deputy', 'warehouse_staff', 'producer'),
   async (req, res) => {
     const token = crypto.randomBytes(20).toString('hex')
     await db.query(
