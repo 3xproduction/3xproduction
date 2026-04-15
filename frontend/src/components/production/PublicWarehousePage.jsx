@@ -60,6 +60,7 @@ export default function PublicWarehousePage() {
   const [showConfirm, setShowConfirm] = useState(false)
   const [showSuccess, setShowSuccess] = useState(false)
   const [authError, setAuthError] = useState('')
+  const [selectedUnit, setSelectedUnit] = useState(null)
 
   const phoneValid = /^\+7\s?\d{3}\s?\d{3}\s?\d{2}\s?\d{2}$/.test(form.phone.trim()) || /^\+7\d{10}$/.test(form.phone.replace(/\s/g, ''))
   const emailValid = !form.email || /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(form.email)
@@ -320,10 +321,10 @@ export default function PublicWarehousePage() {
                     const added = inCart(u.id)
                     const available = u.status === 'on_stock'
                     return (
-                      <div key={u.id} className="pub-grid" style={{
+                      <div key={u.id} className="pub-grid" onClick={() => setSelectedUnit(u)} style={{
                         background: 'var(--white)', borderRadius: 'var(--radius-card)',
                         border: `1px solid ${added ? 'var(--accent)' : 'var(--border)'}`,
-                        overflow: 'hidden', transition: 'border-color 0.15s, box-shadow 0.15s',
+                        overflow: 'hidden', transition: 'border-color 0.15s, box-shadow 0.15s', cursor: 'pointer',
                       }}
                         onMouseEnter={e => e.currentTarget.style.boxShadow = '0 2px 8px rgba(0,0,0,0.06)'}
                         onMouseLeave={e => e.currentTarget.style.boxShadow = 'none'}
@@ -339,7 +340,7 @@ export default function PublicWarehousePage() {
                           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
                             <Badge color={available ? 'green' : 'muted'}>{available ? 'Доступно' : 'Занято'}</Badge>
                             {available && (
-                              <button onClick={() => toggleCart(u.id)} style={{
+                              <button onClick={e => { e.stopPropagation(); toggleCart(u.id) }} style={{
                                 display: 'flex', alignItems: 'center', gap: 4,
                                 fontSize: 12, color: added ? 'var(--red)' : 'var(--accent)', background: 'none',
                                 border: 'none', cursor: 'pointer', fontWeight: 500,
@@ -393,6 +394,51 @@ export default function PublicWarehousePage() {
                 </div>
               </div>
             )}
+          </div>
+        </div>
+      )}
+
+      {/* ─── UNIT DETAIL MODAL ─── */}
+      {selectedUnit && (
+        <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.45)', zIndex: 400, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16 }}
+          onClick={() => setSelectedUnit(null)}>
+          <div style={{ background: 'var(--white)', borderRadius: 'var(--radius-card)', padding: 0, maxWidth: 480, width: '100%', maxHeight: '85vh', overflowY: 'auto' }}
+            onClick={e => e.stopPropagation()}>
+            {/* Photo */}
+            {selectedUnit.photos?.[0] ? (
+              <img src={selectedUnit.photos[0]} alt="" style={{ width: '100%', maxHeight: 300, objectFit: 'cover' }} />
+            ) : (
+              <div style={{ height: 180, background: 'var(--bg)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                <Package size={48} style={{ color: 'var(--muted)', opacity: 0.3 }} />
+              </div>
+            )}
+            <div style={{ padding: '20px 24px' }}>
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 }}>
+                <h2 style={{ fontSize: 18, fontWeight: 600 }}>{selectedUnit.name}</h2>
+                <button onClick={() => setSelectedUnit(null)} style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--muted)', padding: 4 }}><X size={18} /></button>
+              </div>
+              <div style={{ display: 'flex', gap: 8, marginBottom: 12 }}>
+                <Badge color="muted">{categoryLabel(selectedUnit.category)}</Badge>
+                <Badge color={selectedUnit.status === 'on_stock' ? 'green' : 'muted'}>{selectedUnit.status === 'on_stock' ? 'Доступно' : 'Занято'}</Badge>
+                {selectedUnit.serial && <span style={{ fontSize: 12, color: 'var(--muted)' }}>{selectedUnit.serial}</span>}
+              </div>
+              {selectedUnit.description && (
+                <p style={{ fontSize: 13, color: 'var(--text)', lineHeight: 1.5, marginBottom: 16 }}>{selectedUnit.description}</p>
+              )}
+              {/* Photos gallery */}
+              {selectedUnit.photos?.length > 1 && (
+                <div style={{ display: 'flex', gap: 8, marginBottom: 16, overflowX: 'auto' }}>
+                  {selectedUnit.photos.map((url, i) => (
+                    <img key={i} src={url} alt="" style={{ width: 80, height: 80, objectFit: 'cover', borderRadius: 6, border: '1px solid var(--border)', flexShrink: 0 }} />
+                  ))}
+                </div>
+              )}
+              {selectedUnit.status === 'on_stock' && (
+                <Button fullWidth onClick={() => { toggleCart(selectedUnit.id); setSelectedUnit(null) }}>
+                  {inCart(selectedUnit.id) ? 'Убрать из корзины' : 'Добавить в корзину'}
+                </Button>
+              )}
+            </div>
           </div>
         </div>
       )}
