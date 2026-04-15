@@ -22,6 +22,67 @@ const anthropic = new Anthropic({
 
 const DIRECTOR_ROLES = ['warehouse_director', 'warehouse_deputy']
 
+// GET /units/export — export warehouse to Excel
+router.get('/export', verifyJWT, checkRole('warehouse_director', 'warehouse_deputy'), async (req, res) => {
+  try {
+    const ExcelJS = require('exceljs')
+    const { rows } = await db.query(
+      `SELECT u.name, u.category, u.serial, u.status, u.qty, u.valuation,
+              u.description, u.source, u.period, u.dimensions, u.materials, u.condition,
+              c.custom_name AS cell_name, c.code AS cell_code,
+              ws.name AS section_name, w.name AS warehouse_name
+       FROM units u
+       LEFT JOIN cells c ON c.id = u.cell_id
+       LEFT JOIN warehouse_sections ws ON ws.id = c.section_id
+       LEFT JOIN warehouses w ON w.id = u.warehouse_id
+       ORDER BY u.category, u.name`
+    )
+
+    const CATEGORY_MAP = {
+      costumes: 'Костюмы', props: 'Реквизит', art_fill: 'Художественное наполнение',
+      dummy: 'Бутафория', auto: 'Автомобили', furniture: 'Мебель', decor: 'Декор',
+      scenery: 'Декорации', tech: 'Техника', lighting: 'Осветительное оборудование',
+      sound: 'Звуковое оборудование', camera: 'Камерное оборудование',
+      makeup: 'Грим и косметика', clothing: 'Одежда', jewelry: 'Украшения', other: 'Прочее',
+    }
+    const STATUS_MAP = { on_stock: 'На складе', issued: 'Выдано', overdue: 'Просрочено', pending: 'На согласовании', written_off: 'Списано' }
+
+    const wb = new ExcelJS.Workbook()
+    const ws = wb.addWorksheet('Склад')
+    ws.columns = [
+      { header: 'Название', key: 'name', width: 30 },
+      { header: 'Категория', key: 'category', width: 20 },
+      { header: 'Инв. номер', key: 'serial', width: 15 },
+      { header: 'Статус', key: 'status', width: 15 },
+      { header: 'Кол-во', key: 'qty', width: 8 },
+      { header: 'Стоимость', key: 'valuation', width: 12 },
+      { header: 'Описание', key: 'description', width: 35 },
+      { header: 'Источник', key: 'source', width: 15 },
+      { header: 'Период/эпоха', key: 'period', width: 15 },
+      { header: 'Склад', key: 'warehouse_name', width: 20 },
+      { header: 'Полка', key: 'cell_name', width: 15 },
+    ]
+    ws.getRow(1).font = { bold: true }
+
+    for (const r of rows) {
+      ws.addRow({
+        ...r,
+        category: CATEGORY_MAP[r.category] || r.category,
+        status: STATUS_MAP[r.status] || r.status,
+        valuation: r.valuation ? Number(r.valuation) : '',
+        cell_name: r.cell_name || r.cell_code || '',
+      })
+    }
+
+    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
+    res.setHeader('Content-Disposition', 'attachment; filename=warehouse_export.xlsx')
+    await wb.xlsx.write(res)
+  } catch (err) {
+    console.error(err)
+    res.status(500).json({ error: 'Server error' })
+  }
+})
+
 // GET /units
 router.get('/', verifyJWT, async (req, res) => {
   const { warehouse, status, category, search, cell_id } = req.query

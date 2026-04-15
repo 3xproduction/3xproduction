@@ -7,6 +7,7 @@ import { units as unitsApi, warehouses as warehousesApi } from '../../services/a
 import { useAuth } from '../../hooks/useAuth'
 import { STATUS_LABEL, STATUS_COLOR } from '../../constants/statuses'
 import { categoryLabel } from '../../constants/categories'
+import ConfirmModal from './ConfirmModal'
 
 const WAREHOUSE_ROLES = ['warehouse_director', 'warehouse_deputy', 'warehouse_staff']
 const DIRECTOR_ROLES  = ['warehouse_director', 'warehouse_deputy']
@@ -274,19 +275,6 @@ export default function UnitCardModal({ unitId, onClose, onChanged }) {
             </div>
           )}
 
-          {/* Delete confirmation panel */}
-          {showDeleteConfirm && (
-            <div style={{ background: 'var(--bg)', borderRadius: 10, padding: 14, marginBottom: 8, border: '1px solid var(--red)' }}>
-              <div style={{ fontSize: 13, fontWeight: 500, marginBottom: 8 }}>Вы уверены, что хотите удалить позицию? Это действие необратимо.</div>
-              <div style={{ display: 'flex', gap: 8 }}>
-                <Button variant="secondary" fullWidth onClick={() => setShowDeleteConfirm(false)}>Отмена</Button>
-                <Button fullWidth style={{ background: 'var(--red)', borderColor: 'var(--red)' }} onClick={async () => {
-                  try { await unitsApi.delete(currentId); onChanged?.(); onClose() } catch (e) { alert(e.message || 'Ошибка') }
-                }}>Удалить</Button>
-              </div>
-            </div>
-          )}
-
           {/* Writeoff panel */}
           {showWriteoff && (
             <div style={{ background: 'var(--bg)', borderRadius: 10, padding: 14, border: '1px solid var(--border)' }}>
@@ -314,6 +302,17 @@ export default function UnitCardModal({ unitId, onClose, onChanged }) {
               )}
             </div>
           )}
+
+          <ConfirmModal
+            open={showDeleteConfirm}
+            title="Удалить единицу"
+            message={`Вы уверены, что хотите удалить «${unit?.name || 'позицию'}»? Это действие необратимо.`}
+            confirmLabel="Удалить"
+            onCancel={() => setShowDeleteConfirm(false)}
+            onConfirm={async () => {
+              try { await unitsApi.delete(currentId); onChanged?.(); onClose() } catch (e) { alert(e.message || 'Ошибка') }
+            }}
+          />
         </div>
       </div>
       {lightbox !== null && (

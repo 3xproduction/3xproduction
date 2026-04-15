@@ -252,6 +252,22 @@ export default function UnitsPage() {
                 Публичная ссылка
               </Button>
             )}
+            {isDirector && (
+              <Button variant="secondary" onClick={() => {
+                const base = import.meta.env.VITE_API_URL || ''
+                const token = localStorage.getItem('token')
+                const a = document.createElement('a')
+                a.href = `${base}/units/export`
+                a.download = 'warehouse_export.xlsx'
+                // Use fetch with auth header for download
+                fetch(`${base}/units/export`, { headers: { 'Authorization': `Bearer ${token}` } })
+                  .then(r => r.blob())
+                  .then(blob => { a.href = URL.createObjectURL(blob); a.click() })
+                  .catch(() => alert('Ошибка экспорта'))
+              }}>
+                Экспорт
+              </Button>
+            )}
             <Button onClick={() => {
               setForm(EMPTY_FORM); setPhotos([]); setAddError(''); setAddStep(1); setSizeType('clothing'); setShowAdd(true)
               warehousesApi.list().then(d => setWarehouses(d.warehouses || [])).catch(() => {})

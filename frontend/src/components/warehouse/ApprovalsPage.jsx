@@ -7,6 +7,7 @@ import Badge from '../shared/Badge'
 import { units as unitsApi } from '../../services/api'
 import { categoryLabel } from '../../constants/categories'
 import { useAuth } from '../../hooks/useAuth'
+import { useToast } from '../shared/Toast'
 
 const css = `
 .apr-page { padding: 28px 32px; max-width: 900px; }
@@ -72,12 +73,24 @@ export default function ApprovalsPage() {
   const [approvedMsg, setApprovedMsg] = useState(false)
   const [valuations, setValuations] = useState({})
 
+  const toast = useToast()
   const isDirector = ['warehouse_director', 'warehouse_deputy'].includes(user?.role)
 
   function load() {
     setLoading(true)
     unitsApi.approvals()
-      .then(data => setItems(data.approvals || []))
+      .then(data => {
+        const list = data.approvals || []
+        setItems(list)
+        // Prefill valuations from new_data if unit had price when added
+        const prefill = {}
+        for (const item of list) {
+          if (item.action === 'add' && item.new_data?.valuation && !valuations[item.approval_id]) {
+            prefill[item.approval_id] = String(item.new_data.valuation)
+          }
+        }
+        if (Object.keys(prefill).length) setValuations(v => ({ ...prefill, ...v }))
+      })
       .catch(() => {})
       .finally(() => setLoading(false))
   }
@@ -86,7 +99,7 @@ export default function ApprovalsPage() {
 
   async function approve(item) {
     if (item.action === 'add' && !valuations[item.approval_id]) {
-      alert('Укажите стоимость единицы')
+      toast?.('Укажите стоимость единицы', 'error')
       return
     }
     setProcessing(item.approval_id)
