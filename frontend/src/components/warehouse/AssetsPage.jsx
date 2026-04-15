@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import WarehouseLayout from './WarehouseLayout'
 import ProductionLayout from '../production/ProductionLayout'
 import { units as unitsApi, warehouses as warehousesApi } from '../../services/api'
@@ -13,21 +13,38 @@ export default function AssetsPage() {
   const [loading, setLoading] = useState(true)
   const [whFilter, setWhFilter] = useState('')
   const [search, setSearch] = useState('')
+  const [debouncedSearch, setDebouncedSearch] = useState('')
+  const searchTimer = useRef(null)
 
   useEffect(() => {
+    clearTimeout(searchTimer.current)
+    searchTimer.current = setTimeout(() => setDebouncedSearch(search), 300)
+    return () => clearTimeout(searchTimer.current)
+  }, [search])
+
+  useEffect(() => {
+    const stockParams = { status: 'on_stock' }
+    const issuedParams = { status: 'issued' }
+    if (debouncedSearch.trim()) {
+      stockParams.search = debouncedSearch.trim()
+      issuedParams.search = debouncedSearch.trim()
+    }
+    let cancelled = false
+    setLoading(true) // eslint-disable-line react-hooks/set-state-in-effect
     Promise.all([
-      unitsApi.list({ status: 'on_stock' }),
-      unitsApi.list({ status: 'issued' }),
+      unitsApi.list(stockParams),
+      unitsApi.list(issuedParams),
       warehousesApi.list(),
     ]).then(([stock, issued, wh]) => {
+      if (cancelled) return
       setItems([...(stock.units || []), ...(issued.units || [])])
       setWarehouses(wh.warehouses || [])
-    }).finally(() => setLoading(false))
-  }, [])
+    }).finally(() => { if (!cancelled) setLoading(false) })
+    return () => { cancelled = true }
+  }, [debouncedSearch])
 
   const filtered = items.filter(u => {
     if (whFilter && String(u.warehouse_id) !== whFilter) return false
-    if (search && !u.name.toLowerCase().includes(search.toLowerCase()) && !(u.serial || '').toLowerCase().includes(search.toLowerCase())) return false
     return true
   })
 

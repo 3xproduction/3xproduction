@@ -185,7 +185,10 @@ export const push = {
 
 // ─── Team ────────────────────────────────────────────────────────────────────
 export const team = {
-  list: () => request('GET', '/team'),
+  list: (params = {}) => {
+    const q = new URLSearchParams(params).toString()
+    return request('GET', `/team${q ? '?' + q : ''}`)
+  },
   remove: (userId) => request('DELETE', `/team/${userId}`),
   moveToProject: (userId, project_id) => request('PATCH', `/team/${userId}/project`, { project_id }),
   bulkMove: (project_id) => request('POST', '/team/bulk-move', { project_id }),
@@ -289,4 +292,13 @@ export const analytics = {
     return request('GET', `/analytics/producer${q}`)
   },
   project:   (projectId) => request('GET', `/analytics/project/${projectId}`),
+}
+
+// ─── Global Search ──────────────────────────────────────────────────────────
+export const search = {
+  query: (q, params = {}) => {
+    const p = new URLSearchParams({ q, ...params })
+    return request('GET', `/search?${p}`)
+  },
+  recent: () => request('GET', '/search/recent'),
 }

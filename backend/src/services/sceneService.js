@@ -2,25 +2,41 @@ const db = require('../db')
 
 /**
  * Normalize scene ID to canonical format: "{series}-{sceneNumber}" with no leading zeros.
+ * This is the SINGLE normalization function — all scene ID normalization MUST go through here.
+ * Do NOT use inline regex replacements elsewhere.
+ *
  * Examples:
- *   normalizeSceneId("022", 46) → "46-22"
- *   normalizeSceneId("46-022") → "46-22"
- *   normalizeSceneId("5", 46) → "46-5"
- *   normalizeSceneId("46-5") → "46-5"
+ *   normalizeSceneId("022", 46)     → "46-22"
+ *   normalizeSceneId("46-022")      → "46-22"
+ *   normalizeSceneId("46-0022")     → "46-22"
+ *   normalizeSceneId("5", 46)       → "46-5"
+ *   normalizeSceneId("46-5")        → "46-5"
+ *   normalizeSceneId("022")         → "22"
+ *   normalizeSceneId("01-15")       → "1-15"
+ *   normalizeSceneId(null)          → null
+ *   normalizeSceneId("abc")         → null
+ *   normalizeSceneId("46-22.", 46)  → "46-22" (trailing dot stripped)
  */
 function normalizeSceneId(rawId, series) {
-  if (!rawId) return null
-  const raw = String(rawId).trim()
-  // Already has series prefix: "46-022"
-  const hyphenMatch = raw.match(/^(\d+)-0*(\d+)$/)
+  if (!rawId && rawId !== 0) return null
+  const raw = String(rawId).trim().replace(/\.$/, '') // strip trailing dot from KPP
+  if (!raw) return null
+
+  // Format: "46-022", "46-0022", "1-15"
+  const hyphenMatch = raw.match(/^(\d+)\s*-\s*0*(\d+)$/)
   if (hyphenMatch) {
-    return `${parseInt(hyphenMatch[1])}-${parseInt(hyphenMatch[2])}`
+    const s = parseInt(hyphenMatch[1])
+    const n = parseInt(hyphenMatch[2])
+    return n ? `${s}-${n}` : null
   }
-  // Just scene number: "022"
+
+  // Just scene number: "022", "5", "0022"
   const sceneNum = parseInt(raw.replace(/^0+/, '') || '0')
   if (!sceneNum) return null
+
   if (series) {
-    return `${parseInt(series)}-${sceneNum}`
+    const s = parseInt(series)
+    return s ? `${s}-${sceneNum}` : String(sceneNum)
   }
   return String(sceneNum)
 }
@@ -154,8 +170,9 @@ async function upsertScenesFromScenario(projectId, parsedContent, documentId, se
  * Get lookup maps from the scenes table for a project.
  * Falls back to reading from KPP parsed_content if scenes table is empty.
  */
-async function getSceneLookupMaps(projectId) {
-  const { rows } = await db.query(
+async function getSceneLookupMaps(projectId, client) {
+  const q = client || db
+  const { rows } = await q.query(
     `SELECT canonical_id, date, day_number, time_slot, scenario_text
      FROM scenes WHERE project_id = $1`,
     [projectId]
@@ -176,7 +193,7 @@ async function getSceneLookupMaps(projectId) {
 
   // FALLBACK: if scenes table is empty, read directly from latest KPP parsed_content
   if (!Object.keys(dateMap).length) {
-    const { rows: kd } = await db.query(
+    const { rows: kd } = await q.query(
       `SELECT parsed_content FROM documents WHERE project_id=$1 AND type='kpp' AND parsed_content IS NOT NULL ORDER BY version DESC LIMIT 1`,
       [projectId]
     )
@@ -197,7 +214,7 @@ async function getSceneLookupMaps(projectId) {
       }
     }
     // Also read scenario texts from latest scenario document
-    const { rows: sd } = await db.query(
+    const { rows: sd } = await q.query(
       `SELECT parsed_content, original_name FROM documents WHERE project_id=$1 AND type='scenario' AND parsed_content IS NOT NULL ORDER BY version DESC LIMIT 1`,
       [projectId]
     )

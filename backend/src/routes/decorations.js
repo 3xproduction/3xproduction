@@ -27,8 +27,19 @@ router.get('/', verifyJWT, async (req, res) => {
     const params = []
     if (type) { params.push(type); q += ` AND d.type = $${params.length}` }
     if (status) { params.push(status); q += ` AND d.status = $${params.length}` }
-    if (search) { params.push(`%${search}%`); q += ` AND (d.name ILIKE $${params.length} OR d.description ILIKE $${params.length})` }
-    q += ` ORDER BY d.created_at DESC`
+    if (search) {
+      const { buildSearchQuery } = require('../services/searchService')
+      const { tsqueryStr, originalQuery } = await buildSearchQuery(search)
+      params.push(tsqueryStr); const tsqIdx = params.length
+      params.push(originalQuery); const rawIdx = params.length
+      q += ` AND (d.search_vector @@ to_tsquery('ru_search', $${tsqIdx})
+             OR similarity(d.name, $${rawIdx}) > 0.2)`
+    }
+    if (search) {
+      q += ` ORDER BY ts_rank_cd(d.search_vector, to_tsquery('ru_search', $${params.length - 1})) DESC, d.created_at DESC`
+    } else {
+      q += ` ORDER BY d.created_at DESC`
+    }
     const { rows } = await db.query(q, params)
     res.json(rows)
   } catch (err) {

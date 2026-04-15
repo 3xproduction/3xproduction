@@ -136,9 +136,8 @@ async function parseScenario(buffer) {
     const leftHtml = cells[0] || ''
     const rightHtml = cells[1] || ''
 
-    // Strip HTML tags for text
+    // Strip HTML tags for left column text
     const leftText = stripHtml(leftHtml)
-    const rightText = stripHtml(rightHtml)
 
     // Parse scene header from left column
     const headerMatch = leftText.match(/^(\d+)\.\s+(НАТ|ИНТ|НАТ\/ИНТ|ИНТ\/НАТ)\s+(.+?)\.\s+(ДЕНЬ|НОЧЬ|УТРО|ВЕЧЕР|ДЕНЬ\/НОЧЬ)[.\s]+СД\s*(\d+)\s*\((\d{2}:\d{2})\)/i)
@@ -148,8 +147,8 @@ async function parseScenario(buffer) {
     const headerEnd = leftText.indexOf(')')
     const bodyText = headerEnd > 0 ? leftText.substring(headerEnd + 1).trim() : ''
 
-    // Parse right column metadata
-    const meta = parseRightColumn(rightText)
+    // Parse right column from RAW HTML (not stripped) — preserves <br/> as delimiters
+    const meta = parseRightColumn(rightHtml)
 
     scenes.push({
       id: headerMatch[1],
@@ -171,7 +170,7 @@ async function parseScenario(buffer) {
       stunts: meta.stunts,
       pyrotechnics: meta.pyrotechnics,
       consultant: meta.consultant,
-      decoration: [],
+      decoration: meta.decoration,
       locations: [headerMatch[3].trim()],
       notes: meta.notes,
       text: bodyText,
@@ -193,41 +192,137 @@ function stripHtml(html) {
     .trim()
 }
 
-function parseRightColumn(text) {
+// All known markers sorted by length (longest first to avoid partial matches)
+const SCENARIO_MARKERS = [
+  'Игровой транспорт', 'Спецэффекты', 'Персонажи', 'На экране',
+  'Декорации', 'Декорация', 'Каскадёры', 'Каскадеры', 'Пиротехника', 'Пиротехники',
+  'Консультант', 'Консультанты', 'Транспорт', 'Бутафория', 'Наполнение',
+  'Массовка', 'Реквизит', 'Костюмы', 'Костюм', 'Грим',
+]
+
+// How to parse content for each marker
+const MARKER_PARSE_TYPE = {
+  'Реквизит':          'comma_list',
+  'Бутафория':         'comma_list',
+  'Наполнение':        'comma_list',
+  'Костюм':            'comma_list',
+  'Костюмы':           'comma_list',
+  'Декорации':         'comma_list',
+  'Декорация':         'comma_list',
+  'Персонажи':         'newline_list',
+  'Массовка':          'newline_list',
+  'Игровой транспорт': 'newline_list',
+  'Транспорт':         'newline_list',
+  'На экране':         'newline_list',
+  'Спецэффекты':       'description',
+  'Грим':              'description',
+  'Каскадёры':         'description',
+  'Каскадеры':         'description',
+  'Пиротехника':       'description',
+  'Пиротехники':       'description',
+  'Консультант':       'description',
+  'Консультанты':      'description',
+}
+
+// Marker → which field in meta
+const MARKER_TO_FIELD = {
+  'Персонажи':         'characters',
+  'На экране':         'characters',
+  'Массовка':          'extras',
+  'Реквизит':          'props',
+  'Бутафория':         'props',
+  'Наполнение':        'props',
+  'Костюм':            'costumes',
+  'Костюмы':           'costumes',
+  'Грим':              'makeup',
+  'Игровой транспорт': 'vehicles',
+  'Транспорт':         'vehicles',
+  'Декорации':         'decoration',
+  'Декорация':         'decoration',
+  'Спецэффекты':       'stunts',
+  'Каскадёры':         'stunts',
+  'Каскадеры':         'stunts',
+  'Пиротехника':       'pyrotechnics',
+  'Пиротехники':       'pyrotechnics',
+  'Консультант':       'consultant',
+  'Консультанты':      'consultant',
+}
+
+/**
+ * Parse right column of scenario table.
+ * Accepts RAW HTML (before stripHtml) so we can use <br/> as reliable delimiter.
+ * Two-stage parsing: 1) split by markers, 2) parse content per marker type.
+ */
+function parseRightColumn(html) {
   const meta = { characters: [], extras: '', props: [], costumes: [], makeup: [], vehicles: [], stunts: [], pyrotechnics: [], consultant: [], decoration: [], notes: '' }
+  if (!html) return meta
+
+  // Stage 1: Convert HTML to text preserving line breaks
+  let text = html
+    .replace(/<br\s*\/?>/gi, '\n')
+    .replace(/<\/p>/gi, '\n')
+    .replace(/<\/div>/gi, '\n')
+    .replace(/<[^>]+>/g, '')
+    .replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&nbsp;/g, ' ')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim()
+
   if (!text) return meta
 
-  // Split by known markers (expanded to cover all possible scenario markers)
-  const parts = text.split(/(?=Персонажи:|Реквизит:|Бутафория:|Наполнение:|Костюм[ыи]?:|Грим:|(?:Игровой\s+)?[Тт]ранспорт:|Спецэффекты:|Пиротехник[аи]?:|Массовка:|Декораци[яи]?:|Каскад[её]р[ыи]?:|Консультант[ыи]?:)/i)
+  // Stage 2: Build regex for markers (longest first to avoid "Транспорт" matching before "Игровой транспорт")
+  const escaped = SCENARIO_MARKERS.map(m => m.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'))
+  const markerPattern = new RegExp(`(?:^|\\n)\\s*(${escaped.join('|')})\\s*:\\s*`, 'gi')
 
-  for (const part of parts) {
-    const t = part.trim()
-    if (/^Персонажи:/i.test(t)) {
-      meta.characters = t.replace(/^Персонажи:\s*/i, '').split(/[\n,]+/).map(s => s.trim()).filter(s => s && s.length > 1)
-    } else if (/^Реквизит:/i.test(t)) {
-      meta.props = t.replace(/^Реквизит:\s*/i, '').split(/,\s*/).map(s => s.trim()).filter(Boolean)
-    } else if (/^Бутафория:/i.test(t)) {
-      meta.props.push(...t.replace(/^Бутафория:\s*/i, '').split(/,\s*/).map(s => s.trim()).filter(Boolean))
-    } else if (/^Наполнение:/i.test(t)) {
-      meta.props.push(...t.replace(/^Наполнение:\s*/i, '').split(/,\s*/).map(s => s.trim()).filter(Boolean))
-    } else if (/^Костюм/i.test(t)) {
-      meta.costumes = t.replace(/^Костюм[ыи]?:\s*/i, '').split(/,\s*/).map(s => s.trim()).filter(Boolean)
-    } else if (/^Грим:/i.test(t)) {
-      meta.makeup = t.replace(/^Грим:\s*/i, '').split(/,\s*/).map(s => s.trim()).filter(Boolean)
-    } else if (/^(?:Игровой\s+)?[Тт]ранспорт:/i.test(t)) {
-      meta.vehicles = t.replace(/^(?:Игровой\s+)?[Тт]ранспорт:\s*/i, '').split(/[,\n]|\s{2,}/).map(s => s.trim()).filter(Boolean)
-    } else if (/^Спецэффекты:/i.test(t)) {
-      meta.pyrotechnics = t.replace(/^Спецэффекты:\s*/i, '').split(/,\s*/).map(s => s.trim()).filter(Boolean)
-    } else if (/^Пиротехник/i.test(t)) {
-      meta.pyrotechnics.push(...t.replace(/^Пиротехник[аи]?:\s*/i, '').split(/,\s*/).map(s => s.trim()).filter(Boolean))
-    } else if (/^Декораци/i.test(t)) {
-      meta.decoration = t.replace(/^Декораци[яи]?:\s*/i, '').split(/,\s*/).map(s => s.trim()).filter(Boolean)
-    } else if (/^Каскад/i.test(t)) {
-      meta.stunts = t.replace(/^Каскад[её]р[ыи]?:\s*/i, '').split(/,\s*/).map(s => s.trim()).filter(Boolean)
-    } else if (/^Консультант/i.test(t)) {
-      meta.consultant = t.replace(/^Консультант[ыи]?:\s*/i, '').split(/,\s*/).map(s => s.trim()).filter(Boolean)
-    } else if (/^Массовка:/i.test(t)) {
-      meta.extras = t.replace(/^Массовка:\s*/i, '').trim()
+  // Find all markers and their positions
+  const matches = []
+  let match
+  while ((match = markerPattern.exec(text)) !== null) {
+    matches.push({
+      marker: match[1],
+      contentStart: match.index + match[0].length,
+      matchStart: match.index,
+    })
+  }
+
+  if (!matches.length) return meta
+
+  // Stage 3: Extract content for each marker section
+  for (let i = 0; i < matches.length; i++) {
+    const start = matches[i].contentStart
+    const end = i + 1 < matches.length ? matches[i + 1].matchStart : text.length
+    const content = text.substring(start, end).trim()
+    if (!content) continue
+
+    // Find canonical marker name (case-insensitive lookup)
+    const rawMarker = matches[i].marker
+    const canonicalMarker = SCENARIO_MARKERS.find(m => m.toLowerCase() === rawMarker.toLowerCase()) || rawMarker
+    const parseType = MARKER_PARSE_TYPE[canonicalMarker] || 'comma_list'
+    const field = MARKER_TO_FIELD[canonicalMarker]
+    if (!field) continue
+
+    // Stage 4: Parse content based on marker type
+    if (parseType === 'comma_list') {
+      const items = content.split(/,/).map(s => s.trim()).filter(s => s && s.length > 0)
+      if (Array.isArray(meta[field])) {
+        meta[field].push(...items)
+      }
+    } else if (parseType === 'newline_list') {
+      const items = content.split(/\n/).map(s => s.trim()).filter(s => s && s.length > 1)
+      if (field === 'extras') {
+        meta.extras = items.join(', ')
+      } else if (Array.isArray(meta[field])) {
+        meta[field].push(...items)
+      }
+    } else if (parseType === 'description') {
+      // Store as single description string, not individual items
+      const desc = content.replace(/\n+/g, ' ').replace(/\s{2,}/g, ' ').trim()
+      if (field === 'extras') {
+        meta.extras = desc
+      } else if (Array.isArray(meta[field])) {
+        // For description types: store as ONE item (the full description)
+        // This prevents "Богатов стреляет в воздух" being split into 3 items
+        if (desc) meta[field].push(desc)
+      }
     }
   }
 
@@ -471,4 +566,4 @@ async function parseDocumentFile(buffer, originalName, docType) {
   throw new Error(`Unknown document type: ${docType}`)
 }
 
-module.exports = { parseDocumentFile, parseKpp, parseScenario, parseCallsheet }
+module.exports = { parseDocumentFile, parseKpp, parseScenario, parseCallsheet, parseRightColumn }

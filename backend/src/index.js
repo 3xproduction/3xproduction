@@ -47,6 +47,15 @@ app.set('trust proxy', 1)
 // Security headers
 app.use(helmet({ contentSecurityPolicy: false }))
 
+// Disable ETag caching for API responses — prevents stale data after mutations
+app.set('etag', false)
+app.use((req, res, next) => {
+  if (!req.path.match(/\.(js|css|png|jpg|svg|ico|woff2?)$/)) {
+    res.set('Cache-Control', 'no-store')
+  }
+  next()
+})
+
 // CORS — explicit origins, no wildcard
 app.use(cors({
   origin: process.env.FRONTEND_URL
@@ -103,6 +112,7 @@ app.use('/decorations',  require('./routes/decorations'))
 app.use('/vehicles',     require('./routes/vehicles'))
 app.use('/casting',      require('./routes/casting'))
 app.use('/scenes',       require('./routes/scenes'))
+app.use('/search',       require('./routes/search'))
 
 // POST /admin/reset-docs — clear documents and lists for fresh re-import
 app.post('/admin/reset-docs', require('./middleware/auth').verifyJWT, async (req, res) => {
@@ -179,7 +189,7 @@ app.post('/projects/:id/rebuild-positions', require('./middleware/auth').verifyJ
       consultant: 'consultant', locations: 'locations',
       decoration: 'decoration',
     }
-    const ALL_TYPES = ['props','art_fill','dummy','auto','decoration','costumes','makeup','stunts','pyrotechnics','consultant','locations']
+    const ALL_TYPES = ALL_CATEGORIES
 
     let totalImported = 0
     for (const doc of docs) {
@@ -201,9 +211,8 @@ app.post('/projects/:id/rebuild-positions', require('./middleware/auth').verifyJ
       const parsed_data = { props: [], costumes: [], makeup: [], auto: [], stunts: [], decoration: [], pyrotechnics: [], art_fill: [], dummy: [], consultant: [], locations: [] }
 
       for (const s of pc.scenes) {
-        const rawId = (s.id || '').replace(/^0+/, '')
         const fullSceneId = (doc.type === 'scenario' && seriesNum)
-          ? normalizeSceneId(rawId, seriesNum)
+          ? normalizeSceneId(s.id, seriesNum)
           : normalizeSceneId(s.id) || s.id
         const shootDate = dateMap[fullSceneId] || ''
         const shootDayLabel = timeMap[fullSceneId] || `СД ${s.day || '?'}`
@@ -232,7 +241,7 @@ app.post('/projects/:id/rebuild-positions', require('./middleware/auth').verifyJ
       const { rows: members } = await db.query(`SELECT id, role FROM users WHERE project_id=$1`, [pid])
       for (const member of members) {
         const isFullAccess = ['producer','project_director'].includes(member.role)
-        const ownTypes = isFullAccess ? ALL_TYPES : (ROLE_LIST_TYPES_W[member.role] || [])
+        const ownTypes = isFullAccess ? ALL_TYPES : (ROLE_CATEGORIES[member.role] || [])
         if (!ownTypes.length) continue
         for (const listType of ownTypes) {
           const items = parsed_data[listType] || []
@@ -382,23 +391,11 @@ app.post('/documents/:id/reimport', require('./middleware/auth').verifyJWT, chec
     const pd = typeof doc.parsed_data === 'string' ? JSON.parse(doc.parsed_data) : doc.parsed_data
     if (!pd) return res.status(400).json({ error: 'No parsed_data' })
 
-    const ALL_LIST_TYPES = ['props','art_fill','dummy','auto','decoration','costumes','makeup','stunts','pyrotechnics','consultant','locations']
-    const ROLE_LIST_TYPES = {
-      production_designer:['props','art_fill','dummy','auto','decoration','costumes','makeup','stunts','pyrotechnics','consultant'],
-      art_director_assistant:['props','art_fill','dummy','auto','decoration','costumes','makeup','stunts','pyrotechnics','consultant'],
-      first_assistant_director:['props','art_fill','dummy','auto','decoration','costumes','makeup','stunts','pyrotechnics','consultant'],
-      director:['auto','decoration','stunts','pyrotechnics','consultant','makeup'],
-      assistant_director:['auto','decoration','stunts','pyrotechnics','consultant','makeup'],
-      props_master:['props','art_fill','dummy','auto','decoration','pyrotechnics','consultant','costumes'],
-      props_assistant:['props','art_fill','dummy','auto','decoration','pyrotechnics','costumes'],
-      decorator:['decoration','props','art_fill','dummy','consultant'],
-      costumer:['costumes'], costume_assistant:['costumes'], makeup_artist:['makeup'],
-      stunt_coordinator:['stunts'], pyrotechnician:['pyrotechnics'], location_manager:['locations'],
-    }
+    // ROLE_CATEGORIES and ALL_CATEGORIES imported from roleConfig.js
     const { rows: members } = await db.query(`SELECT id, role FROM users WHERE project_id=$1`, [doc.project_id])
     let imported = 0
     for (const m of members) {
-      const own = ['producer','project_director'].includes(m.role) ? ALL_LIST_TYPES : (ROLE_LIST_TYPES[m.role] || [])
+      const own = ['producer','project_director'].includes(m.role) ? ALL_CATEGORIES : (ROLE_CATEGORIES[m.role] || [])
       for (const lt of own) {
         const items = pd[lt] || []
         if (!items.length) continue
@@ -565,24 +562,7 @@ setInterval(checkOverdue, 30 * 60 * 1000)
 const { parseDocument: aiParseDocument, analyzeCrossScenes } = require('./services/groq')
 const { normalizeSceneId, getSceneLookupMaps } = require('./services/sceneService')
 
-// Role → list types (same as documents.js)
-const ROLE_LIST_TYPES_W = {
-  production_designer:      ['props','art_fill','dummy','auto','decoration','costumes','makeup','stunts','pyrotechnics','consultant'],
-  art_director_assistant:   ['props','art_fill','dummy','auto','decoration','costumes','makeup','stunts','pyrotechnics','consultant'],
-  first_assistant_director: ['props','art_fill','dummy','auto','decoration','costumes','makeup','stunts','pyrotechnics','consultant'],
-  director:                 ['auto','decoration','stunts','pyrotechnics','consultant','makeup'],
-  assistant_director:       ['auto','decoration','stunts','pyrotechnics','consultant','makeup'],
-  props_master:             ['props','art_fill','dummy','auto','decoration','pyrotechnics','consultant','costumes'],
-  props_assistant:          ['props','art_fill','dummy','auto','decoration','pyrotechnics','costumes'],
-  decorator:                ['decoration','props','art_fill','dummy','consultant'],
-  costumer:                 ['costumes'],
-  costume_assistant:        ['costumes'],
-  makeup_artist:            ['makeup'],
-  stunt_coordinator:        ['stunts'],
-  pyrotechnician:           ['pyrotechnics'],
-  location_manager:         ['locations'],
-}
-const ALL_LIST_TYPES_W = ['props','art_fill','dummy','auto','decoration','costumes','makeup','stunts','pyrotechnics','consultant','locations']
+const { ALL_CATEGORIES, ROLE_CATEGORIES } = require('./constants/roleConfig')
 
 async function processAiTask() {
   if (!process.env.ANTHROPIC_API_KEY) return
@@ -606,6 +586,8 @@ async function processAiTask() {
         await processAnalyzeScenario(task, params)
       } else if (task.task_type === 'cross_scenes') {
         await processCrossScenes(task, params)
+      } else if (task.task_type === 'expand_synonyms') {
+        await processExpandSynonyms(task)
       }
       await db.query(
         `UPDATE ai_tasks SET status = 'completed', completed_at = NOW() WHERE id = $1`,
@@ -626,7 +608,28 @@ async function processAiTask() {
 
 async function processAnalyzeScenario(task, params) {
   const { seriesNum, sceneTexts, existingNames } = params
-  const aiPrompt = `Вот текст сценария:\n${sceneTexts}\n\nВот предметы, которые УЖЕ ЕСТЬ в списке (не дублируй их):\n${(existingNames || []).join(', ')}\n\nНайди предметы реквизита, костюмы, грим, декорации, транспорт которые УПОМИНАЮТСЯ В ТЕКСТЕ СЦЕН, но ОТСУТСТВУЮТ в списке выше. Верни ТОЛЬКО НОВЫЕ позиции. ОБЯЗАТЕЛЬНО укажи номер сцены в поле scene.\n\nДля КАЖДОГО предмета ОБЯЗАТЕЛЬНО заполни поле "reason" — кратко объясни ПОЧЕМУ этот предмет нужен, процитируй фрагмент сценария где он упоминается.`
+  const existingList = (existingNames || []).join(', ')
+  const aiPrompt = `Ты — опытный реквизитор на съёмочной площадке. Твоя задача — прочитать текст сцен и составить список ВСЕГО что нужно ФИЗИЧЕСКИ подготовить для съёмки.
+
+ВАЖНО — думай как человек который ГОТОВИТ площадку:
+- "перестрелка" → нужно оружие (пистолеты, автоматы, холостые патроны, гильзы)
+- "едет на машине" → нужен конкретный автомобиль
+- "накрытый стол" → посуда, еда, скатерть, столовые приборы
+- "звонит" → телефон/мобильный
+- "пишет" → ручка, бумага/блокнот
+- "рана", "кровь" → грим (искусственная кровь, накладки)
+- "взрыв" → пиротехника (взрывпакет, дым-машина)
+- "драка" → постановка трюков, защита
+
+Выводи КОНКРЕТНЫЕ предметы, а не абстрактные. Не "оружие", а "пистолет", "автомат" — то что реально нужно реквизитору.
+
+Вот текст сценария:
+${sceneTexts}
+
+Вот предметы которые УЖЕ ЕСТЬ в списке (НЕ дублируй их, даже если написаны иначе — "рация" и "радиостанция" это одно и то же, "авто" и "машина" это одно и то же):
+${existingList}
+
+Верни ТОЛЬКО НОВЫЕ позиции которых НЕТ в списке выше. ОБЯЗАТЕЛЬНО укажи scene (номер сцены) и reason (почему нужен + цитата из сценария).`
 
   const aiResult = await aiParseDocument(aiPrompt)
   if (!aiResult) return
@@ -639,24 +642,37 @@ async function processAnalyzeScenario(task, params) {
 
   // Get project members
   const { rows: members } = await db.query(`SELECT id, role FROM users WHERE project_id=$1`, [task.project_id])
-  // Build dedup set
+  // Build dedup set — exact names AND stems for fuzzy matching
   const { rows: allProjectItems } = await db.query(
     `SELECT DISTINCT LOWER(TRIM(pli.name)) AS name FROM production_list_items pli
      JOIN production_lists pl ON pl.id = pli.list_id
      WHERE pl.project_id = $1`, [task.project_id]
   )
   const projectNamesSet = new Set(allProjectItems.map(r => r.name))
+  // Build stem set for fuzzy dedup: "рация" and "Рация Motorola" share stem "рац"
+  const projectStemsSet = new Set()
+  for (const r of allProjectItems) {
+    for (const w of r.name.split(/\s+/)) {
+      if (w.length >= 4) projectStemsSet.add(w.substring(0, Math.ceil(w.length * 0.6)))
+    }
+  }
   let aiImported = 0
 
   // Process main categories
-  for (const cat of ALL_LIST_TYPES_W) {
+  for (const cat of ALL_CATEGORIES) {
     for (const ai of (aiResult[cat] || [])) {
       const aiName = (ai.name || ai.item || '').replace(/\s+/g, ' ').trim()
       if (!aiName) continue
       const aiNameLower = aiName.toLowerCase()
-      // Exact match only — substring matching was too aggressive (e.g. "кресло" ≠ "кресло-качалка")
-      const isDupe = projectNamesSet.has(aiNameLower)
-      if (isDupe) continue
+      // Check exact match
+      if (projectNamesSet.has(aiNameLower)) continue
+      // Check fuzzy: if ALL significant words of AI item already have stem matches in project
+      const aiWords = aiNameLower.split(/\s+/).filter(w => w.length >= 4)
+      const allStemsMatch = aiWords.length > 0 && aiWords.every(w => {
+        const stem = w.substring(0, Math.ceil(w.length * 0.6))
+        return projectStemsSet.has(stem)
+      })
+      if (allStemsMatch) continue
 
       const sceneId = normalizeSceneId(ai.scene, seriesNum)
       const aiDay = (sceneId && dateMap[sceneId]) || null
@@ -671,7 +687,7 @@ async function processAnalyzeScenario(task, params) {
       const aiNote = noteParts.join('\n---\n') || null
 
       for (const m of members) {
-        const own = ['producer','project_director'].includes(m.role) ? ALL_LIST_TYPES_W : (ROLE_LIST_TYPES_W[m.role] || [])
+        const own = ['producer','project_director'].includes(m.role) ? ALL_CATEGORIES : (ROLE_CATEGORIES[m.role] || [])
         if (!own.includes(cat)) continue
         await db.query(`INSERT INTO production_lists (project_id, user_id, type) VALUES ($1,$2,$3) ON CONFLICT DO NOTHING`, [task.project_id, m.id, cat])
         const { rows: lr } = await db.query(`SELECT id FROM production_lists WHERE project_id=$1 AND user_id=$2 AND type=$3`, [task.project_id, m.id, cat])
@@ -682,6 +698,9 @@ async function processAnalyzeScenario(task, params) {
         aiImported++
       }
       projectNamesSet.add(aiNameLower)
+      for (const w of aiNameLower.split(/\s+/)) {
+        if (w.length >= 4) projectStemsSet.add(w.substring(0, Math.ceil(w.length * 0.6)))
+      }
     }
   }
 
@@ -707,7 +726,7 @@ async function processAnalyzeScenario(task, params) {
     const sugNote = sugNoteParts.join('\n---\n') || null
 
     for (const m of members) {
-      const own = ['producer','project_director'].includes(m.role) ? ALL_LIST_TYPES_W : (ROLE_LIST_TYPES_W[m.role] || [])
+      const own = ['producer','project_director'].includes(m.role) ? ALL_CATEGORIES : (ROLE_CATEGORIES[m.role] || [])
       if (!own.includes(sugCat)) continue
       await db.query(`INSERT INTO production_lists (project_id, user_id, type) VALUES ($1,$2,$3) ON CONFLICT DO NOTHING`, [task.project_id, m.id, sugCat])
       const { rows: lr } = await db.query(`SELECT id FROM production_lists WHERE project_id=$1 AND user_id=$2 AND type=$3`, [task.project_id, m.id, sugCat])
@@ -730,7 +749,7 @@ async function processCrossScenes(task, params) {
 
   const crossScenes = crossResult.cross_scenes.map(cs => ({
     ...cs,
-    scenes: (cs.scenes || []).map(sc => normalizeSceneId(sc, seriesNum) || String(sc).replace(/^0+/, ''))
+    scenes: (cs.scenes || []).map(sc => normalizeSceneId(sc, seriesNum) || String(sc).trim())
   }))
 
   await db.query(
@@ -739,6 +758,59 @@ async function processCrossScenes(task, params) {
   )
   await db.query(`UPDATE ai_tasks SET result = $1 WHERE id = $2`, [JSON.stringify(crossScenes), task.id])
   console.log(`[AI-WORKER] Found ${crossScenes.length} cross-scene items`)
+}
+
+async function processExpandSynonyms(task) {
+  // Get all unique item names from project
+  const { rows } = await db.query(
+    `SELECT DISTINCT LOWER(TRIM(pli.name)) AS name
+     FROM production_list_items pli
+     JOIN production_lists pl ON pl.id = pli.list_id
+     WHERE pl.project_id = $1 AND LENGTH(TRIM(pli.name)) > 2`,
+    [task.project_id]
+  )
+  if (!rows.length) return
+
+  const itemNames = rows.map(r => r.name)
+  const prompt = `Ты — опытный реквизитор на киностудии. Для каждого предмета из списка дай 3-6 слов которые СВЯЗАНЫ с этим предметом и могут встретиться в тексте сценария.
+
+Правила:
+- Включай СИНОНИМЫ: оружие → пистолет, автомат, ружьё, винтовка, револьвер
+- Включай РАЗГОВОРНЫЕ: автомобиль → машина, авто, тачка
+- Включай КОНКРЕТНЫЕ ВИДЫ: телефон → мобильный, смартфон, сотовый, трубка
+- Включай КОНТЕКСТНЫЕ СЛОВА — действия которые подразумевают этот предмет:
+  оружие → стрельба, перестрелка, выстрел
+  автомобиль → едет, за рулём, припаркован
+  нож → режет, порезал
+  грим/кровь → рана, ранение, окровавленный
+- НЕ включай общие слова (делает, идёт, стоит)
+- Если для предмета нет осмысленных синонимов — пропусти его
+- Верни строго JSON без markdown
+
+Список предметов:
+${itemNames.join(', ')}
+
+Формат ответа:
+{"предмет1": ["синоним1", "действие1", "вид1"], "предмет2": ["синоним1"]}`
+
+  const result = await aiParseDocument(prompt)
+  if (!result || typeof result !== 'object') return
+
+  // Clean: keep only string arrays
+  const synonyms = {}
+  for (const [key, val] of Object.entries(result)) {
+    if (Array.isArray(val) && val.length && val.every(v => typeof v === 'string')) {
+      synonyms[key.toLowerCase().trim()] = val.map(v => v.toLowerCase().trim())
+    }
+  }
+
+  // Save to document's parsed_data.synonyms
+  await db.query(
+    `UPDATE documents SET parsed_data = jsonb_set(COALESCE(parsed_data,'{}')::jsonb, '{synonyms}', $1::jsonb) WHERE id = $2`,
+    [JSON.stringify(synonyms), task.document_id]
+  )
+  await db.query(`UPDATE ai_tasks SET result = $1 WHERE id = $2`, [JSON.stringify(synonyms), task.id])
+  console.log(`[AI-WORKER] Generated synonyms for ${Object.keys(synonyms).length} items`)
 }
 
 // Run AI worker every 30 seconds

@@ -1,5 +1,6 @@
 import { useState, useEffect, useMemo } from 'react'
 import { useParams, useNavigate, useSearchParams } from 'react-router-dom'
+import { newStemmer } from 'snowball-stemmers'
 import ProductionLayout from './ProductionLayout'
 import Badge from '../shared/Badge'
 import UnitCardModal from '../shared/UnitCardModal'
@@ -276,42 +277,51 @@ export default function DocumentViewer() {
 
 /* ============================================================
    Highlight helper — wraps matched item names in yellow <mark>
+   Uses Snowball Russian stemmer for morphology matching
    ============================================================ */
+const _ruStemmer = newStemmer('russian')
+const _STOP_WORDS = new Set(['на','от','из','за','по','для','при','без','над','под','про','как','что','это','или','так','все','вот','его','они','она','уже','еще','тут','там','мне','мой','наш','ваш','где','кто','чем','чей','той','тех','эти','тем','нас','вас','них','нем','ней','ним','вам','нам','всё'])
+
 function highlightItems(text, scene, allItemsForScene) {
   const items = []
-  // Items from current document's scene
   for (const key of ['props', 'costumes', 'makeup', 'vehicles', 'stunts', 'decoration', 'pyrotechnics']) {
     for (const v of (scene[key] || [])) {
       const t = v.trim()
       if (t.length > 2) items.push(t)
     }
   }
-  // Items from ALL sources (KPP + Scenario + AI) for this scene
   for (const name of (allItemsForScene || [])) {
     const t = (name || '').trim()
     if (t.length > 2 && !items.some(i => i.toLowerCase() === t.toLowerCase())) items.push(t)
   }
   if (!items.length) return text
-  // Build stem patterns for Russian morphology (70% of word or min 4 chars)
-  const stemPatterns = items.map(item => {
-    const words = item.split(/\s+/).filter(w => w.length >= 3)
-    if (!words.length) return null
-    const stems = words.map(w => {
-      const stem = w.length <= 4 ? w : w.slice(0, Math.max(4, Math.ceil(w.length * 0.7)))
-      return stem.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '[а-яёa-z]*'
-    })
-    return stems.join('\\s+')
-  }).filter(Boolean)
-  if (!stemPatterns.length) return text
-  stemPatterns.sort((a, b) => b.length - a.length)
-  const regex = new RegExp(`(${stemPatterns.join('|')})`, 'gi')
-  const parts = text.split(regex)
-  const checkRegex = new RegExp(`^(?:${stemPatterns.join('|')})$`, 'i')
-  return parts.map((part, i) =>
-    checkRegex.test(part)
-      ? <mark key={i} style={{ background: '#fef08a', borderRadius: 2, padding: '0 2px' }}>{part}</mark>
-      : part
-  )
+
+  // Build set of stems from all item names
+  const allStems = new Set()
+  for (const item of items) {
+    for (const w of item.split(/\s+/)) {
+      if (w.length >= 3 && !_STOP_WORDS.has(w.toLowerCase())) {
+        allStems.add(_ruStemmer.stem(w.toLowerCase()))
+      }
+    }
+  }
+  if (!allStems.size) return text
+
+  // Split text into word/non-word tokens and highlight matching stems
+  const cleanText = text.replace(/<[^>]+>/g, '')
+  const parts = cleanText.split(/([а-яёА-ЯЁa-zA-Z0-9-]+)/g)
+  let hasMatch = false
+  const rendered = parts.map((p, i) => {
+    if (/^[а-яёА-ЯЁa-zA-Z0-9-]+$/.test(p) && p.length >= 3) {
+      const stem = _ruStemmer.stem(p.toLowerCase())
+      if (allStems.has(stem)) {
+        hasMatch = true
+        return <mark key={i} style={{ background: '#fef08a', borderRadius: 2, padding: '0 2px' }}>{p}</mark>
+      }
+    }
+    return p
+  })
+  return hasMatch ? rendered : text
 }
 
 /* ============================================================

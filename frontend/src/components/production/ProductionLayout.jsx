@@ -3,13 +3,15 @@ import { NavLink, useNavigate } from 'react-router-dom'
 import {
   FileText, Package, BarChart2, DollarSign,
   Bell, User, Menu, Users, Home, ChevronDown, Inbox,
-  Handshake, ClipboardList, MapPin, Clapperboard, Car, UserCheck, FolderOpen
+  Handshake, ClipboardList, MapPin, Clapperboard, Car, UserCheck, FolderOpen, Search
 } from 'lucide-react'
 import { useAuth } from '../../hooks/useAuth'
 import { ROLES } from '../../constants/roles'
 import { projects as projectsApi, invites as invitesApi } from '../../services/api'
 import Button from '../shared/Button'
 import Input from '../shared/Input'
+import { useGlobalSearch } from '../../hooks/useGlobalSearch'
+import GlobalSearchBar from '../shared/GlobalSearchBar'
 
 const css = `
 .pl-root { display: flex; min-height: 100vh; background: var(--bg); }
@@ -242,6 +244,7 @@ export default function ProductionLayout({ children }) {
   const navigate = useNavigate()
   const { user } = useAuth()
   const isProducer = user?.role === 'producer'
+  const searchProps = useGlobalSearch()
 
   useEffect(() => {
     projectsApi.list().then(d => {
@@ -320,7 +323,22 @@ export default function ProductionLayout({ children }) {
             <div className="pl-logo-sub">Production</div>
           </div>
 
-          {/* Project selector moved to Проекты page — hidden from sidebar */}
+          <div style={{ padding: '8px 12px' }}>
+            <button
+              onClick={() => searchProps.setOpen(true)}
+              style={{
+                width: '100%', display: 'flex', alignItems: 'center', gap: 8,
+                padding: '7px 10px', borderRadius: 8,
+                border: '1px solid var(--sidebar-border, rgba(255,255,255,0.1))',
+                background: 'rgba(255,255,255,0.04)', cursor: 'pointer',
+                color: 'var(--sidebar-muted)', fontSize: 13, fontFamily: 'inherit',
+              }}
+            >
+              <Search size={14} />
+              <span style={{ flex: 1, textAlign: 'left' }}>Поиск...</span>
+              <kbd style={{ fontSize: 10, opacity: 0.5, fontFamily: 'monospace' }}>Ctrl+K</kbd>
+            </button>
+          </div>
 
           <nav className="pl-nav">
             <div className="pl-section-label">Навигация</div>
@@ -496,6 +514,8 @@ export default function ProductionLayout({ children }) {
           </div>
         </div>
       )}
+
+      <GlobalSearchBar {...searchProps} />
     </>
   )
 }

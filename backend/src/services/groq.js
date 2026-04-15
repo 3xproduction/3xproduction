@@ -1,4 +1,5 @@
 const Anthropic = require('@anthropic-ai/sdk')
+const { ALL_CATEGORIES } = require('../constants/roleConfig')
 
 const client = new Anthropic({
   apiKey: process.env.ANTHROPIC_API_KEY,
@@ -65,13 +66,44 @@ async function parseDocument(text) {
     while (opens > 0) { clean += '}'; opens-- }
   }
 
+  let parsed
   try {
-    return JSON.parse(clean)
+    parsed = JSON.parse(clean)
   } catch (err) {
     console.error('Claude JSON parse failed, first 500 chars:', clean.substring(0, 500))
     console.error('Last 200 chars:', clean.substring(clean.length - 200))
     throw err
   }
+
+  // Validate AI response: sanitize each category
+  const validDay = /^\d{1,2}[.\-/]\d{1,2}$/
+  for (const cat of ALL_CATEGORIES) {
+    if (!Array.isArray(parsed[cat])) { parsed[cat] = []; continue }
+    parsed[cat] = parsed[cat].filter(item => {
+      if (!item || typeof item !== 'object') return false
+      const name = item.name || item.item || ''
+      if (!name || typeof name !== 'string' || name.length > 200) {
+        console.warn(`[AI-VALIDATE] Rejected item in ${cat}: invalid name "${String(name).substring(0, 50)}"`)
+        return false
+      }
+      // Fix name field
+      item.name = (item.name || item.item || '').replace(/\s+/g, ' ').trim()
+      // Sanitize day: only accept date format, reject "день", "ночь" etc
+      if (item.day && typeof item.day === 'string' && !validDay.test(item.day)) {
+        item.day = null
+      }
+      return true
+    })
+  }
+  // Validate ai_suggestions if present
+  if (Array.isArray(parsed.ai_suggestions)) {
+    parsed.ai_suggestions = parsed.ai_suggestions.filter(s =>
+      s && typeof s === 'object' && (s.name || s.item) &&
+      (!s.category || ALL_CATEGORIES.includes(s.category))
+    )
+  }
+
+  return parsed
 }
 
 // Вычислить дельту между двумя версиями parsed_data

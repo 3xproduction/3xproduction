@@ -4,9 +4,11 @@ import {
   LayoutDashboard, ClipboardList, Package, Grid3x3,
   Users, FileText, Handshake, BarChart2, Bell,
   User, X, Menu, ChevronDown, LogOut, Clock, AlertTriangle, ArrowLeft,
-  MapPin, Clapperboard, Car
+  MapPin, Clapperboard, Car, Search
 } from 'lucide-react'
 import { useAuth } from '../../hooks/useAuth'
+import { useGlobalSearch } from '../../hooks/useGlobalSearch'
+import GlobalSearchBar from '../shared/GlobalSearchBar'
 
 const HIDDEN_BY_ROLE = {
   warehouse_director: ['/analytics', '/locations', '/vehicles'],
@@ -308,6 +310,7 @@ export default function WarehouseLayout({ children }) {
   const location = useLocation()
   const { user, logout } = useAuth()
   const showBack = location.pathname !== '/dashboard'
+  const searchProps = useGlobalSearch()
 
   function selectWarehouse(w) {
     localStorage.setItem('warehouse', w)
@@ -331,6 +334,22 @@ export default function WarehouseLayout({ children }) {
             <div className="wl-logo-sub">Production</div>
           </div>
 
+          <div style={{ padding: '8px 12px' }}>
+            <button
+              onClick={() => searchProps.setOpen(true)}
+              style={{
+                width: '100%', display: 'flex', alignItems: 'center', gap: 8,
+                padding: '7px 10px', borderRadius: 8,
+                border: '1px solid var(--sidebar-border, rgba(255,255,255,0.1))',
+                background: 'rgba(255,255,255,0.04)', cursor: 'pointer',
+                color: 'var(--sidebar-muted)', fontSize: 13, fontFamily: 'inherit',
+              }}
+            >
+              <Search size={14} />
+              <span style={{ flex: 1, textAlign: 'left' }}>Поиск...</span>
+              <kbd style={{ fontSize: 10, opacity: 0.5, fontFamily: 'monospace' }}>Ctrl+K</kbd>
+            </button>
+          </div>
 
           <nav className="wl-nav">
             {getNav(user?.role).map(group => (
@@ -422,6 +441,8 @@ export default function WarehouseLayout({ children }) {
             </div>
           </div>
         )}
+
+        <GlobalSearchBar {...searchProps} />
       </div>
     </>
   )

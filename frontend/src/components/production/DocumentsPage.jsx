@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef } from 'react'
 import { useNavigate } from 'react-router-dom'
+import { newStemmer } from 'snowball-stemmers'
 import ProductionLayout from './ProductionLayout'
 import Badge from '../shared/Badge'
 import Button from '../shared/Button'
@@ -9,6 +10,8 @@ import ConfirmModal from '../shared/ConfirmModal'
 import { useAuth } from '../../hooks/useAuth'
 import { ROLES } from '../../constants/roles'
 import { categoryLabel } from '../../constants/categories'
+
+const ruStemmer = newStemmer('russian')
 
 const DOC_TYPES = {
   kpp:       { label: 'КПП',      icon: '📋', color: 'blue' },
@@ -37,10 +40,10 @@ const SOURCE_BADGE = {
   manual:   { label: 'Вручную',  bg: 'var(--bg)',        color: 'var(--muted)' },
 }
 
+// Синхронизировано с backend/src/constants/roleConfig.js SEE_ALL_ROLES
 const SEE_ALL_ROLES = [
-  'production_designer', 'art_director_assistant', 'first_assistant_director', 'director', 'project_director', 'producer',
-  'project_deputy_upload', 'project_deputy', 'set_admin', 'assistant_director',
-  'gaffer', 'dop', 'camera_mechanic', 'casting_director', 'casting_assistant', 'playback', 'driver',
+  'production_designer', 'art_director_assistant', 'first_assistant_director',
+  'director', 'project_director', 'producer',
 ]
 const HIDE_LIST_TYPES_ROLES = ['set_admin']
 
@@ -87,6 +90,7 @@ export default function DocumentsPage() {
   const [listLoading, setListLoading] = useState(false)
   const [listSearch, setListSearch] = useState('')
   const [matchedUnits, setMatchedUnits] = useState([])
+  const [synonymMap, setSynonymMap] = useState({})
   const [cardId, setCardId] = useState(null)
   const [editingId, setEditingId] = useState(null)
   const [editForm, setEditForm] = useState({})
@@ -199,6 +203,17 @@ export default function DocumentsPage() {
       setMatchedUnits(mu.matched_units || [])
     }).catch(() => setListItems([]))
       .finally(() => setListLoading(false))
+    // Load synonyms from latest document's parsed_data (non-blocking)
+    docsApi.list(projectId).then(resp => {
+      const allDocs = resp.documents || []
+      for (const d of allDocs) {
+        const pd = typeof d.parsed_data === 'string' ? JSON.parse(d.parsed_data) : d.parsed_data
+        if (pd?.synonyms && Object.keys(pd.synonyms).length) {
+          setSynonymMap(pd.synonyms)
+          break
+        }
+      }
+    }).catch(() => {})
   }
 
   useEffect(() => {
@@ -935,35 +950,35 @@ export default function DocumentsPage() {
                                         {s.label} · Сцена {item.scene || '—'}
                                       </div>
                                       {(() => {
-                                        // Only highlight in scenario blocks
+                                        // Highlight item name + synonyms in scenario text using Snowball stemmer
                                         if (block.type !== 'scenario') return block.text
-                                        const STOP_WORDS = new Set(['на','от','из','за','по','для','при','без','над','под','про','как','что','это','или','так','все','вот','его','они','она','уже','еще','тут','там','мне','мой','наш','ваш','где','кто','чем','чей','той','тех','эти','тем','нас','вас','них','нем','ней','ним','вам','нам','все','всё'])
-                                        const itemName = item.name.trim()
+                                        const itemName = (item.name || '').trim()
                                         if (itemName.length < 3) return block.text
-                                        // Build phrase-level stem pattern (words joined with \s+ not |)
-                                        const words = itemName.split(/\s+/).filter(w => w.length >= 3 && !STOP_WORDS.has(w.toLowerCase()))
-                                        if (!words.length) return block.text
-                                        const stems = words.map(w => {
-                                          const cleaned = w.replace(/[^а-яёa-zА-ЯЁA-Z0-9]/gi, '')
-                                          if (cleaned.length < 3) return null
-                                          const stem = cleaned.length <= 4 ? cleaned : cleaned.slice(0, Math.max(4, Math.ceil(cleaned.length * 0.7)))
-                                          return stem.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '[а-яёa-z]*'
-                                        }).filter(Boolean)
-                                        if (!stems.length) return block.text
-                                        // Multi-word: phrase pattern (коробка лето → короб\s+.*лет)
-                                        // Single-word: just the stem
-                                        const pattern = stems.length > 1
-                                          ? stems.join('[^.!?]*?\\s+')
-                                          : stems[0]
-                                        const regex = new RegExp(`(${pattern})`, 'gi')
-                                        const parts = block.text.split(regex)
-                                        if (parts.length === 1) return block.text
-                                        const checkRegex = new RegExp(`^(?:${pattern})$`, 'i')
-                                        return parts.map((p, pi) =>
-                                          checkRegex.test(p)
-                                            ? <mark key={pi} style={{ background: '#fef08a', borderRadius: 2, padding: '0 2px' }}>{p}</mark>
-                                            : p
-                                        )
+                                        const STOP_WORDS = new Set(['на','от','из','за','по','для','при','без','над','под','про','как','что','это','или','так','все','вот','его','они','она','уже','еще','тут','там','мне','мой','наш','ваш','где','кто','чем','чей','той','тех','эти','тем','нас','вас','них','нем','ней','ним','вам','нам','всё'])
+                                        // Collect stems from item name + synonyms from AI
+                                        const allWords = itemName.split(/\s+/).filter(w => w.length >= 3 && !STOP_WORDS.has(w.toLowerCase()))
+                                        const syns = synonymMap[itemName.toLowerCase()] || []
+                                        for (const syn of syns) {
+                                          for (const w of syn.split(/\s+/)) {
+                                            if (w.length >= 3 && !STOP_WORDS.has(w.toLowerCase())) allWords.push(w)
+                                          }
+                                        }
+                                        if (!allWords.length) return block.text
+                                        const allStems = new Set(allWords.map(w => ruStemmer.stem(w.toLowerCase())))
+                                        const textToHighlight = block.text.replace(/<[^>]+>/g, '')
+                                        const parts = textToHighlight.split(/([а-яёА-ЯЁa-zA-Z0-9-]+)/g)
+                                        let hasMatch = false
+                                        const rendered = parts.map((p, pi) => {
+                                          if (/^[а-яёА-ЯЁa-zA-Z0-9-]+$/.test(p) && p.length >= 3) {
+                                            const wordStem = ruStemmer.stem(p.toLowerCase())
+                                            if (allStems.has(wordStem)) {
+                                              hasMatch = true
+                                              return <mark key={pi} style={{ background: '#fef08a', borderRadius: 2, padding: '0 2px' }}>{p}</mark>
+                                            }
+                                          }
+                                          return p
+                                        })
+                                        return hasMatch ? rendered : block.text
                                       })()}
                                     </div>
                                   )

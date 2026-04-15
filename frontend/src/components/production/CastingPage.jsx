@@ -23,6 +23,8 @@ export default function CastingPage() {
   const [items, setItems] = useState([])
   const [loading, setLoading] = useState(true)
   const [search, setSearch] = useState('')
+  const [debouncedSearch, setDebouncedSearch] = useState('')
+  const searchTimer = useRef(null)
   const [statusFilter, setStatusFilter] = useState('all')
   const [genderFilter, setGenderFilter] = useState('all')
 
@@ -38,21 +40,23 @@ export default function CastingPage() {
   const [detailLoading, setDetailLoading] = useState(false)
 
   useEffect(() => {
-    castingApi.list().then(data => {
+    clearTimeout(searchTimer.current)
+    searchTimer.current = setTimeout(() => setDebouncedSearch(search), 300)
+    return () => clearTimeout(searchTimer.current)
+  }, [search])
+
+  useEffect(() => {
+    const params = {}
+    if (debouncedSearch.trim()) params.search = debouncedSearch.trim()
+    if (statusFilter !== 'all') params.status = statusFilter
+    if (genderFilter !== 'all') params.gender = genderFilter
+    setLoading(true)
+    castingApi.list(params).then(data => {
       setItems(Array.isArray(data) ? data : [])
     }).catch(() => {}).finally(() => setLoading(false))
-  }, [])
+  }, [debouncedSearch, statusFilter, genderFilter])
 
-  const filtered = items.filter(c => {
-    const matchStatus = statusFilter === 'all' || c.status === statusFilter
-    const matchGender = genderFilter === 'all' || c.gender === genderFilter
-    const q = search.toLowerCase()
-    const matchSearch = !q ||
-      (c.name || '').toLowerCase().includes(q) ||
-      (c.role_name || '').toLowerCase().includes(q) ||
-      (c.agency || '').toLowerCase().includes(q)
-    return matchStatus && matchGender && matchSearch
-  })
+  const filtered = items
 
   function openAdd() {
     setForm(EMPTY_FORM)
@@ -122,7 +126,11 @@ export default function CastingPage() {
         }
       }
       setShowAdd(false)
-      const refreshed = await castingApi.list()
+      const refreshParams = {}
+      if (debouncedSearch.trim()) refreshParams.search = debouncedSearch.trim()
+      if (statusFilter !== 'all') refreshParams.status = statusFilter
+      if (genderFilter !== 'all') refreshParams.gender = genderFilter
+      const refreshed = await castingApi.list(refreshParams)
       setItems(Array.isArray(refreshed) ? refreshed : [])
     } catch (err) {
       setSaveError(err.message || 'Ошибка сохранения')

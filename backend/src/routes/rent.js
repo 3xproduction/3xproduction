@@ -100,13 +100,25 @@ router.post('/', verifyJWT, checkRole(...RENT_ROLES), async (req, res) => {
 
 // GET /rent
 router.get('/', verifyJWT, checkRole(...RENT_ROLES, 'producer'), async (req, res) => {
-  const { type, status } = req.query
+  const { type, status, search } = req.query
   try {
     let q = `SELECT * FROM rent_deals WHERE 1=1`
     const params = []
     if (type)   { params.push(type);   q += ` AND type=$${params.length}` }
     if (status) { params.push(status); q += ` AND status=$${params.length}` }
-    q += ` ORDER BY created_at DESC`
+    if (search && search.trim()) {
+      const { buildSearchQuery } = require('../services/searchService')
+      const { tsqueryStr, originalQuery } = await buildSearchQuery(search)
+      params.push(tsqueryStr); const tsqIdx = params.length
+      params.push(originalQuery); const rawIdx = params.length
+      q += ` AND (search_vector @@ to_tsquery('ru_search', $${tsqIdx})
+             OR similarity(counterparty_name, $${rawIdx}) > 0.2)`
+    }
+    if (search && search.trim()) {
+      q += ` ORDER BY ts_rank_cd(search_vector, to_tsquery('ru_search', $${params.length - 1})) DESC, created_at DESC`
+    } else {
+      q += ` ORDER BY created_at DESC`
+    }
     const { rows } = await db.query(q, params)
     res.json({ deals: rows })
   } catch (err) {

@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { Search, UserPlus, Copy, Check, X } from 'lucide-react'
 import WarehouseLayout from './WarehouseLayout'
 import ProductionLayout from '../production/ProductionLayout'
@@ -122,6 +122,8 @@ export default function TeamPage() {
   const [members, setMembers] = useState([])
   const [loading, setLoading] = useState(true)
   const [search, setSearch] = useState('')
+  const [debouncedSearch, setDebouncedSearch] = useState('')
+  const searchTimer = useRef(null)
 
   // Invite modal state
   const [showInvite, setShowInvite] = useState(false)
@@ -138,18 +140,22 @@ export default function TeamPage() {
   const roleOptions = getRoleOptions(user?.role)
 
   useEffect(() => {
-    teamApi.list()
+    clearTimeout(searchTimer.current)
+    searchTimer.current = setTimeout(() => setDebouncedSearch(search), 300)
+    return () => clearTimeout(searchTimer.current)
+  }, [search])
+
+  useEffect(() => {
+    const params = {}
+    if (debouncedSearch.trim()) params.search = debouncedSearch.trim()
+    setLoading(true)
+    teamApi.list(params)
       .then(data => setMembers(data.team || []))
       .catch(() => {})
       .finally(() => setLoading(false))
-  }, [])
+  }, [debouncedSearch])
 
-  const filtered = members.filter(m =>
-    m.id !== user?.id &&
-    (m.name.toLowerCase().includes(search.toLowerCase()) ||
-    m.email.toLowerCase().includes(search.toLowerCase()) ||
-    (ROLES[m.role]?.label || m.role).toLowerCase().includes(search.toLowerCase()))
-  )
+  const filtered = members.filter(m => m.id !== user?.id)
 
   function openInvite() {
     setInviteRole(roleOptions[0] || '')

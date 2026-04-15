@@ -22,6 +22,8 @@ export default function LocationsPage() {
   const [items, setItems] = useState([])
   const [loading, setLoading] = useState(true)
   const [search, setSearch] = useState('')
+  const [debouncedSearch, setDebouncedSearch] = useState('')
+  const searchTimer = useRef(null)
   const [typeFilter, setTypeFilter] = useState('all')
 
   const [showAdd, setShowAdd] = useState(false)
@@ -36,19 +38,22 @@ export default function LocationsPage() {
   const [detailLoading, setDetailLoading] = useState(false)
 
   useEffect(() => {
-    locationsApi.list().then(data => {
+    clearTimeout(searchTimer.current)
+    searchTimer.current = setTimeout(() => setDebouncedSearch(search), 300)
+    return () => clearTimeout(searchTimer.current)
+  }, [search])
+
+  useEffect(() => {
+    const params = {}
+    if (debouncedSearch.trim()) params.search = debouncedSearch.trim()
+    if (typeFilter !== 'all') params.type = typeFilter
+    setLoading(true)
+    locationsApi.list(params).then(data => {
       setItems(Array.isArray(data) ? data : data.locations || [])
     }).catch(() => {}).finally(() => setLoading(false))
-  }, [])
+  }, [debouncedSearch, typeFilter])
 
-  const filtered = items.filter(loc => {
-    const matchType = typeFilter === 'all' || loc.type === typeFilter
-    const q = search.toLowerCase()
-    const matchSearch = !q ||
-      (loc.name || '').toLowerCase().includes(q) ||
-      (loc.address || '').toLowerCase().includes(q)
-    return matchType && matchSearch
-  })
+  const filtered = items
 
   function openAdd() {
     setForm(EMPTY_FORM)
@@ -121,7 +126,10 @@ export default function LocationsPage() {
         }
       }
       setShowAdd(false)
-      const refreshed = await locationsApi.list()
+      const refreshParams = {}
+      if (debouncedSearch.trim()) refreshParams.search = debouncedSearch.trim()
+      if (typeFilter !== 'all') refreshParams.type = typeFilter
+      const refreshed = await locationsApi.list(refreshParams)
       setItems(Array.isArray(refreshed) ? refreshed : refreshed.locations || [])
     } catch (err) {
       setSaveError(err.message || 'Ошибка сохранения')

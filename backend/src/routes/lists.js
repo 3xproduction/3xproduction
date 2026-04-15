@@ -2,26 +2,10 @@ const router = require('express').Router()
 const db     = require('../db')
 const { verifyJWT } = require('../middleware/auth')
 
-const ALL_LIST_TYPES = ['props', 'art_fill', 'dummy', 'auto', 'decoration', 'costumes', 'makeup', 'stunts', 'pyrotechnics', 'consultant', 'locations']
-
-const ROLE_OWN_LISTS = {
-  production_designer:      ALL_LIST_TYPES,
-  art_director_assistant:   ALL_LIST_TYPES,
-  first_assistant_director: ALL_LIST_TYPES,
-  props_master:             ['props', 'art_fill', 'dummy', 'auto'],
-  props_assistant:        ['props', 'art_fill', 'dummy', 'auto'],
-  decorator:              ['decoration', 'props', 'art_fill', 'dummy'],
-  costumer:               ['costumes'],
-  costume_assistant:      ['costumes'],
-  makeup_artist:          ['makeup'],
-  stunt_coordinator:      ['stunts'],
-  pyrotechnician:         ['pyrotechnics'],
-}
-
-const SEE_ALL_ROLES = ['production_designer', 'art_director_assistant', 'first_assistant_director', 'director', 'project_director', 'producer']
+const { ALL_CATEGORIES, ROLE_CATEGORIES, SEE_ALL_ROLES } = require('../constants/roleConfig')
 
 function getOwnTypes(role) {
-  return ROLE_OWN_LISTS[role] || []
+  return ROLE_CATEGORIES[role] || []
 }
 
 // GET /lists — own lists (or all if seeAllLists role)
@@ -73,7 +57,7 @@ router.get('/:type/items', verifyJWT, async (req, res) => {
 
   // Permission check
   const isFullAccess = ['producer', 'project_director'].includes(req.user.role)
-  const ownTypes = isFullAccess ? ALL_LIST_TYPES : getOwnTypes(req.user.role)
+  const ownTypes = isFullAccess ? ALL_CATEGORIES : getOwnTypes(req.user.role)
   if (!seeAll && !isFullAccess && !ownTypes.includes(type)) {
     return res.status(403).json({ error: 'Access denied' })
   }
@@ -158,7 +142,7 @@ router.post('/:type/items', verifyJWT, async (req, res) => {
   const { type } = req.params
   const projectId = req.user.project_id
   const isFullAccess = ['producer', 'project_director'].includes(req.user.role)
-  const ownTypes = isFullAccess ? ALL_LIST_TYPES : getOwnTypes(req.user.role)
+  const ownTypes = isFullAccess ? ALL_CATEGORIES : getOwnTypes(req.user.role)
 
   if (!ownTypes.includes(type)) {
     return res.status(403).json({ error: 'Access denied' })

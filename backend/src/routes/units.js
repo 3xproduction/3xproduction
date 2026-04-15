@@ -40,29 +40,20 @@ router.get('/', verifyJWT, async (req, res) => {
     if (category)  { params.push(category);  q += ` AND u.category = $${params.length}` }
     if (cell_id)   { params.push(cell_id);   q += ` AND u.cell_id = $${params.length}` }
     if (search) {
-      const s = search.trim()
-      params.push(`%${s}%`)
-      const likeIdx = params.length
-      params.push(s)
-      const termIdx = params.length
-
-      // Fuzzy search: ILIKE + trigram similarity + synonyms + period/dimensions
-      q += ` AND (
-        u.name ILIKE $${likeIdx} OR u.serial ILIKE $${likeIdx}
-        OR u.description ILIKE $${likeIdx} OR c.code ILIKE $${likeIdx} OR c.custom_name ILIKE $${likeIdx}
-        OR u.period ILIKE $${likeIdx} OR u.dimensions ILIKE $${likeIdx}
-        OR similarity(u.name, $${termIdx}) > 0.25
-        OR EXISTS (
-          SELECT 1 FROM search_synonyms ss
-          WHERE (lower(ss.term) = lower($${termIdx}) OR lower($${termIdx}) = ANY(SELECT lower(unnest(ss.synonyms))))
-          AND (u.name ILIKE '%' || ss.term || '%' OR EXISTS (
-            SELECT 1 FROM unnest(ss.synonyms) syn WHERE u.name ILIKE '%' || syn || '%'
-          ))
-        )
-      )`
+      const { buildSearchQuery } = require('../services/searchService')
+      const { tsqueryStr, originalQuery } = await buildSearchQuery(search)
+      params.push(tsqueryStr)
+      const tsqIdx = params.length
+      params.push(originalQuery)
+      const rawIdx = params.length
+      q += ` AND (u.search_vector @@ to_tsquery('ru_search', $${tsqIdx})
+             OR similarity(u.name, $${rawIdx}) > 0.2)`
     }
     if (search) {
-      q += ` ORDER BY similarity(u.name, $${params.length}) DESC, u.created_at DESC`
+      const tsqIdx = params.length - 1
+      const rawIdx = params.length
+      q += ` ORDER BY ts_rank_cd(u.search_vector, to_tsquery('ru_search', $${tsqIdx})) DESC,
+                       similarity(u.name, $${rawIdx}) DESC, u.created_at DESC`
     } else {
       q += ` ORDER BY u.created_at DESC`
     }

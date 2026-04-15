@@ -26,6 +26,8 @@ export default function DecorationsPage() {
   const [locations, setLocations] = useState([])
   const [loading, setLoading] = useState(true)
   const [search, setSearch] = useState('')
+  const [debouncedSearch, setDebouncedSearch] = useState('')
+  const searchTimer = useRef(null)
   const [typeFilter, setTypeFilter] = useState('')
   const [statusFilter, setStatusFilter] = useState('')
 
@@ -40,13 +42,34 @@ export default function DecorationsPage() {
   const [detailLoading, setDetailLoading] = useState(false)
 
   useEffect(() => {
-    loadList()
+    clearTimeout(searchTimer.current)
+    searchTimer.current = setTimeout(() => setDebouncedSearch(search), 300)
+    return () => clearTimeout(searchTimer.current)
+  }, [search])
+
+  useEffect(() => {
     locationsApi.list().then(d => setLocations(d.locations || d || [])).catch(() => {})
   }, [])
 
-  function loadList() {
+  useEffect(() => {
+    const params = {}
+    if (debouncedSearch.trim()) params.search = debouncedSearch.trim()
+    if (typeFilter) params.type = typeFilter
+    if (statusFilter) params.status = statusFilter
     setLoading(true)
-    decorationsApi.list()
+    decorationsApi.list(params)
+      .then(d => setItems(d.decorations || d || []))
+      .catch(() => {})
+      .finally(() => setLoading(false))
+  }, [debouncedSearch, typeFilter, statusFilter])
+
+  function loadList() {
+    const params = {}
+    if (debouncedSearch.trim()) params.search = debouncedSearch.trim()
+    if (typeFilter) params.type = typeFilter
+    if (statusFilter) params.status = statusFilter
+    setLoading(true)
+    decorationsApi.list(params)
       .then(d => setItems(d.decorations || d || []))
       .catch(() => {})
       .finally(() => setLoading(false))
@@ -104,12 +127,7 @@ export default function DecorationsPage() {
     setPhotos(prev => [...prev, ...files].slice(0, 5))
   }
 
-  const filtered = items.filter(d => {
-    if (typeFilter && d.type !== typeFilter) return false
-    if (statusFilter && d.status !== statusFilter) return false
-    if (search && !(d.name || '').toLowerCase().includes(search.toLowerCase())) return false
-    return true
-  })
+  const filtered = items
 
   const Layout = ROLES[user?.role]?.world === 'production' ? ProductionLayout : WarehouseLayout
 

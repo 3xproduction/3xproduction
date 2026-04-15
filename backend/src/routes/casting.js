@@ -26,8 +26,19 @@ router.get('/', verifyJWT, checkRole(...ALLOWED_ROLES), async (req, res) => {
     const params = []
     if (status) { params.push(status); q += ` AND c.status = $${params.length}` }
     if (gender) { params.push(gender); q += ` AND c.gender = $${params.length}` }
-    if (search) { params.push(`%${search}%`); q += ` AND (c.name ILIKE $${params.length} OR c.role_name ILIKE $${params.length} OR c.agency ILIKE $${params.length})` }
-    q += ` ORDER BY c.created_at DESC`
+    if (search) {
+      const { buildSearchQuery } = require('../services/searchService')
+      const { tsqueryStr, originalQuery } = await buildSearchQuery(search)
+      params.push(tsqueryStr); const tsqIdx = params.length
+      params.push(originalQuery); const rawIdx = params.length
+      q += ` AND (c.search_vector @@ to_tsquery('ru_search', $${tsqIdx})
+             OR similarity(c.name, $${rawIdx}) > 0.2)`
+    }
+    if (search) {
+      q += ` ORDER BY ts_rank_cd(c.search_vector, to_tsquery('ru_search', $${params.length - 1})) DESC, c.created_at DESC`
+    } else {
+      q += ` ORDER BY c.created_at DESC`
+    }
     const { rows } = await db.query(q, params)
     res.json(rows)
   } catch (err) {

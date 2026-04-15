@@ -4,8 +4,9 @@ const db       = require('../db')
 const { verifyJWT } = require('../middleware/auth')
 const { parseDocumentFile } = require('../services/docParser')
 const { matchUnits } = require('../services/unitMatcher')
-const { parseDocument, computeDelta, analyzeCrossScenes } = require('../services/groq')
+const { parseDocument, computeDelta } = require('../services/groq')
 const { normalizeSceneId, extractSeriesFromFilename, upsertScenesFromKpp, upsertScenesFromScenario, getSceneLookupMaps, getProjectSeries } = require('../services/sceneService')
+const pipeline = require('../services/importPipeline')
 
 const ALLOWED_DOC_TYPES = [
   'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',       // .xlsx
@@ -21,23 +22,7 @@ const upload = multer({
   },
 })
 
-// Role → list types mapping for auto-import
-const ROLE_LIST_TYPES = {
-  production_designer:      ['props','art_fill','dummy','auto','decoration','costumes','makeup','stunts','pyrotechnics','consultant'],
-  art_director_assistant:   ['props','art_fill','dummy','auto','decoration','costumes','makeup','stunts','pyrotechnics','consultant'],
-  first_assistant_director: ['props','art_fill','dummy','auto','decoration','costumes','makeup','stunts','pyrotechnics','consultant'],
-  director:                 ['auto','decoration','stunts','pyrotechnics','consultant','makeup'],
-  assistant_director:       ['auto','decoration','stunts','pyrotechnics','consultant','makeup'],
-  props_master:             ['props','art_fill','dummy','auto','decoration','pyrotechnics','consultant','costumes'],
-  props_assistant:          ['props','art_fill','dummy','auto','decoration','pyrotechnics','costumes'],
-  decorator:                ['decoration','props','art_fill','dummy','consultant'],
-  costumer:                 ['costumes'],
-  costume_assistant:        ['costumes'],
-  makeup_artist:            ['makeup'],
-  stunt_coordinator:        ['stunts'],
-  pyrotechnician:           ['pyrotechnics'],
-  location_manager:         ['locations'],
-}
+const { ALL_CATEGORIES, ROLE_CATEGORIES, SEE_ALL_ROLES } = require('../constants/roleConfig')
 
 // Roles that can upload
 const UPLOAD_KPP_ROLES = [
@@ -112,125 +97,103 @@ router.post('/upload', verifyJWT, upload.single('file'), async (req, res) => {
       delta = { scene_changes: sceneDelta }
     }
 
-    // Auto-import from parsed_content (direct from Excel/DOCX — no AI needed)
-    // This is fast because data is already extracted by the parser
-    const ALL_LIST_TYPES = ['props','art_fill','dummy','auto','decoration','costumes','makeup','stunts','pyrotechnics','consultant','locations']
-    const CATEGORY_MAP_IMPORT = {
-      props: 'props', costumes: 'costumes', makeup: 'makeup',
-      vehicles: 'auto', stunts: 'stunts', pyrotechnics: 'pyrotechnics',
-      consultant: 'consultant', locations: 'locations',
-      decoration: 'decoration',
-    }
-
-    // Build parsed_data from scenes (no AI call — direct extraction)
+    // === BEGIN TRANSACTION: scenes + document + import ===
+    const client = await db.getClient()
+    let doc
     let parsed_data = null
     let dataSeries = ''
-    if (type !== 'callsheet' && parsed_content?.scenes) {
-      // Upsert scenes into canonical table + get lookup maps
-      if (type === 'kpp') {
-        const upserted = await upsertScenesFromKpp(project_id, parsed_content, null) // doc.id set after INSERT
-        console.log(`[UPLOAD] Upserted ${upserted} KPP scenes`)
-      } else if (type === 'scenario') {
-        dataSeries = extractSeriesFromFilename(req.file.originalname)
-        if (!dataSeries) dataSeries = await getProjectSeries(project_id)
-        const upserted = await upsertScenesFromScenario(project_id, parsed_content, null, dataSeries)
-        console.log(`[UPLOAD] Upserted ${upserted} scenario scenes, series="${dataSeries}"`)
-      }
+    let extractedItems = []
+    try {
+      await client.query('BEGIN')
 
-      // Get unified lookup maps from scenes table
-      const { dateMap: sceneDateMap, timeMap: sceneTimeMap, slotMap: kppSlotMap } = await getSceneLookupMaps(project_id)
+      // Upsert scenes + extract items via pipeline (inside transaction)
+      if (type !== 'callsheet' && parsed_content?.scenes) {
+        if (type === 'kpp') {
+          const upserted = await upsertScenesFromKpp(project_id, parsed_content, null)
+          console.log(`[UPLOAD] Upserted ${upserted} KPP scenes`)
+        } else if (type === 'scenario') {
+          dataSeries = extractSeriesFromFilename(req.file.originalname)
+          if (!dataSeries) dataSeries = await getProjectSeries(project_id)
+          const upserted = await upsertScenesFromScenario(project_id, parsed_content, null, dataSeries)
+          console.log(`[UPLOAD] Upserted ${upserted} scenario scenes, series="${dataSeries}"`)
+        }
 
-      parsed_data = { props: [], costumes: [], makeup: [], auto: [], stunts: [], decoration: [], pyrotechnics: [], art_fill: [], dummy: [], consultant: [], locations: [] }
-      const seen = {}
-      for (const s of parsed_content.scenes) {
-        const rawId = (s.id || '').replace(/^0+/, '')
-        const fullSceneId = (type === 'scenario' && dataSeries)
-          ? normalizeSceneId(rawId, dataSeries)
-          : normalizeSceneId(s.id) || s.id
-        const shootDate = sceneDateMap[fullSceneId] || ''
-        const shootDayLabel = sceneTimeMap[fullSceneId] || `СД ${s.day || '?'}`
-        const slotTime = s.time_slot || kppSlotMap[fullSceneId] || ''
-        const shootTime = slotTime ? `${shootDayLabel} · ${slotTime}` : shootDayLabel
-        const sceneLocation = s.object || s.synopsis || ''
-        const sceneFullText = s.text || ''
-        for (const [field, cat] of Object.entries(CATEGORY_MAP_IMPORT)) {
-          for (const item of (s[field] || [])) {
-            const name = (item || '').replace(/\s+/g, ' ').trim()
-            const seenKey = cat + ':' + name.toLowerCase() + ':' + (fullSceneId || '')
-            if (!name || seen[seenKey]) continue
-            seen[seenKey] = true
-            let itemNote = type === 'scenario'
-              ? (sceneFullText ? '📝 ' + sceneFullText : '')
-              : sceneLocation
-            parsed_data[cat].push({
-              name, scene: fullSceneId, day: shootDate, source: type,
-              time: shootTime,
-              location: s.location || '',
-              note: itemNote,
+        // Pipeline: extract → normalize → deduplicate → validate
+        const lookupMaps = await getSceneLookupMaps(project_id, client)
+        const rawItems = pipeline.extractItems(parsed_content, type)
+        pipeline.normalizeItems(rawItems, lookupMaps, type, dataSeries)
+        const dedupedItems = pipeline.deduplicateItems(rawItems)
+        const { valid } = pipeline.validateItems(dedupedItems)
+        extractedItems = valid
+
+        // Build parsed_data object (for storage in documents table)
+        parsed_data = { props: [], costumes: [], makeup: [], auto: [], stunts: [], decoration: [], pyrotechnics: [], art_fill: [], dummy: [], consultant: [], locations: [] }
+        for (const item of extractedItems) {
+          if (parsed_data[item.category]) {
+            parsed_data[item.category].push({
+              name: item.name, scene: item.scene, day: item.day, source: item.source,
+              time: item.time, location: item.location, note: item.note,
             })
           }
         }
+        console.log(`[UPLOAD] Extracted items: ${Object.entries(parsed_data).map(([k,v]) => `${k}:${v.length}`).join(', ')}`)
       }
-      console.log(`[UPLOAD] Extracted items: ${Object.entries(parsed_data).map(([k,v]) => `${k}:${v.length}`).join(', ')}`)
-    }
 
-    // Save document with extracted data
-    const { rows } = await db.query(
-      `INSERT INTO documents (project_id, type, version, file_url, parsed_data, parsed_content, matched_units, delta, uploaded_by, original_name, status, group_id)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12) RETURNING *`,
-      [project_id, type, version, null,
-       parsed_data ? JSON.stringify(parsed_data) : null,
-       parsed_content ? JSON.stringify(parsed_content) : null,
-       matched_units ? JSON.stringify(matched_units) : null,
-       delta ? JSON.stringify(delta) : null,
-       req.user.id, req.file.originalname,
-       parsed_content ? 'parsed' : 'uploaded',
-       group_id || null]
-    )
-    const doc = rows[0]
-    console.log(`[UPLOAD] Saved doc ${doc.id}`)
+      // Save document
+      const { rows } = await client.query(
+        `INSERT INTO documents (project_id, type, version, file_url, parsed_data, parsed_content, matched_units, delta, uploaded_by, original_name, status, group_id)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12) RETURNING *`,
+        [project_id, type, version, null,
+         parsed_data ? JSON.stringify(parsed_data) : null,
+         parsed_content ? JSON.stringify(parsed_content) : null,
+         matched_units ? JSON.stringify(matched_units) : null,
+         delta ? JSON.stringify(delta) : null,
+         req.user.id, req.file.originalname,
+         parsed_content ? 'parsed' : 'uploaded',
+         group_id || null]
+      )
+      doc = rows[0]
 
-    // Update scenes table with document ID (was null before INSERT)
-    if (type === 'kpp' && parsed_content?.scenes) {
-      await db.query(
-        `UPDATE scenes SET kpp_document_id = $1 WHERE project_id = $2 AND kpp_document_id IS NULL AND updated_at >= NOW() - INTERVAL '5 minutes'`,
-        [doc.id, project_id]
-      )
-      // Auto-update dates for existing items that have no date yet
-      const { dateMap, timeMap, slotMap } = await getSceneLookupMaps(project_id)
-      const { rows: datelessItems } = await db.query(
-        `SELECT pli.id, pli.scene FROM production_list_items pli
-         JOIN production_lists pl ON pl.id = pli.list_id
-         WHERE pl.project_id = $1 AND pli.scene IS NOT NULL AND (pli.day IS NULL OR pli.day = '')`,
-        [project_id]
-      )
-      let dateFixed = 0
-      for (const item of datelessItems) {
-        const nScene = normalizeSceneId(item.scene) || item.scene
-        const day = dateMap[nScene] || dateMap[item.scene]
-        if (!day) continue
-        const dayLabel = timeMap[nScene] || timeMap[item.scene] || null
-        const slot = slotMap[nScene] || slotMap[item.scene] || ''
-        const time = dayLabel && slot ? `${dayLabel} · ${slot}` : dayLabel
-        await db.query(`UPDATE production_list_items SET day=$1, time=COALESCE($2, time) WHERE id=$3`, [day, time, item.id])
-        dateFixed++
+      // Update scenes table with document ID
+      if (type === 'kpp' && parsed_content?.scenes) {
+        await client.query(
+          `UPDATE scenes SET kpp_document_id = $1 WHERE project_id = $2 AND kpp_document_id IS NULL AND updated_at >= NOW() - INTERVAL '5 minutes'`,
+          [doc.id, project_id]
+        )
+        // Auto-update dates for existing items without dates
+        const { dateMap, timeMap, slotMap } = await getSceneLookupMaps(project_id, client)
+        const { rows: datelessItems } = await client.query(
+          `SELECT pli.id, pli.scene FROM production_list_items pli
+           JOIN production_lists pl ON pl.id = pli.list_id
+           WHERE pl.project_id = $1 AND pli.scene IS NOT NULL AND (pli.day IS NULL OR pli.day = '')`,
+          [project_id]
+        )
+        let dateFixed = 0
+        for (const item of datelessItems) {
+          const nScene = normalizeSceneId(item.scene) || item.scene
+          const day = dateMap[nScene] || dateMap[item.scene]
+          if (!day) continue
+          const dayLabel = timeMap[nScene] || timeMap[item.scene] || null
+          const slot = slotMap[nScene] || slotMap[item.scene] || ''
+          const time = dayLabel && slot ? `${dayLabel} · ${slot}` : dayLabel
+          await client.query(`UPDATE production_list_items SET day=$1, time=COALESCE($2, time) WHERE id=$3`, [day, time, item.id])
+          dateFixed++
+        }
+        if (dateFixed) console.log(`[UPLOAD] Auto-fixed dates for ${dateFixed} existing items`)
       }
-      if (dateFixed) console.log(`[UPLOAD] Auto-fixed dates for ${dateFixed} existing items`)
-    }
-    if (type === 'scenario' && parsed_content?.scenes) {
-      await db.query(
-        `UPDATE scenes SET scenario_document_id = $1 WHERE project_id = $2 AND scenario_document_id IS NULL AND updated_at >= NOW() - INTERVAL '5 minutes'`,
-        [doc.id, project_id]
-      )
-    }
+      if (type === 'scenario' && parsed_content?.scenes) {
+        await client.query(
+          `UPDATE scenes SET scenario_document_id = $1 WHERE project_id = $2 AND scenario_document_id IS NULL AND updated_at >= NOW() - INTERVAL '5 minutes'`,
+          [doc.id, project_id]
+        )
+      }
 
-    // When scenario uploaded — attach scene texts to existing list items using scenes table
+    // When scenario uploaded — attach scene texts to existing list items
     if (type === 'scenario' && parsed_content?.scenes) {
-      const { textMap: sceneTextMap } = await getSceneLookupMaps(project_id)
-      console.log(`[UPLOAD] Scene text map from scenes table: ${Object.keys(sceneTextMap).length} entries`)
+      const { textMap: sceneTextMap } = await getSceneLookupMaps(project_id, client)
+      console.log(`[UPLOAD] Scene text map: ${Object.keys(sceneTextMap).length} entries`)
 
-      // Update existing list items that have matching scene IDs
-      const { rows: allItems } = await db.query(
+      const { rows: allItems } = await client.query(
         `SELECT pli.id, pli.scene, pli.note FROM production_list_items pli
          JOIN production_lists pl ON pl.id = pli.list_id
          WHERE pl.project_id = $1 AND pli.scene IS NOT NULL`,
@@ -239,152 +202,70 @@ router.post('/upload', verifyJWT, upload.single('file'), async (req, res) => {
       let updated = 0
       for (const item of allItems) {
         if ((item.note || '').includes('\n---\n📝 ')) continue
-        // Normalize item's scene ID and look up in scenes table map
         const normalizedScene = normalizeSceneId(item.scene) || item.scene
         const scenarioText = sceneTextMap[normalizedScene] || sceneTextMap[item.scene]
         if (!scenarioText) continue
         const existingNote = (item.note || '').trim()
         const separator = existingNote ? '\n---\n' : ''
         const newNote = existingNote + separator + '📝 ' + scenarioText
-        await db.query(`UPDATE production_list_items SET note = $1 WHERE id = $2`, [newNote, item.id])
+        await client.query(`UPDATE production_list_items SET note = $1 WHERE id = $2`, [newNote, item.id])
         updated++
       }
       console.log(`[UPLOAD] Updated ${updated} list items with scenario text`)
 
-      // Synchronous AI analysis with async retry on failure
+      // Enqueue AI analysis (always async — no 60s blocking)
       if (process.env.ANTHROPIC_API_KEY) {
-        try {
-          console.log(`[AI] Starting synchronous scenario analysis`)
-          const { rows: existingItems } = await db.query(
-            `SELECT DISTINCT LOWER(TRIM(pli.name)) AS name FROM production_list_items pli
-             JOIN production_lists pl ON pl.id = pli.list_id
-             WHERE pl.project_id = $1`, [project_id]
-          )
-          const existingNames = existingItems.map(r => r.name)
-          const sceneTexts = parsed_content.scenes.map(s => {
-            const id = s.id || s.scene || ''
-            const text = s.text || s.synopsis || s.object || ''
-            return `Сцена ${id}: ${text.substring(0, 300)}`
-          }).join('\n')
-
-          const { dateMap: aiDateMap, timeMap: aiTimeMap, slotMap: aiSlotMap, textMap: aiTextMap } = await getSceneLookupMaps(project_id)
-
-          const aiPrompt = `Вот текст сценария:\n${sceneTexts.substring(0, 14000)}\n\nВот предметы, которые УЖЕ ЕСТЬ в списке (не дублируй их):\n${existingNames.join(', ')}\n\nНайди предметы реквизита, костюмы, грим, декорации, транспорт которые УПОМИНАЮТСЯ В ТЕКСТЕ СЦЕН, но ОТСУТСТВУЮТ в списке выше. Верни ТОЛЬКО НОВЫЕ позиции. ОБЯЗАТЕЛЬНО укажи номер сцены в поле scene.\n\nДля КАЖДОГО предмета ОБЯЗАТЕЛЬНО заполни поле "reason" — кратко объясни ПОЧЕМУ этот предмет нужен, процитируй фрагмент сценария где он упоминается.`
-
-          const timeout = new Promise((_, reject) => setTimeout(() => reject(new Error('AI timeout 60s')), 60000))
-          const aiResult = await Promise.race([parseDocument(aiPrompt), timeout])
-          console.log(`[AI] Result: ${aiResult ? Object.keys(aiResult).filter(k => (aiResult[k]||[]).length).join(', ') : 'none'}`)
-
-          if (aiResult) {
-            const { rows: members } = await db.query(`SELECT id, role FROM users WHERE project_id=$1`, [project_id])
-            const projectNamesSet = new Set(existingNames)
-            let aiImported = 0
-            for (const cat of ALL_LIST_TYPES) {
-              for (const ai of (aiResult[cat] || [])) {
-                const aiName = (ai.name || ai.item || '').replace(/\s+/g, ' ').trim()
-                if (!aiName) continue
-                const aiNameLower = aiName.toLowerCase()
-                if (projectNamesSet.has(aiNameLower)) continue
-                const sceneId = normalizeSceneId(ai.scene, dataSeries)
-                const aiDay = (sceneId && aiDateMap[sceneId]) || null
-                const aiDayLabel = (sceneId && aiTimeMap[sceneId]) || null
-                const aiSlot = (sceneId && aiSlotMap[sceneId]) || ''
-                const aiTime = aiDayLabel && aiSlot ? `${aiDayLabel} · ${aiSlot}` : aiDayLabel
-                const aiReason = ai.reason || ai.note || ''
-                const scenarioSnippet = sceneId ? (aiTextMap[sceneId] || '') : ''
-                const noteParts = []
-                if (aiReason) noteParts.push('🤖 ' + aiReason)
-                if (scenarioSnippet) noteParts.push('📝 ' + scenarioSnippet)
-                const aiNote = noteParts.join('\n---\n') || null
-                for (const m of members) {
-                  const own = ['producer','project_director'].includes(m.role) ? ALL_LIST_TYPES : (ROLE_LIST_TYPES[m.role] || [])
-                  if (!own.includes(cat)) continue
-                  await db.query(`INSERT INTO production_lists (project_id, user_id, type) VALUES ($1,$2,$3) ON CONFLICT DO NOTHING`, [project_id, m.id, cat])
-                  const { rows: lr } = await db.query(`SELECT id FROM production_lists WHERE project_id=$1 AND user_id=$2 AND type=$3`, [project_id, m.id, cat])
-                  await db.query(`INSERT INTO production_list_items (list_id, name, scene, day, time, location, qty, source, note) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
-                    [lr[0].id, aiName, sceneId, aiDay, aiTime, ai.location||null, 1, 'ai', aiNote])
-                  aiImported++
-                }
-                projectNamesSet.add(aiNameLower)
-              }
-            }
-            console.log(`[AI] Imported ${aiImported} items synchronously`)
-          }
-
-          // Cross-scenes in parallel (non-blocking, with queue fallback)
-          const fullSceneTexts = parsed_content.scenes.map(s => {
-            const id = s.id || s.scene || ''
-            const text = s.text || s.synopsis || s.object || ''
-            return `Сцена ${id}:\n${text.substring(0, 600)}`
-          }).join('\n\n')
-          analyzeCrossScenes(fullSceneTexts).then(async crossResult => {
-            if (crossResult?.cross_scenes?.length) {
-              const crossScenes = crossResult.cross_scenes.map(cs => ({
-                ...cs,
-                scenes: (cs.scenes || []).map(sc => normalizeSceneId(sc, dataSeries) || String(sc).replace(/^0+/, ''))
-              }))
-              await db.query(`UPDATE documents SET parsed_data = jsonb_set(COALESCE(parsed_data,'{}')::jsonb, '{cross_scenes}', $1::jsonb) WHERE id = $2`,
-                [JSON.stringify(crossScenes), doc.id])
-              console.log(`[AI] Cross-scenes: ${crossScenes.length} items`)
-            }
-          }).catch(e => console.error('[AI] Cross-scene error:', e.message))
-
-        } catch (aiErr) {
-          console.error('[AI] Sync error, enqueueing for retry:', aiErr.message)
-          // Fallback: enqueue for async retry
-          const sceneTexts = parsed_content.scenes.map(s => `Сцена ${s.id||''}: ${(s.text||s.synopsis||'').substring(0, 300)}`).join('\n')
-          const fullSceneTexts = parsed_content.scenes.map(s => `Сцена ${s.id||''}:\n${(s.text||s.synopsis||'').substring(0, 600)}`).join('\n\n')
-          const { rows: ei } = await db.query(`SELECT DISTINCT LOWER(TRIM(pli.name)) AS name FROM production_list_items pli JOIN production_lists pl ON pl.id=pli.list_id WHERE pl.project_id=$1`, [project_id])
-          await db.query(`INSERT INTO ai_tasks (project_id, document_id, task_type, params) VALUES ($1,$2,'analyze_scenario',$3)`,
-            [project_id, doc.id, JSON.stringify({ seriesNum: dataSeries, sceneTexts: sceneTexts.substring(0, 14000), existingNames: ei.map(r => r.name) })])
-          await db.query(`INSERT INTO ai_tasks (project_id, document_id, task_type, params) VALUES ($1,$2,'cross_scenes',$3)`,
-            [project_id, doc.id, JSON.stringify({ seriesNum: dataSeries, fullSceneTexts: fullSceneTexts.substring(0, 17000) })])
-          console.log(`[AI] Enqueued 2 tasks for async retry`)
-        }
+        const sceneTexts = parsed_content.scenes.map(s => {
+          const id = s.id || s.scene || ''
+          const text = s.text || s.synopsis || s.object || ''
+          return `Сцена ${id}: ${text.substring(0, 300)}`
+        }).join('\n')
+        const fullSceneTexts = parsed_content.scenes.map(s => {
+          const id = s.id || s.scene || ''
+          const text = s.text || s.synopsis || s.object || ''
+          return `Сцена ${id}:\n${text.substring(0, 600)}`
+        }).join('\n\n')
+        const { rows: ei } = await client.query(
+          `SELECT DISTINCT LOWER(TRIM(pli.name)) AS name FROM production_list_items pli
+           JOIN production_lists pl ON pl.id=pli.list_id WHERE pl.project_id=$1`, [project_id]
+        )
+        await client.query(`INSERT INTO ai_tasks (project_id, document_id, task_type, params) VALUES ($1,$2,'analyze_scenario',$3)`,
+          [project_id, doc.id, JSON.stringify({ seriesNum: dataSeries, sceneTexts: sceneTexts.substring(0, 14000), existingNames: ei.map(r => r.name) })])
+        await client.query(`INSERT INTO ai_tasks (project_id, document_id, task_type, params) VALUES ($1,$2,'cross_scenes',$3)`,
+          [project_id, doc.id, JSON.stringify({ seriesNum: dataSeries, fullSceneTexts: fullSceneTexts.substring(0, 17000) })])
+        console.log(`[AI] Enqueued 2 tasks for async processing`)
       }
     }
 
-    // Auto-import into production lists for all project users
-    if (parsed_data && (type === 'kpp' || type === 'scenario')) {
-      const { rows: projectMembers } = await db.query(
-        `SELECT id, role FROM users WHERE project_id=$1`, [project_id]
+    // Auto-import into production lists via pipeline (within transaction)
+    if (extractedItems.length && (type === 'kpp' || type === 'scenario')) {
+      // Clear old items of same source before re-import (keeps manual items)
+      await pipeline.clearOldItems(project_id, type, client)
+      const result = await pipeline.importToLists(extractedItems, project_id, client)
+      console.log(`[UPLOAD] Auto-import: ${result.imported} imported, ${result.skipped} skipped`)
+    }
+
+    // Enqueue synonym expansion (after import, items are in DB)
+    if (extractedItems.length && process.env.ANTHROPIC_API_KEY) {
+      await client.query(
+        `INSERT INTO ai_tasks (project_id, document_id, task_type, params) VALUES ($1,$2,'expand_synonyms',$3)`,
+        [project_id, doc.id, JSON.stringify({})]
       )
-      for (const member of projectMembers) {
-        const isFullAccess = ['producer', 'project_director'].includes(member.role)
-        const ownTypes = isFullAccess ? ALL_LIST_TYPES : (ROLE_LIST_TYPES[member.role] || [])
-        if (!ownTypes.length) continue
-        for (const listType of ownTypes) {
-          const items = parsed_data[listType] || []
-          if (!items.length) continue
-          await db.query(
-            `INSERT INTO production_lists (project_id, user_id, type) VALUES ($1,$2,$3) ON CONFLICT DO NOTHING`,
-            [project_id, member.id, listType]
-          )
-          const { rows: lr } = await db.query(
-            `SELECT id FROM production_lists WHERE project_id=$1 AND user_id=$2 AND type=$3`,
-            [project_id, member.id, listType]
-          )
-          for (const item of items) {
-            const normalizedName = (item.name || '').replace(/\s+/g, ' ').trim()
-            if (!normalizedName) continue
-            const { rows: ex } = await db.query(
-              `SELECT id FROM production_list_items WHERE list_id=$1 AND LOWER(TRIM(name))=LOWER($2) AND COALESCE(scene,'')=$3`,
-              [lr[0].id, normalizedName.toLowerCase(), item.scene || '']
-            )
-            if (ex.length) continue
-            await db.query(
-              `INSERT INTO production_list_items (list_id, name, scene, day, time, location, qty, source, note)
-               VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
-              [lr[0].id, normalizedName, item.scene||null, item.day||null, item.time||null,
-               item.location||null, 1, item.source||type, item.note||null]
-            )
-          }
-        }
-      }
-      console.log(`[UPLOAD] Auto-import done`)
+      console.log(`[AI] Enqueued expand_synonyms task`)
     }
 
-    // Notify project users
+      await client.query('COMMIT')
+      console.log(`[UPLOAD] Transaction committed, doc ${doc.id}`)
+    } catch (txErr) {
+      await client.query('ROLLBACK')
+      console.error('[UPLOAD] Transaction rolled back:', txErr.message)
+      throw txErr
+    } finally {
+      client.release()
+    }
+    // === END TRANSACTION ===
+
+    // Notify project users (fire-and-forget, outside transaction)
     const { rows: projectUsers } = await db.query(
       `SELECT id, role FROM users WHERE project_id=$1`, [project_id]
     )
@@ -527,19 +408,7 @@ router.get('/:id/delta', verifyJWT, async (req, res) => {
 router.get('/lists/:projectId/:role', verifyJWT, async (req, res) => {
   const { projectId, role } = req.params
 
-  const ROLE_CATEGORIES = {
-    props_master:           ['props', 'auto', 'costumes'],
-    props_assistant:        ['props', 'auto', 'costumes'],
-    decorator:              ['decoration', 'props'],
-    costumer:               ['costumes'],
-    costume_assistant:      ['costumes'],
-    makeup_artist:          ['makeup'],
-    stunt_coordinator:      ['stunts'],
-    pyrotechnician:         ['pyrotechnics'],
-    production_designer:    ['props', 'costumes', 'decoration', 'makeup', 'stunts', 'pyrotechnics', 'auto'],
-    art_director_assistant: ['props', 'costumes', 'decoration', 'makeup', 'stunts', 'pyrotechnics', 'auto'],
-  }
-
+  // ROLE_CATEGORIES imported from roleConfig.js
   const categories = ROLE_CATEGORIES[role] || []
 
   try {
@@ -629,21 +498,8 @@ router.get('/:projectId/parsed', verifyJWT, async (req, res) => {
 })
 
 // POST /documents/:id/import — import parsed items into user's production lists
-const ROLE_OWN_LISTS = {
-  production_designer:    ['props','art_fill','dummy','auto','decoration','costumes','makeup','stunts','pyrotechnics'],
-  art_director_assistant: ['props','art_fill','dummy','auto','decoration','costumes','makeup','stunts','pyrotechnics'],
-  props_master:           ['props','art_fill','dummy','auto','costumes'],
-  props_assistant:        ['props','art_fill','dummy','auto','costumes'],
-  decorator:              ['decoration','props','art_fill','dummy'],
-  costumer:               ['costumes'],
-  costume_assistant:      ['costumes'],
-  makeup_artist:          ['makeup'],
-  stunt_coordinator:      ['stunts'],
-  pyrotechnician:         ['pyrotechnics'],
-}
-
 router.post('/:id/import', verifyJWT, async (req, res) => {
-  const ownTypes = ROLE_OWN_LISTS[req.user.role]
+  const ownTypes = ROLE_CATEGORIES[req.user.role]
   if (!ownTypes) return res.status(403).json({ error: 'No list access for this role' })
 
   try {

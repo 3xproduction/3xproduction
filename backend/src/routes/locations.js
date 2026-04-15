@@ -23,8 +23,19 @@ router.get('/', verifyJWT, async (req, res) => {
       FROM locations l WHERE 1=1`
     const params = []
     if (type) { params.push(type); q += ` AND l.type = $${params.length}` }
-    if (search) { params.push(`%${search}%`); q += ` AND (l.name ILIKE $${params.length} OR l.address ILIKE $${params.length} OR l.description ILIKE $${params.length})` }
-    q += ` ORDER BY l.created_at DESC`
+    if (search) {
+      const { buildSearchQuery } = require('../services/searchService')
+      const { tsqueryStr, originalQuery } = await buildSearchQuery(search)
+      params.push(tsqueryStr); const tsqIdx = params.length
+      params.push(originalQuery); const rawIdx = params.length
+      q += ` AND (l.search_vector @@ to_tsquery('ru_search', $${tsqIdx})
+             OR similarity(l.name, $${rawIdx}) > 0.2)`
+    }
+    if (search) {
+      q += ` ORDER BY ts_rank_cd(l.search_vector, to_tsquery('ru_search', $${params.length - 1})) DESC, l.created_at DESC`
+    } else {
+      q += ` ORDER BY l.created_at DESC`
+    }
     const { rows } = await db.query(q, params)
     res.json(rows)
   } catch (err) {
