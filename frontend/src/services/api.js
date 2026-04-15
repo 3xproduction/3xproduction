@@ -160,6 +160,7 @@ export const publicApi = {
   catalog: (token)       => request('GET',  `/public/warehouse/${token}`),
   sendRequest: (token, body) => request('POST', `/public/warehouse/${token}/request`, body),
   submitCart:   (token, body) => request('POST', `/public/warehouse/${token}/cart-request`, body),
+  myDeals:      (token, phone) => request('GET', `/public/warehouse/${token}/my-deals?phone=${encodeURIComponent(phone)}`),
 }
 
 // ─── Projects ────────────────────────────────────────────────────────────────
