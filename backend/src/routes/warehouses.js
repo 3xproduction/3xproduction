@@ -149,7 +149,7 @@ router.delete('/cells/:id', verifyJWT, checkRole(...DIRECTOR_ROLES), async (req,
 // ─── Request Visibility Settings ─────────────────────────────────────────────
 
 // GET /warehouses/request-visibility — get visibility settings
-router.get('/request-visibility', verifyJWT, checkRole('warehouse_director'), async (req, res) => {
+router.get('/request-visibility', verifyJWT, checkRole('warehouse_director', 'warehouse_deputy'), async (req, res) => {
   try {
     // Get all warehouse staff/deputy with their visibility setting
     const { rows } = await db.query(
@@ -169,7 +169,7 @@ router.get('/request-visibility', verifyJWT, checkRole('warehouse_director'), as
 })
 
 // PUT /warehouses/request-visibility — update visibility for a user
-router.put('/request-visibility', verifyJWT, checkRole('warehouse_director'), async (req, res) => {
+router.put('/request-visibility', verifyJWT, checkRole('warehouse_director', 'warehouse_deputy'), async (req, res) => {
   const { user_id, can_see_requests } = req.body
   if (!user_id || typeof can_see_requests !== 'boolean') {
     return res.status(400).json({ error: 'Missing user_id or can_see_requests' })

@@ -5,6 +5,7 @@ const { verifyJWT, checkRole } = require('../middleware/auth')
 
 const CAN_INVITE = [
   'warehouse_director',
+  'warehouse_deputy',
   'producer',
   'project_director',
 ]

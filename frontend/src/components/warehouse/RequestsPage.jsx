@@ -71,7 +71,7 @@ function formatDate(str) {
 export default function RequestsPage() {
   const navigate = useNavigate()
   const { user } = useAuth()
-  const isDirector = user?.role === 'warehouse_director'
+  const isDirector = ['warehouse_director', 'warehouse_deputy'].includes(user?.role)
   const [filter, setFilter] = useState('')
   const [items, setItems] = useState([])
   const [loading, setLoading] = useState(true)

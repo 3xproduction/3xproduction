@@ -236,7 +236,7 @@ export default function UnitCardModal({ unitId, onClose, onChanged }) {
                   Списать
                 </Button>
               )}
-              {user?.role === 'warehouse_director' && (
+              {['warehouse_director', 'warehouse_deputy'].includes(user?.role) && (
                 <Button variant="secondary" style={{ color: 'var(--red)' }}
                   onClick={() => { setShowDeleteConfirm(v => !v); setShowWriteoff(false); setShowCell(false) }}>
                   Удалить

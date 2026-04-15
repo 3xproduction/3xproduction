@@ -59,7 +59,7 @@ router.get('/', verifyJWT, async (req, res) => {
     }
 
     const { rows } = await db.query(q, params)
-    const canSeeValuation = ['warehouse_director', 'producer'].includes(req.user.role)
+    const canSeeValuation = ['warehouse_director', 'warehouse_deputy', 'producer'].includes(req.user.role)
     const units = canSeeValuation ? rows : rows.map(({ valuation, ...rest }) => rest)
     res.json({ units })
   } catch (err) {
@@ -140,7 +140,7 @@ router.post('/', verifyJWT, async (req, res) => {
   const { name, category, serial, warehouse_id, cell_id, description, qty, condition, valuation, source, dimensions, period } = req.body
   if (!name || !category) return res.status(400).json({ error: 'Missing required fields' })
 
-  const isDirector = req.user.role === 'warehouse_director'
+  const isDirector = ['warehouse_director', 'warehouse_deputy'].includes(req.user.role)
   const finalStatus = isDirector ? 'on_stock' : 'pending'
 
   try {
@@ -345,7 +345,7 @@ router.post('/:id/reject', verifyJWT, checkRole('warehouse_director', 'warehouse
 })
 
 // POST /units/:id/writeoff
-router.post('/:id/writeoff', verifyJWT, checkRole('warehouse_director'), async (req, res) => {
+router.post('/:id/writeoff', verifyJWT, checkRole('warehouse_director', 'warehouse_deputy'), async (req, res) => {
   const { reason } = req.body
   try {
     await db.query(`UPDATE units SET status='written_off' WHERE id=$1`, [req.params.id])
@@ -417,8 +417,8 @@ router.post('/:id/request-writeoff', verifyJWT, checkRole('warehouse_deputy', 'w
   }
 })
 
-// DELETE /units/:id — delete unit (director only)
-router.delete('/:id', verifyJWT, checkRole('warehouse_director'), async (req, res) => {
+// DELETE /units/:id — delete unit (director/deputy)
+router.delete('/:id', verifyJWT, checkRole('warehouse_director', 'warehouse_deputy'), async (req, res) => {
   try {
     const { rows } = await db.query(`SELECT * FROM units WHERE id = $1`, [req.params.id])
     if (!rows.length) return res.status(404).json({ error: 'Unit not found' })

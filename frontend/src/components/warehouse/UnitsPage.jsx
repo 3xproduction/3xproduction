@@ -125,7 +125,7 @@ export default function UnitsPage() {
     }
   }
 
-  const isDirector = user?.role === 'warehouse_director'
+  const isDirector = ['warehouse_director', 'warehouse_deputy'].includes(user?.role)
 
   function compressImage(file, maxSize = 1024, quality = 0.5) {
     return new Promise((resolve) => {

@@ -24,7 +24,7 @@ export default function UnitPage() {
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false)
 
   const isDirectorOrDeputy = ['warehouse_director', 'warehouse_deputy'].includes(user?.role)
-  const isDirector = user?.role === 'warehouse_director'
+  const isDirector = ['warehouse_director', 'warehouse_deputy'].includes(user?.role)
   const canSeeValuation = ['warehouse_director', 'warehouse_deputy', 'producer'].includes(user?.role)
 
   useEffect(() => {

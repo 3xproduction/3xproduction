@@ -12,7 +12,7 @@ import GlobalSearchBar from '../shared/GlobalSearchBar'
 
 const HIDDEN_BY_ROLE = {
   warehouse_director: ['/analytics', '/locations', '/vehicles'],
-  warehouse_deputy:   ['/analytics', '/assets', '/locations', '/vehicles'],
+  warehouse_deputy:   ['/analytics', '/locations', '/vehicles'],
   warehouse_staff:    ['/analytics', '/assets', '/acts', '/rent', '/team', '/locations', '/vehicles'],
 }
 

@@ -38,8 +38,8 @@ router.delete('/:userId', verifyJWT, async (req, res) => {
   const user = req.user
   const targetId = req.params.userId
 
-  // Only directors can remove members
-  const canRemove = ['warehouse_director', 'project_director'].includes(user.role)
+  // Directors and deputy can remove members
+  const canRemove = ['warehouse_director', 'warehouse_deputy', 'project_director'].includes(user.role)
   if (!canRemove) return res.status(403).json({ error: 'Forbidden' })
 
   // Cannot remove yourself
@@ -51,8 +51,8 @@ router.delete('/:userId', verifyJWT, async (req, res) => {
 
     const target = rows[0]
 
-    // warehouse_director can only remove warehouse users (no project_id)
-    if (user.role === 'warehouse_director' && target.project_id) {
+    // warehouse director/deputy can only remove warehouse users (no project_id)
+    if (['warehouse_director', 'warehouse_deputy'].includes(user.role) && target.project_id) {
       return res.status(403).json({ error: 'Cannot remove production users' })
     }
     // project_director can only remove users in same project

@@ -77,7 +77,7 @@ router.post('/:id/close', verifyJWT, checkRole('warehouse_director', 'warehouse_
 })
 
 // GET /debts/stats — debt stats for analytics
-router.get('/stats', verifyJWT, checkRole('warehouse_director'), async (req, res) => {
+router.get('/stats', verifyJWT, checkRole('warehouse_director', 'warehouse_deputy'), async (req, res) => {
   try {
     const { rows } = await db.query(`
       SELECT

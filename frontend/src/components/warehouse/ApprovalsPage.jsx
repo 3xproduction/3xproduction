@@ -72,7 +72,7 @@ export default function ApprovalsPage() {
   const [approvedMsg, setApprovedMsg] = useState(false)
   const [valuations, setValuations] = useState({})
 
-  const isDirector = user?.role === 'warehouse_director'
+  const isDirector = ['warehouse_director', 'warehouse_deputy'].includes(user?.role)
 
   function load() {
     setLoading(true)
