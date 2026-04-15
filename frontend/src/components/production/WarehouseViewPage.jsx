@@ -5,7 +5,7 @@ import Button from '../shared/Button'
 import UnitCardModal from '../shared/UnitCardModal'
 import { STATUS_LABEL, STATUS_COLOR } from '../../constants/statuses'
 import { ALL_CATEGORIES, CATEGORIES_FILTER, categoryLabel } from '../../constants/categories'
-import { units as unitsApi, requests as requestsApi, warehouses as warehousesApi } from '../../services/api'
+import { units as unitsApi, requests as requestsApi, warehouses as warehousesApi, rent as rentApi } from '../../services/api'
 import { useAuth } from '../../hooks/useAuth'
 
 const REQUEST_STATUSES = {
@@ -102,7 +102,20 @@ export default function WarehouseViewPage() {
             <p style={{ fontSize: 13, color: 'var(--muted)', marginTop: 2 }}>Просмотр остатков</p>
           </div>
           {user?.role === 'producer' && (
-            <Button onClick={() => window.location.href = '/production/units?add=1'}>+ Новая единица</Button>
+            <div style={{ display: 'flex', gap: 8 }}>
+              <Button variant="secondary" onClick={async () => {
+                try {
+                  const data = await rentApi.generateLink()
+                  const url = data.url || data.link
+                  if (url) {
+                    const full = `${window.location.origin}${url}`
+                    await navigator.clipboard.writeText(full)
+                    alert('Ссылка скопирована: ' + full)
+                  }
+                } catch (e) { alert(e.message || 'Ошибка') }
+              }}>Публичная ссылка</Button>
+              <Button onClick={() => window.location.href = '/production/units?add=1'}>+ Новая единица</Button>
+            </div>
           )}
         </div>
 

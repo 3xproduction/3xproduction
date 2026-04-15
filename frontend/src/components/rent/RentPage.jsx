@@ -413,10 +413,16 @@ function RentReturnModal({ deal, onClose, onDone }) {
 }
 
 function ReviewModal({ deal, onClose, onDone }) {
+  const isCompany = deal.counterparty_type === 'company'
   const [form, setForm] = useState({
-    period_start: '', period_end: '', price_total: '', deposit: '',
-    counterparty_email: '', counterparty_type: deal.counterparty_type || 'person',
-    inn: '', legal_address: '', extra_contact: '',
+    period_start: deal.period_start ? deal.period_start.slice(0, 10) : '',
+    period_end: deal.period_end ? deal.period_end.slice(0, 10) : '',
+    price_total: deal.price_total || '',
+    deposit: deal.deposit || '',
+    counterparty_email: deal.counterparty_email || '',
+    counterparty_type: deal.counterparty_type || 'person',
+    inn: deal.inn || '', legal_address: deal.legal_address || '',
+    extra_contact: deal.extra_contact || '',
   })
   const [units, setUnits] = useState([])
   const [saving, setSaving] = useState(false)
@@ -479,10 +485,16 @@ function ReviewModal({ deal, onClose, onDone }) {
 
         {/* Requester info */}
         <div style={{ background: 'var(--bg)', borderRadius: 'var(--radius-btn)', padding: '14px 16px', marginBottom: 16 }}>
-          <div style={{ fontSize: 13, fontWeight: 500, marginBottom: 8, color: 'var(--text)' }}>Заявитель</div>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
+            <div style={{ fontSize: 13, fontWeight: 500, color: 'var(--text)' }}>Заявитель</div>
+            <Badge color={isCompany ? 'blue' : 'muted'}>{isCompany ? 'Компания' : 'Физлицо'}</Badge>
+          </div>
           <div style={{ fontSize: 13 }}>{deal.requester_name || deal.counterparty_name}</div>
           <div style={{ fontSize: 12, color: 'var(--muted)' }}>{deal.requester_phone || deal.counterparty_contact}</div>
+          {deal.counterparty_email && <div style={{ fontSize: 12, color: 'var(--muted)' }}>{deal.counterparty_email}</div>}
           {deal.requester_project && <div style={{ fontSize: 12, color: 'var(--muted)' }}>Проект: {deal.requester_project}</div>}
+          {isCompany && deal.inn && <div style={{ fontSize: 12, color: 'var(--muted)' }}>ИНН: {deal.inn}</div>}
+          {isCompany && deal.legal_address && <div style={{ fontSize: 12, color: 'var(--muted)' }}>Адрес: {deal.legal_address}</div>}
           {deal.requester_message && <div style={{ fontSize: 12, color: 'var(--muted)', marginTop: 4, fontStyle: 'italic' }}>{deal.requester_message}</div>}
         </div>
 
@@ -494,7 +506,7 @@ function ReviewModal({ deal, onClose, onDone }) {
               <div key={u.id} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '6px 10px', border: '1px solid var(--border)', borderRadius: 6, fontSize: 13 }}>
                 {u.photos?.[0] && <img src={u.photos[0].url || u.photos[0]} alt="" style={{ width: 32, height: 32, objectFit: 'cover', borderRadius: 4 }} />}
                 <div style={{ flex: 1, fontWeight: 500 }}>{u.name}</div>
-                <div style={{ fontSize: 11, color: 'var(--muted)' }}>{u.category}</div>
+                <div style={{ fontSize: 11, color: 'var(--muted)' }}>{categoryLabel(u.category)}</div>
               </div>
             ))}
             {units.length === 0 && <div style={{ fontSize: 12, color: 'var(--muted)' }}>{(deal.unit_ids || []).length} единиц</div>}
@@ -511,10 +523,6 @@ function ReviewModal({ deal, onClose, onDone }) {
           <Input label="Залог (руб)" type="number" value={form.deposit} onChange={e => setForm(f => ({ ...f, deposit: e.target.value }))} placeholder="0" />
         </div>
         <Input label="Email контрагента" type="email" value={form.counterparty_email} onChange={e => setForm(f => ({ ...f, counterparty_email: e.target.value }))} placeholder="email@example.com" />
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10, marginBottom: 0 }}>
-          <Input label="ИНН" value={form.inn} onChange={e => setForm(f => ({ ...f, inn: e.target.value }))} placeholder="" />
-          <Input label="Юр. адрес" value={form.legal_address} onChange={e => setForm(f => ({ ...f, legal_address: e.target.value }))} placeholder="" />
-        </div>
 
         {error && <div style={{ color: 'var(--red)', fontSize: 13, marginBottom: 12 }}>{error}</div>}
 

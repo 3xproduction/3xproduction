@@ -59,6 +59,12 @@ export default function PublicWarehousePage() {
 
   const [showConfirm, setShowConfirm] = useState(false)
   const [showSuccess, setShowSuccess] = useState(false)
+  const [authError, setAuthError] = useState('')
+
+  const phoneValid = /^\+7\s?\d{3}\s?\d{3}\s?\d{2}\s?\d{2}$/.test(form.phone.trim()) || /^\+7\d{10}$/.test(form.phone.replace(/\s/g, ''))
+  const emailValid = !form.email || /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(form.email)
+  const innValid = cpType !== 'company' || (form.inn.length === 10 || form.inn.length === 12)
+  const canEnter = form.name && form.phone && phoneValid && emailValid && innValid
 
   useEffect(() => {
     fetch(`${BASE}/public/warehouse/${token}`)
@@ -98,7 +104,11 @@ export default function PublicWarehousePage() {
   function set(f) { return e => setForm(p => ({ ...p, [f]: e.target.value })) }
 
   function enterCabinet() {
-    if (!form.name || !form.phone) return
+    if (!form.name) { setAuthError('Укажите имя'); return }
+    if (!phoneValid) { setAuthError('Формат телефона: +7 XXX XXX XX XX'); return }
+    if (!emailValid) { setAuthError('Некорректный email'); return }
+    if (cpType === 'company' && !innValid) { setAuthError('ИНН должен содержать 10 или 12 цифр'); return }
+    setAuthError('')
     saveSession(token, { form, cpType })
     setStep('cabinet')
   }
@@ -204,19 +214,27 @@ export default function PublicWarehousePage() {
             </div>
 
             <FI label={cpType === 'company' ? 'Название компании *' : 'ФИО *'} value={form.name} onChange={set('name')} placeholder={cpType === 'company' ? 'ООО Рога и Копыта' : 'Иван Иванов'} />
-            <FI label="Телефон *" value={form.phone} onChange={set('phone')} placeholder="+7 900 000 00 00" />
-            <FI label="Email" value={form.email} onChange={set('email')} placeholder="email@example.com" type="email" />
+            <PhoneInput label="Телефон *" value={form.phone} onChange={v => setForm(p => ({ ...p, phone: v }))} />
+            <FI label="Email" value={form.email} onChange={set('email')} placeholder="email@example.com" type="email" error={form.email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(form.email) ? 'Некорректный email' : ''} />
             <FI label="Название проекта" value={form.project_name} onChange={set('project_name')} placeholder="Мой проект" />
 
             {cpType === 'company' && (
               <>
-                <FI label="ИНН" value={form.inn} onChange={set('inn')} placeholder="1234567890" />
+                <InnInput
+                  value={form.inn}
+                  onChange={v => setForm(p => ({ ...p, inn: v }))}
+                  onCompanyFound={data => {
+                    if (data.name) setForm(p => ({ ...p, name: data.name, legal_address: data.address || p.legal_address }))
+                  }}
+                />
                 <FI label="Юридический адрес" value={form.legal_address} onChange={set('legal_address')} placeholder="г. Москва, ул. ..." />
                 <FI label="Дополнительный контакт" value={form.extra_contact} onChange={set('extra_contact')} placeholder="Имя, телефон или email" />
               </>
             )}
 
-            <Button fullWidth disabled={!form.name || !form.phone} onClick={enterCabinet} style={{ marginTop: 8 }}>
+            {authError && <div style={{ color: 'var(--red)', fontSize: 13, marginBottom: 8 }}>{authError}</div>}
+
+            <Button fullWidth disabled={!canEnter} onClick={enterCabinet} style={{ marginTop: 8 }}>
               Войти в каталог
             </Button>
           </div>
@@ -540,12 +558,99 @@ function DealCard({ deal }) {
   )
 }
 
-function FI({ label, value, onChange, placeholder, type = 'text' }) {
+function FI({ label, value, onChange, placeholder, type = 'text', error }) {
   return (
     <div style={{ marginBottom: 14 }}>
       {label && <div style={{ fontSize: 12, fontWeight: 500, marginBottom: 4, color: 'var(--muted)' }}>{label}</div>}
       <input type={type} value={value} onChange={onChange} placeholder={placeholder}
-        style={{ width: '100%', height: 38, padding: '0 12px', border: '1px solid var(--border)', borderRadius: 'var(--radius-btn)', fontSize: 13, background: 'var(--white)', outline: 'none', boxSizing: 'border-box' }} />
+        style={{ width: '100%', height: 38, padding: '0 12px', border: `1px solid ${error ? 'var(--red)' : 'var(--border)'}`, borderRadius: 'var(--radius-btn)', fontSize: 13, background: 'var(--white)', outline: 'none', boxSizing: 'border-box' }} />
+      {error && <div style={{ fontSize: 11, color: 'var(--red)', marginTop: 2 }}>{error}</div>}
+    </div>
+  )
+}
+
+function PhoneInput({ label, value, onChange }) {
+  function handleChange(e) {
+    let v = e.target.value.replace(/[^\d+\s]/g, '')
+    if (v && !v.startsWith('+')) v = '+' + v
+    if (v.length > 0 && !v.startsWith('+7')) {
+      v = '+7' + v.replace(/^\+/, '')
+    }
+    // Auto-format: +7 XXX XXX XX XX
+    const digits = v.replace(/\D/g, '')
+    if (digits.length <= 1) { onChange(v); return }
+    let formatted = '+7'
+    if (digits.length > 1) formatted += ' ' + digits.slice(1, 4)
+    if (digits.length > 4) formatted += ' ' + digits.slice(4, 7)
+    if (digits.length > 7) formatted += ' ' + digits.slice(7, 9)
+    if (digits.length > 9) formatted += ' ' + digits.slice(9, 11)
+    onChange(formatted)
+  }
+
+  const isValid = !value || /^\+7\s?\d{3}\s?\d{3}\s?\d{2}\s?\d{2}$/.test(value.trim())
+
+  return (
+    <div style={{ marginBottom: 14 }}>
+      {label && <div style={{ fontSize: 12, fontWeight: 500, marginBottom: 4, color: 'var(--muted)' }}>{label}</div>}
+      <input value={value} onChange={handleChange} placeholder="+7 900 000 00 00" maxLength={16}
+        style={{ width: '100%', height: 38, padding: '0 12px', border: `1px solid ${value && !isValid ? 'var(--red)' : 'var(--border)'}`, borderRadius: 'var(--radius-btn)', fontSize: 13, background: 'var(--white)', outline: 'none', boxSizing: 'border-box' }} />
+      {value && !isValid && <div style={{ fontSize: 11, color: 'var(--red)', marginTop: 2 }}>Формат: +7 XXX XXX XX XX</div>}
+    </div>
+  )
+}
+
+function InnInput({ value, onChange, onCompanyFound }) {
+  const [loading, setLoading] = useState(false)
+  const [companyName, setCompanyName] = useState('')
+
+  function handleChange(e) {
+    const v = e.target.value.replace(/\D/g, '').slice(0, 12)
+    onChange(v)
+    setCompanyName('')
+  }
+
+  async function lookup() {
+    if (value.length !== 10 && value.length !== 12) return
+    setLoading(true)
+    try {
+      const res = await fetch('https://suggestions.dadata.ru/suggestions/api/4_1/rs/findById/party', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': 'Token 3ee0477e6a09dc2d22b9dade4c5a50ef4e2e8bc3' },
+        body: JSON.stringify({ query: value }),
+      })
+      const data = await res.json()
+      const s = data.suggestions?.[0]
+      if (s) {
+        const name = s.value || ''
+        const address = s.data?.address?.unrestricted_value || s.data?.address?.value || ''
+        setCompanyName(name)
+        onCompanyFound?.({ name, address })
+      } else {
+        setCompanyName('Не найдено')
+      }
+    } catch {
+      setCompanyName('Ошибка поиска')
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  const valid = value.length === 0 || value.length === 10 || value.length === 12
+
+  return (
+    <div style={{ marginBottom: 14 }}>
+      <div style={{ fontSize: 12, fontWeight: 500, marginBottom: 4, color: 'var(--muted)' }}>ИНН *</div>
+      <div style={{ display: 'flex', gap: 8 }}>
+        <input value={value} onChange={handleChange} placeholder="1234567890" maxLength={12}
+          style={{ flex: 1, height: 38, padding: '0 12px', border: `1px solid ${!valid ? 'var(--red)' : 'var(--border)'}`, borderRadius: 'var(--radius-btn)', fontSize: 13, background: 'var(--white)', outline: 'none', boxSizing: 'border-box' }} />
+        <button onClick={lookup} disabled={loading || (value.length !== 10 && value.length !== 12)} style={{
+          padding: '0 14px', height: 38, borderRadius: 'var(--radius-btn)', fontSize: 12, fontWeight: 500,
+          border: '1px solid var(--border)', background: 'var(--white)', color: 'var(--accent)', cursor: 'pointer',
+          opacity: (value.length !== 10 && value.length !== 12) ? 0.4 : 1,
+        }}>{loading ? '...' : 'Найти'}</button>
+      </div>
+      {!valid && <div style={{ fontSize: 11, color: 'var(--red)', marginTop: 2 }}>ИНН: 10 или 12 цифр</div>}
+      {companyName && <div style={{ fontSize: 12, color: 'var(--green)', marginTop: 4 }}>{companyName}</div>}
     </div>
   )
 }
