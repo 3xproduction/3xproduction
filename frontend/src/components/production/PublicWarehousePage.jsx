@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useRef } from 'react'
 import { useParams } from 'react-router-dom'
 import { ShoppingCart, X, Minus, Plus, ChevronDown, ChevronUp, Package, Clock, CheckCircle, RotateCcw, User, FileText } from 'lucide-react'
 import Badge from '../shared/Badge'
@@ -601,56 +601,78 @@ function PhoneInput({ label, value, onChange }) {
 
 function InnInput({ value, onChange, onCompanyFound }) {
   const [loading, setLoading] = useState(false)
-  const [companyName, setCompanyName] = useState('')
+  const [info, setInfo] = useState(null) // { name, address, kpp, ogrn, director }
+  const [error, setError] = useState('')
+  const lastQueried = useRef('')
 
-  function handleChange(e) {
-    const v = e.target.value.replace(/\D/g, '').slice(0, 12)
-    onChange(v)
-    setCompanyName('')
-  }
+  const valid = value.length === 0 || value.length === 10 || value.length === 12
 
-  async function lookup() {
-    if (value.length !== 10 && value.length !== 12) return
+  useEffect(() => {
+    if ((value.length === 10 || value.length === 12) && value !== lastQueried.current) {
+      lastQueried.current = value
+      lookup(value)
+    }
+    if (value.length < 10) {
+      setInfo(null)
+      setError('')
+    }
+  }, [value]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  async function lookup(inn) {
     setLoading(true)
+    setError('')
+    setInfo(null)
     try {
       const res = await fetch('https://suggestions.dadata.ru/suggestions/api/4_1/rs/findById/party', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'Authorization': 'Token 3ee0477e6a09dc2d22b9dade4c5a50ef4e2e8bc3' },
-        body: JSON.stringify({ query: value }),
+        body: JSON.stringify({ query: inn }),
       })
       const data = await res.json()
       const s = data.suggestions?.[0]
       if (s) {
-        const name = s.value || ''
-        const address = s.data?.address?.unrestricted_value || s.data?.address?.value || ''
-        setCompanyName(name)
-        onCompanyFound?.({ name, address })
+        const found = {
+          name: s.value || '',
+          address: s.data?.address?.unrestricted_value || s.data?.address?.value || '',
+          kpp: s.data?.kpp || '',
+          ogrn: s.data?.ogrn || '',
+          director: s.data?.management?.name || '',
+        }
+        setInfo(found)
+        onCompanyFound?.(found)
       } else {
-        setCompanyName('Не найдено')
+        setError('Организация не найдена')
       }
     } catch {
-      setCompanyName('Ошибка поиска')
+      setError('Ошибка поиска')
     } finally {
       setLoading(false)
     }
   }
 
-  const valid = value.length === 0 || value.length === 10 || value.length === 12
+  function handleChange(e) {
+    const v = e.target.value.replace(/\D/g, '').slice(0, 12)
+    onChange(v)
+  }
 
   return (
     <div style={{ marginBottom: 14 }}>
       <div style={{ fontSize: 12, fontWeight: 500, marginBottom: 4, color: 'var(--muted)' }}>ИНН *</div>
-      <div style={{ display: 'flex', gap: 8 }}>
+      <div style={{ position: 'relative' }}>
         <input value={value} onChange={handleChange} placeholder="1234567890" maxLength={12}
-          style={{ flex: 1, height: 38, padding: '0 12px', border: `1px solid ${!valid ? 'var(--red)' : 'var(--border)'}`, borderRadius: 'var(--radius-btn)', fontSize: 13, background: 'var(--white)', outline: 'none', boxSizing: 'border-box' }} />
-        <button onClick={lookup} disabled={loading || (value.length !== 10 && value.length !== 12)} style={{
-          padding: '0 14px', height: 38, borderRadius: 'var(--radius-btn)', fontSize: 12, fontWeight: 500,
-          border: '1px solid var(--border)', background: 'var(--white)', color: 'var(--accent)', cursor: 'pointer',
-          opacity: (value.length !== 10 && value.length !== 12) ? 0.4 : 1,
-        }}>{loading ? '...' : 'Найти'}</button>
+          style={{ width: '100%', height: 38, padding: '0 12px', border: `1px solid ${!valid ? 'var(--red)' : info ? 'var(--green)' : 'var(--border)'}`, borderRadius: 'var(--radius-btn)', fontSize: 13, background: 'var(--white)', outline: 'none', boxSizing: 'border-box' }} />
+        {loading && <span style={{ position: 'absolute', right: 12, top: 10, fontSize: 12, color: 'var(--muted)' }}>...</span>}
       </div>
-      {!valid && <div style={{ fontSize: 11, color: 'var(--red)', marginTop: 2 }}>ИНН: 10 или 12 цифр</div>}
-      {companyName && <div style={{ fontSize: 12, color: 'var(--green)', marginTop: 4 }}>{companyName}</div>}
+      {!valid && value.length > 0 && <div style={{ fontSize: 11, color: 'var(--red)', marginTop: 2 }}>ИНН: 10 или 12 цифр</div>}
+      {error && <div style={{ fontSize: 11, color: 'var(--red)', marginTop: 2 }}>{error}</div>}
+      {info && (
+        <div style={{ marginTop: 6, padding: '8px 10px', background: 'var(--bg)', borderRadius: 'var(--radius-btn)', fontSize: 12 }}>
+          <div style={{ fontWeight: 500, color: 'var(--green)', marginBottom: 2 }}>{info.name}</div>
+          {info.director && <div style={{ color: 'var(--muted)' }}>Руководитель: {info.director}</div>}
+          {info.address && <div style={{ color: 'var(--muted)', marginTop: 1 }}>{info.address}</div>}
+          {(info.kpp || info.ogrn) && <div style={{ color: 'var(--muted)', marginTop: 1 }}>{info.kpp && `КПП: ${info.kpp}`}{info.kpp && info.ogrn && ' · '}{info.ogrn && `ОГРН: ${info.ogrn}`}</div>}
+        </div>
+      )}
     </div>
   )
 }
