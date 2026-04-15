@@ -122,6 +122,16 @@ export default function DecorationsPage() {
     } catch { /* ignore */ }
   }
 
+  function isVideoFile(file) {
+    return file.type?.startsWith('video/')
+  }
+
+  function isVideoUrl(url) {
+    if (!url) return false
+    const lower = url.toLowerCase()
+    return lower.includes('.mp4') || lower.includes('.webm') || lower.includes('.mov')
+  }
+
   function onPhotosSelected(e) {
     const files = Array.from(e.target.files).slice(0, 5)
     setPhotos(prev => [...prev, ...files].slice(0, 5))
@@ -226,7 +236,9 @@ export default function DecorationsPage() {
                   display: 'flex', alignItems: 'center', justifyContent: 'center', overflow: 'hidden',
                 }}>
                   {d.photo_url ? (
-                    <img src={d.photo_url} alt={d.name} style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+                    isVideoUrl(d.photo_url)
+                      ? <video src={d.photo_url} muted preload="metadata" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+                      : <img src={d.photo_url} alt={d.name} style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
                   ) : (
                     <Clapperboard size={40} style={{ color: 'var(--muted)', opacity: 0.4 }} />
                   )}
@@ -366,7 +378,7 @@ export default function DecorationsPage() {
                 <input
                   ref={fileRef}
                   type="file"
-                  accept="image/*"
+                  accept="image/*,video/mp4,video/webm,video/quicktime"
                   multiple
                   onChange={onPhotosSelected}
                   style={{ display: 'none' }}
@@ -374,7 +386,11 @@ export default function DecorationsPage() {
                 <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
                   {photos.map((p, i) => (
                     <div key={i} style={{ position: 'relative', width: 64, height: 64, borderRadius: 8, overflow: 'hidden', border: '1px solid var(--border)' }}>
-                      <img src={URL.createObjectURL(p)} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+                      {isVideoFile(p) ? (
+                        <video src={URL.createObjectURL(p)} muted preload="metadata" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+                      ) : (
+                        <img src={URL.createObjectURL(p)} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+                      )}
                       <button
                         type="button"
                         onClick={() => setPhotos(prev => prev.filter((_, j) => j !== i))}
@@ -466,17 +482,14 @@ export default function DecorationsPage() {
                 {/* Photos gallery */}
                 {detail.photos && detail.photos.length > 0 && (
                   <div style={{ display: 'flex', gap: 8, marginBottom: 16, overflowX: 'auto', paddingBottom: 4 }}>
-                    {detail.photos.map((photo, i) => (
-                      <img
-                        key={i}
-                        src={photo.url || photo}
-                        alt=""
-                        style={{
-                          width: 120, height: 120, objectFit: 'cover', borderRadius: 8,
-                          border: '1px solid var(--border)', flexShrink: 0,
-                        }}
-                      />
-                    ))}
+                    {detail.photos.map((photo, i) => {
+                      const src = photo.url || photo
+                      return isVideoUrl(src) ? (
+                        <video key={i} src={src} controls preload="metadata" style={{ width: 120, height: 120, objectFit: 'cover', borderRadius: 8, border: '1px solid var(--border)', flexShrink: 0 }} />
+                      ) : (
+                        <img key={i} src={src} alt="" style={{ width: 120, height: 120, objectFit: 'cover', borderRadius: 8, border: '1px solid var(--border)', flexShrink: 0 }} />
+                      )
+                    })}
                   </div>
                 )}
 

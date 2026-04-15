@@ -57,6 +57,12 @@ const badgeStyle = (color, bg) => ({
   background: bg, color,
 })
 
+function isVideoUrl(url) {
+  if (!url) return false
+  const lower = url.toLowerCase()
+  return lower.includes('.mp4') || lower.includes('.webm') || lower.includes('.mov')
+}
+
 function vehicleTitle(v) {
   if (v.brand || v.model) {
     return [v.brand, v.model, v.year].filter(Boolean).join(' ')
@@ -237,7 +243,9 @@ export default function VehiclesPage() {
                     overflow: 'hidden',
                   }}>
                     {v.photo_url ? (
-                      <img src={v.photo_url} alt={vehicleTitle(v)} style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+                      isVideoUrl(v.photo_url)
+                        ? <video src={v.photo_url} muted preload="metadata" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+                        : <img src={v.photo_url} alt={vehicleTitle(v)} style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
                     ) : (
                       <Car size={48} style={{ color: 'var(--border)' }} />
                     )}
@@ -378,7 +386,7 @@ export default function VehiclesPage() {
               {/* Photo upload */}
               <div style={{ marginBottom: 20 }}>
                 <label style={{ display: 'block', fontWeight: 500, marginBottom: 6, fontSize: 13 }}>Фото</label>
-                <input type="file" accept="image/*" ref={fileRef} onChange={e => setPhotoFile(e.target.files[0] || null)} style={{ display: 'none' }} />
+                <input type="file" accept="image/*,video/mp4,video/webm,video/quicktime" ref={fileRef} onChange={e => setPhotoFile(e.target.files[0] || null)} style={{ display: 'none' }} />
                 <button
                   type="button"
                   onClick={() => fileRef.current?.click()}
@@ -427,28 +435,21 @@ export default function VehiclesPage() {
               <div style={{ marginBottom: 20 }}>
                 {detail.photos?.length > 0 ? (
                   <div style={{ display: 'flex', gap: 8, overflowX: 'auto', paddingBottom: 4 }}>
-                    {detail.photos.map((p, i) => (
-                      <img
-                        key={i}
-                        src={p.url || p}
-                        alt={`Фото ${i + 1}`}
-                        style={{
-                          width: 180, height: 180, objectFit: 'cover',
-                          borderRadius: 'var(--radius-btn)', flexShrink: 0,
-                          border: '1px solid var(--border)',
-                        }}
-                      />
-                    ))}
+                    {detail.photos.map((p, i) => {
+                      const src = p.url || p
+                      return isVideoUrl(src) ? (
+                        <video key={i} src={src} controls preload="metadata" style={{ width: 180, height: 180, objectFit: 'cover', borderRadius: 'var(--radius-btn)', flexShrink: 0, border: '1px solid var(--border)' }} />
+                      ) : (
+                        <img key={i} src={src} alt={`Фото ${i + 1}`} style={{ width: 180, height: 180, objectFit: 'cover', borderRadius: 'var(--radius-btn)', flexShrink: 0, border: '1px solid var(--border)' }} />
+                      )
+                    })}
                   </div>
                 ) : detail.photo_url ? (
-                  <img
-                    src={detail.photo_url}
-                    alt={vehicleTitle(detail)}
-                    style={{
-                      width: '100%', maxHeight: 300, objectFit: 'cover',
-                      borderRadius: 'var(--radius-btn)', border: '1px solid var(--border)',
-                    }}
-                  />
+                  isVideoUrl(detail.photo_url) ? (
+                    <video src={detail.photo_url} controls preload="metadata" style={{ width: '100%', maxHeight: 300, objectFit: 'cover', borderRadius: 'var(--radius-btn)', border: '1px solid var(--border)' }} />
+                  ) : (
+                    <img src={detail.photo_url} alt={vehicleTitle(detail)} style={{ width: '100%', maxHeight: 300, objectFit: 'cover', borderRadius: 'var(--radius-btn)', border: '1px solid var(--border)' }} />
+                  )
                 ) : null}
               </div>
             )}

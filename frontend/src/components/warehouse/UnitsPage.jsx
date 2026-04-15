@@ -96,10 +96,14 @@ export default function UnitsPage() {
     return matchCat && matchStatus
   })
 
+  function isVideoFile(file) {
+    return file.type?.startsWith('video/')
+  }
+
   async function onFilesSelected(e) {
     const files = Array.from(e.target.files)
-    const compressed = await Promise.all(files.map(f => compressImage(f)))
-    setPhotos(prev => [...prev, ...compressed].slice(0, 3))
+    const processed = await Promise.all(files.map(f => isVideoFile(f) ? f : compressImage(f)))
+    setPhotos(prev => [...prev, ...processed].slice(0, 3))
   }
 
   async function handlePhotosReady() {
@@ -476,7 +480,11 @@ export default function UnitsPage() {
                     <div style={{ display: 'flex', gap: 10, marginBottom: 20, flexWrap: 'wrap' }}>
                       {photos.map((f, i) => (
                         <div key={i} style={{ position: 'relative', width: 100, height: 100 }}>
-                          <img src={URL.createObjectURL(f)} alt="" style={{ width: 100, height: 100, objectFit: 'cover', borderRadius: 'var(--radius-btn)', border: '1px solid var(--border)' }} />
+                          {isVideoFile(f) ? (
+                            <video src={URL.createObjectURL(f)} muted preload="metadata" style={{ width: 100, height: 100, objectFit: 'cover', borderRadius: 'var(--radius-btn)', border: '1px solid var(--border)' }} />
+                          ) : (
+                            <img src={URL.createObjectURL(f)} alt="" style={{ width: 100, height: 100, objectFit: 'cover', borderRadius: 'var(--radius-btn)', border: '1px solid var(--border)' }} />
+                          )}
                           <button onClick={() => setPhotos(p => p.filter((_, j) => j !== i))}
                             style={{ position: 'absolute', top: -6, right: -6, background: 'var(--red)', border: 'none', borderRadius: '50%', width: 20, height: 20, color: '#fff', fontSize: 12, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>×</button>
                         </div>
@@ -496,8 +504,8 @@ export default function UnitsPage() {
                         </>
                       )}
                     </div>
-                    <input ref={fileRef} type="file" accept="image/*" multiple style={{ display: 'none' }} onChange={onFilesSelected} />
-                    <input ref={camRef} type="file" accept="image/*" capture="environment" style={{ display: 'none' }} onChange={onFilesSelected} />
+                    <input ref={fileRef} type="file" accept="image/*,video/mp4,video/webm,video/quicktime" multiple style={{ display: 'none' }} onChange={onFilesSelected} />
+                    <input ref={camRef} type="file" accept="image/*,video/mp4,video/webm,video/quicktime" capture="environment" style={{ display: 'none' }} onChange={onFilesSelected} />
 
                     <div style={{ display: 'flex', gap: 8 }}>
                       <Button variant="secondary" fullWidth onClick={() => setShowAdd(false)}>Отмена</Button>
@@ -516,7 +524,11 @@ export default function UnitsPage() {
 
                 <div style={{ display: 'flex', gap: 8, marginBottom: 16 }}>
                   {photos.map((f, i) => (
-                    <img key={i} src={URL.createObjectURL(f)} alt="" style={{ width: 56, height: 56, objectFit: 'cover', borderRadius: 'var(--radius-btn)', border: '1px solid var(--border)' }} />
+                    isVideoFile(f) ? (
+                      <video key={i} src={URL.createObjectURL(f)} muted style={{ width: 56, height: 56, objectFit: 'cover', borderRadius: 'var(--radius-btn)', border: '1px solid var(--border)' }} />
+                    ) : (
+                      <img key={i} src={URL.createObjectURL(f)} alt="" style={{ width: 56, height: 56, objectFit: 'cover', borderRadius: 'var(--radius-btn)', border: '1px solid var(--border)' }} />
+                    )
                   ))}
                 </div>
 

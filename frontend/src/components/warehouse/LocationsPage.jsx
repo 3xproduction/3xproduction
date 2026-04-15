@@ -62,10 +62,20 @@ export default function LocationsPage() {
     setShowAdd(true)
   }
 
+  function isVideoFile(file) {
+    return file.type?.startsWith('video/')
+  }
+
+  function isVideoUrl(url) {
+    if (!url) return false
+    const lower = url.toLowerCase()
+    return lower.includes('.mp4') || lower.includes('.webm') || lower.includes('.mov')
+  }
+
   function onFiles(e) {
     const files = Array.from(e.target.files)
-    const compressed = files.map(f => compressImage(f))
-    Promise.all(compressed).then(results => {
+    const processed = files.map(f => isVideoFile(f) ? Promise.resolve(f) : compressImage(f))
+    Promise.all(processed).then(results => {
       setPhotos(prev => [...prev, ...results].slice(0, 5))
     })
     e.target.value = ''
@@ -226,10 +236,12 @@ export default function LocationsPage() {
                 onMouseEnter={e => e.currentTarget.style.boxShadow = '0 2px 8px rgba(0,0,0,0.08)'}
                 onMouseLeave={e => e.currentTarget.style.boxShadow = 'none'}
               >
-                {/* Photo */}
+                {/* Photo/Video */}
                 <div style={{ aspectRatio: '1', background: 'var(--bg)', display: 'flex', alignItems: 'center', justifyContent: 'center', overflow: 'hidden' }}>
                   {loc.photo_url
-                    ? <img src={loc.photo_url} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+                    ? isVideoUrl(loc.photo_url)
+                      ? <video src={loc.photo_url} muted preload="metadata" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+                      : <img src={loc.photo_url} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
                     : <MapPin size={40} style={{ color: 'var(--muted)', opacity: 0.4 }} />
                   }
                 </div>
@@ -302,7 +314,11 @@ export default function LocationsPage() {
             <div style={{ display: 'flex', gap: 10, marginBottom: 16, flexWrap: 'wrap' }}>
               {photos.map((f, i) => (
                 <div key={i} style={{ position: 'relative', width: 80, height: 80 }}>
-                  <img src={URL.createObjectURL(f)} alt="" style={{ width: 80, height: 80, objectFit: 'cover', borderRadius: 'var(--radius-btn)', border: '1px solid var(--border)' }} />
+                  {isVideoFile(f) ? (
+                    <video src={URL.createObjectURL(f)} muted preload="metadata" style={{ width: 80, height: 80, objectFit: 'cover', borderRadius: 'var(--radius-btn)', border: '1px solid var(--border)' }} />
+                  ) : (
+                    <img src={URL.createObjectURL(f)} alt="" style={{ width: 80, height: 80, objectFit: 'cover', borderRadius: 'var(--radius-btn)', border: '1px solid var(--border)' }} />
+                  )}
                   <button
                     onClick={() => setPhotos(p => p.filter((_, j) => j !== i))}
                     style={{ position: 'absolute', top: -6, right: -6, background: 'var(--red, #ef4444)', border: 'none', borderRadius: '50%', width: 20, height: 20, color: '#fff', fontSize: 12, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center' }}
@@ -321,7 +337,7 @@ export default function LocationsPage() {
                 </button>
               )}
             </div>
-            <input ref={fileRef} type="file" accept="image/*" multiple style={{ display: 'none' }} onChange={onFiles} />
+            <input ref={fileRef} type="file" accept="image/*,video/mp4,video/webm,video/quicktime" multiple style={{ display: 'none' }} onChange={onFiles} />
 
             {/* Name */}
             <FL>Название *</FL>
@@ -444,18 +460,22 @@ export default function LocationsPage() {
                 {/* Photo gallery */}
                 {detail.photos && detail.photos.length > 0 ? (
                   <div style={{ display: 'flex', gap: 8, marginBottom: 16, overflowX: 'auto', paddingBottom: 4 }}>
-                    {detail.photos.map((url, i) => (
-                      <img
-                        key={i}
-                        src={typeof url === 'string' ? url : url.url}
-                        alt=""
-                        style={{ width: 140, height: 140, objectFit: 'cover', borderRadius: 'var(--radius-btn)', border: '1px solid var(--border)', flexShrink: 0 }}
-                      />
-                    ))}
+                    {detail.photos.map((url, i) => {
+                      const src = typeof url === 'string' ? url : url.url
+                      return isVideoUrl(src) ? (
+                        <video key={i} src={src} controls preload="metadata" style={{ width: 140, height: 140, objectFit: 'cover', borderRadius: 'var(--radius-btn)', border: '1px solid var(--border)', flexShrink: 0 }} />
+                      ) : (
+                        <img key={i} src={src} alt="" style={{ width: 140, height: 140, objectFit: 'cover', borderRadius: 'var(--radius-btn)', border: '1px solid var(--border)', flexShrink: 0 }} />
+                      )
+                    })}
                   </div>
                 ) : detail.photo_url ? (
                   <div style={{ marginBottom: 16 }}>
-                    <img src={detail.photo_url} alt="" style={{ width: '100%', maxHeight: 280, objectFit: 'cover', borderRadius: 'var(--radius-btn)', border: '1px solid var(--border)' }} />
+                    {isVideoUrl(detail.photo_url) ? (
+                      <video src={detail.photo_url} controls preload="metadata" style={{ width: '100%', maxHeight: 280, objectFit: 'cover', borderRadius: 'var(--radius-btn)', border: '1px solid var(--border)' }} />
+                    ) : (
+                      <img src={detail.photo_url} alt="" style={{ width: '100%', maxHeight: 280, objectFit: 'cover', borderRadius: 'var(--radius-btn)', border: '1px solid var(--border)' }} />
+                    )}
                   </div>
                 ) : (
                   <div style={{ height: 140, background: 'var(--bg)', borderRadius: 'var(--radius-btn)', display: 'flex', alignItems: 'center', justifyContent: 'center', marginBottom: 16 }}>
