@@ -215,6 +215,7 @@ export default function PublicWarehousePage() {
 
             <FI label={cpType === 'company' ? 'Название компании *' : 'ФИО *'} value={form.name} onChange={set('name')} placeholder={cpType === 'company' ? 'ООО Рога и Копыта' : 'Иван Иванов'} />
             <PhoneInput label="Телефон *" value={form.phone} onChange={v => setForm(p => ({ ...p, phone: v }))} />
+            <FI label="Дополнительный контакт" value={form.extra_contact} onChange={set('extra_contact')} placeholder="Имя, телефон или email" />
             <FI label="Email" value={form.email} onChange={set('email')} placeholder="email@example.com" type="email" error={form.email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(form.email) ? 'Некорректный email' : ''} />
             <FI label="Название проекта" value={form.project_name} onChange={set('project_name')} placeholder="Мой проект" />
 
@@ -228,7 +229,6 @@ export default function PublicWarehousePage() {
                   }}
                 />
                 <FI label="Юридический адрес" value={form.legal_address} onChange={set('legal_address')} placeholder="г. Москва, ул. ..." />
-                <FI label="Дополнительный контакт" value={form.extra_contact} onChange={set('extra_contact')} placeholder="Имя, телефон или email" />
               </>
             )}
 
