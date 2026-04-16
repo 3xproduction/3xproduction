@@ -10,12 +10,19 @@ CREATE INDEX IF NOT EXISTS idx_units_search_vector ON units USING gin (search_ve
 
 DO $$ BEGIN
   CREATE TEXT SEARCH CONFIGURATION ru_search (COPY = russian);
-EXCEPTION WHEN unique_violation THEN NULL;
+EXCEPTION WHEN unique_violation THEN NULL; WHEN OTHERS THEN NULL;
 END $$;
 
-ALTER TEXT SEARCH CONFIGURATION ru_search
-  ALTER MAPPING FOR asciiword, asciihword, hword_asciipart, word, hword, hword_part
-  WITH unaccent, russian_stem;
+DO $$ BEGIN
+  ALTER TEXT SEARCH CONFIGURATION ru_search
+    ALTER MAPPING FOR asciiword, asciihword, hword_asciipart, word, hword, hword_part
+    WITH unaccent, russian_stem;
+EXCEPTION WHEN OTHERS THEN
+  -- unaccent not available, use russian_stem only
+  ALTER TEXT SEARCH CONFIGURATION ru_search
+    ALTER MAPPING FOR asciiword, asciihword, hword_asciipart, word, hword, hword_part
+    WITH russian_stem;
+END $$;
 
 -- 1. Add search_tags column to units
 ALTER TABLE units ADD COLUMN IF NOT EXISTS search_tags TEXT[] DEFAULT '{}';
