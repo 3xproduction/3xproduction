@@ -189,4 +189,74 @@ async function analyzeCrossScenes(sceneTexts) {
   return JSON.parse(clean)
 }
 
-module.exports = { parseDocument, computeDelta, analyzeCrossScenes }
+const UNIT_TAGS_PROMPT = `Ты — система поисковой индексации для склада реквизита кинопроизводства.
+Тебе дают название, категорию, описание и эпоху предмета.
+Сгенерируй ровно 100 поисковых тегов на русском языке.
+
+Теги должны покрывать ВСЕ аспекты предмета:
+1. Синонимы (5-15): другие названия этого предмета, уменьшительные, разговорные
+2. Родовые категории (5-10): к чему относится (мебель, оружие, одежда, посуда...)
+3. Контексты использования (10-15): где в жизни встречается (кухня, офис, улица, больница, школа...)
+4. Кино-сцены (15-20): типичные сцены в кино где нужен этот предмет (допрос, погоня, свадьба, похороны, ограбление, застолье...)
+5. Эпохи и стили (5-10): временные периоды и стили (современное, советское, викторианское, средневековое, ретро, минимализм...)
+6. Материалы и свойства (5-10): из чего сделано, характеристики (дерево, металл, пластик, кожа, тканевый, стеклянный...)
+7. Визуальные признаки (5-10): цвет, форма, размер если применимо
+8. Ассоциации (10-15): предметы которые обычно рядом, сопутствующие вещи
+9. Профессии и роли (5-10): кто использует этот предмет (врач, полицейский, повар, солдат...)
+
+Верни СТРОГО JSON массив из 100 строк, без markdown:
+["тег1", "тег2", ..., "тег100"]
+
+Каждый тег — 1-3 слова, на русском, в нижнем регистре. Без повторов.`
+
+async function generateUnitTags({ name, category, description, period }) {
+  const userText = [
+    `Название: ${name}`,
+    `Категория: ${category}`,
+    description ? `Описание: ${description}` : null,
+    period ? `Эпоха: ${period}` : null,
+  ].filter(Boolean).join('\n')
+
+  const response = await client.messages.create({
+    model: MODEL,
+    max_tokens: 4096,
+    system: UNIT_TAGS_PROMPT,
+    messages: [
+      { role: 'user', content: userText },
+    ],
+  })
+
+  const content = response.content.find(b => b.type === 'text')?.text || ''
+  let clean = content.replace(/^```(?:json)?/m, '').replace(/```$/m, '').trim()
+
+  // Repair truncated JSON
+  if (response.stop_reason === 'max_tokens') {
+    let openArr = 0
+    for (const ch of clean) {
+      if (ch === '[') openArr++
+      if (ch === ']') openArr--
+    }
+    // Remove trailing incomplete string if any
+    clean = clean.replace(/,\s*"[^"]*$/, '')
+    while (openArr > 0) { clean += ']'; openArr-- }
+  }
+
+  const tags = JSON.parse(clean)
+  if (!Array.isArray(tags)) throw new Error('Tags response is not an array')
+
+  // Sanitize: only strings, lowercase, deduplicate, max 100
+  const seen = new Set()
+  const result = []
+  for (const tag of tags) {
+    if (typeof tag !== 'string') continue
+    const t = tag.toLowerCase().trim().replace(/\s+/g, ' ')
+    if (!t || t.length > 60 || seen.has(t)) continue
+    seen.add(t)
+    result.push(t)
+    if (result.length >= 100) break
+  }
+
+  return result
+}
+
+module.exports = { parseDocument, computeDelta, analyzeCrossScenes, generateUnitTags }

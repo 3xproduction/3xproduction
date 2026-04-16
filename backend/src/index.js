@@ -598,6 +598,8 @@ async function processAiTask() {
         await processCrossScenes(task, params)
       } else if (task.task_type === 'expand_synonyms') {
         await processExpandSynonyms(task)
+      } else if (task.task_type === 'generate_unit_tags') {
+        await processGenerateUnitTags(task, params)
       }
       await db.query(
         `UPDATE ai_tasks SET status = 'completed', completed_at = NOW() WHERE id = $1`,
@@ -821,6 +823,28 @@ ${itemNames.join(', ')}
   )
   await db.query(`UPDATE ai_tasks SET result = $1 WHERE id = $2`, [JSON.stringify(synonyms), task.id])
   console.log(`[AI-WORKER] Generated synonyms for ${Object.keys(synonyms).length} items`)
+}
+
+async function processGenerateUnitTags(task, params) {
+  const { generateUnitTags } = require('./services/groq')
+  const unitId = task.unit_id
+  if (!unitId) throw new Error('No unit_id in task')
+
+  const { rows } = await db.query(`SELECT name, category, description, period FROM units WHERE id = $1`, [unitId])
+  if (!rows.length) throw new Error(`Unit ${unitId} not found`)
+
+  const unit = rows[0]
+  console.log(`[AI-WORKER] Generating 100 tags for unit: ${unit.name}`)
+  const tags = await generateUnitTags({
+    name: unit.name,
+    category: unit.category,
+    description: unit.description || '',
+    period: unit.period || '',
+  })
+  console.log(`[AI-WORKER] Got ${tags.length} tags for "${unit.name}"`)
+
+  await db.query(`UPDATE units SET search_tags = $1 WHERE id = $2`, [tags, unitId])
+  await db.query(`UPDATE ai_tasks SET result = $1 WHERE id = $2`, [JSON.stringify(tags), task.id])
 }
 
 // Run AI worker every 30 seconds

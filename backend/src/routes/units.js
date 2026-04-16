@@ -121,7 +121,10 @@ router.get('/', verifyJWT, async (req, res) => {
 
     const { rows } = await db.query(q, params)
     const canSeeValuation = ['warehouse_director', 'warehouse_deputy', 'producer'].includes(req.user.role)
-    const units = canSeeValuation ? rows : rows.map(({ valuation, ...rest }) => rest)
+    const units = rows.map(({ search_tags, search_vector, ...rest }) => {
+      if (!canSeeValuation) { const { valuation, ...r } = rest; return r }
+      return rest
+    })
     res.json({ units })
   } catch (err) {
     console.error(err)
@@ -238,6 +241,14 @@ router.post('/', verifyJWT, async (req, res) => {
       [unit.id, isDirector ? 'Добавлено' : 'Добавлено (ожидает подписи)', req.user.id]
     )
 
+    // Enqueue AI tag generation (async, non-blocking)
+    if (process.env.ANTHROPIC_API_KEY) {
+      db.query(
+        `INSERT INTO ai_tasks (unit_id, task_type, params) VALUES ($1, 'generate_unit_tags', $2)`,
+        [unit.id, JSON.stringify({ name: unit.name, category: unit.category })]
+      ).catch(e => console.error('[AI-TAGS] Failed to enqueue:', e.message))
+    }
+
     res.status(201).json({ unit })
   } catch (err) {
     console.error(err)
@@ -285,6 +296,8 @@ router.get('/:id', verifyJWT, async (req, res) => {
     if (!rows.length) return res.status(404).json({ error: 'Unit not found' })
 
     const unit = rows[0]
+    delete unit.search_tags
+    delete unit.search_vector
 
     // Photos
     const { rows: photos } = await db.query(
@@ -472,6 +485,29 @@ router.post('/:id/request-writeoff', verifyJWT, checkRole('warehouse_deputy', 'w
     }
 
     res.json({ ok: true })
+  } catch (err) {
+    console.error(err)
+    res.status(500).json({ error: 'Server error' })
+  }
+})
+
+// POST /units/backfill-tags — enqueue AI tag generation for all units without tags
+router.post('/backfill-tags', verifyJWT, checkRole('warehouse_director', 'warehouse_deputy'), async (req, res) => {
+  try {
+    const { rows } = await db.query(
+      `SELECT id, name, category FROM units WHERE search_tags = '{}' OR search_tags IS NULL`
+    )
+    if (!rows.length) return res.json({ message: 'All units already have tags', count: 0 })
+
+    let enqueued = 0
+    for (const unit of rows) {
+      await db.query(
+        `INSERT INTO ai_tasks (unit_id, task_type, params) VALUES ($1, 'generate_unit_tags', $2)`,
+        [unit.id, JSON.stringify({ name: unit.name, category: unit.category })]
+      )
+      enqueued++
+    }
+    res.json({ message: `Enqueued ${enqueued} units for tag generation`, count: enqueued })
   } catch (err) {
     console.error(err)
     res.status(500).json({ error: 'Server error' })
