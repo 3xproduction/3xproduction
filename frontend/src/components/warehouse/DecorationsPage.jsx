@@ -414,7 +414,7 @@ export default function DecorationsPage() {
                   ref={camRef}
                   type="file"
                   accept="image/*,video/mp4,video/webm,video/quicktime"
-                  capture="camera"
+                  capture
                   onChange={onPhotosSelected}
                   style={{ display: 'none' }}
                 />

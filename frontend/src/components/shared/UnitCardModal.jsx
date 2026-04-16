@@ -154,12 +154,14 @@ export default function UnitCardModal({ unitId, onClose, onChanged }) {
               <div style={{ ...styles.mainPhoto, cursor: photos[activePhoto]?.url ? 'zoom-in' : 'default', position: 'relative' }}
                 onClick={e => { e.stopPropagation(); photos[activePhoto]?.url && setLightbox(activePhoto) }}>
                 {photos[activePhoto]?.url
-                  ? <>
-                      <img src={photos[activePhoto].url} alt="" style={{ width: '100%', height: '100%', objectFit: 'contain' }} />
-                      <div style={{ position: 'absolute', top: 8, right: 8, background: 'rgba(0,0,0,0.5)', borderRadius: '50%', width: 28, height: 28, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                        <ZoomIn size={14} color="#fff" />
-                      </div>
-                    </>
+                  ? /\.(mp4|webm|mov)$/i.test(photos[activePhoto].url)
+                    ? <video src={photos[activePhoto].url} controls preload="metadata" style={{ width: '100%', height: '100%', objectFit: 'contain' }} />
+                    : <>
+                        <img src={photos[activePhoto].url} alt="" style={{ width: '100%', height: '100%', objectFit: 'contain' }} />
+                        <div style={{ position: 'absolute', top: 8, right: 8, background: 'rgba(0,0,0,0.5)', borderRadius: '50%', width: 28, height: 28, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                          <ZoomIn size={14} color="#fff" />
+                        </div>
+                      </>
                   : <span style={{ color: 'var(--muted)', fontSize: 13 }}>📷</span>
                 }
               </div>
@@ -171,7 +173,9 @@ export default function UnitCardModal({ unitId, onClose, onChanged }) {
                       border: `2px solid ${i === activePhoto ? 'var(--blue)' : 'var(--border)'}`,
                     }}>
                       {p.url
-                        ? <img src={p.url} alt="" style={{ width: '100%', height: '100%', objectFit: 'contain' }} />
+                        ? /\.(mp4|webm|mov)$/i.test(p.url)
+                          ? <video src={p.url} muted preload="metadata" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+                          : <img src={p.url} alt="" style={{ width: '100%', height: '100%', objectFit: 'contain' }} />
                         : <div style={{ width: '100%', height: '100%', background: 'var(--bg)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 10, color: 'var(--muted)' }}>📷</div>
                       }
                     </div>

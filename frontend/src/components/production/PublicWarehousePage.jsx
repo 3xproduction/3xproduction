@@ -88,15 +88,22 @@ export default function PublicWarehousePage() {
     if (category && category !== 'Все') params.set('category', category)
     const qs = params.toString()
     fetch(`${BASE}/public/warehouse/${token}${qs ? '?' + qs : ''}`)
-      .then(r => r.json())
+      .then(r => {
+        if (r.status === 404) throw new Error('invalid_token')
+        return r.json()
+      })
       .then(d => {
-        if (d.error) { setLoadError(d.error); return }
+        if (d.error && !debouncedSearch && category === 'Все') { setLoadError(d.error); return }
+        if (d.error) { setUnits([]); return }
         setUnits(d.units || [])
         if (!debouncedSearch && category === 'Все') {
           setAllCategories(['Все', ...new Set((d.units || []).map(u => u.category).filter(Boolean))])
         }
       })
-      .catch(() => setLoadError('Не удалось загрузить каталог'))
+      .catch(e => {
+        if (e.message === 'invalid_token') setLoadError('Invalid or expired link')
+        else if (!debouncedSearch) setLoadError('Не удалось загрузить каталог')
+      })
   }, [token, debouncedSearch, category])
 
   const loadDeals = useCallback(() => {

@@ -106,15 +106,22 @@ router.get('/warehouse/:token', async (req, res) => {
 
     let tsqIdx, rawIdx
     if (search && search.trim()) {
-      const { buildSearchQuery } = require('../services/searchService')
-      const { tsqueryStr, originalQuery } = await buildSearchQuery(search)
-      if (tsqueryStr) {
-        params.push(tsqueryStr)
-        tsqIdx = params.length
-        params.push(originalQuery)
-        rawIdx = params.length
-        q += ` AND (u.search_vector @@ to_tsquery('ru_search', $${tsqIdx})
-               OR similarity(u.name, $${rawIdx}) > 0.2)`
+      try {
+        const { buildSearchQuery } = require('../services/searchService')
+        const { tsqueryStr, originalQuery } = await buildSearchQuery(search)
+        if (tsqueryStr) {
+          params.push(tsqueryStr)
+          tsqIdx = params.length
+          params.push(originalQuery)
+          rawIdx = params.length
+          q += ` AND (u.search_vector @@ to_tsquery('ru_search', $${tsqIdx})
+                 OR similarity(u.name, $${rawIdx}) > 0.2)`
+        }
+      } catch (searchErr) {
+        console.error('Public search error:', searchErr.message)
+        // Fallback: simple ILIKE search
+        params.push(`%${search.trim()}%`)
+        q += ` AND u.name ILIKE $${params.length}`
       }
     }
 

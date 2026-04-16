@@ -549,7 +549,7 @@ export default function UnitsPage() {
                       )}
                     </div>
                     <input ref={fileRef} type="file" accept="image/*,video/mp4,video/webm,video/quicktime" multiple style={{ display: 'none' }} onChange={onFilesSelected} />
-                    <input ref={camRef} type="file" accept="image/*,video/mp4,video/webm,video/quicktime" capture="camera" style={{ display: 'none' }} onChange={onFilesSelected} />
+                    <input ref={camRef} type="file" accept="image/*,video/mp4,video/webm,video/quicktime" capture style={{ display: 'none' }} onChange={onFilesSelected} />
                     <input ref={videoRef} type="file" accept="video/mp4,video/webm,video/quicktime" style={{ display: 'none' }} onChange={onFilesSelected} />
 
                     <div style={{ display: 'flex', gap: 8 }}>
@@ -638,9 +638,9 @@ export default function UnitsPage() {
                   </>
                 )}
 
-                {isDirector && (
+                {(isDirector || user?.role === 'producer') && (
                   <>
-                    <FL>Стоимость единицы, руб *</FL>
+                    <FL>Стоимость единицы, руб {isDirector ? '*' : ''}</FL>
                     <FI type="number" value={form.valuation} onChange={v => setForm(f => ({ ...f, valuation: v }))} placeholder="0.00" />
                   </>
                 )}
