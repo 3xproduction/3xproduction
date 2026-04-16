@@ -111,10 +111,12 @@ export default function UnitsPage() {
   }
 
   async function handlePhotosReady() {
+    const firstImage = photos.find(f => !isVideoFile(f))
+    if (!firstImage) { toast?.('Добавьте хотя бы одно фото (не видео) для распознавания', 'error'); return }
     setRecognizing(true)
     try {
       const fd = new FormData()
-      fd.append('photo', photos[0])
+      fd.append('photo', firstImage)
       const result = await unitsApi.recognize(fd)
       if (result.name || result.category || result.description) {
         setForm(f => ({
@@ -352,7 +354,9 @@ export default function UnitsPage() {
                     alignItems: 'center', justifyContent: 'center', fontSize: 40, overflow: 'hidden',
                   }}>
                     {u.photo_url
-                      ? <img src={u.photo_url} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+                      ? /\.(mp4|webm|mov)$/i.test(u.photo_url)
+                        ? <video src={u.photo_url} muted preload="metadata" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+                        : <img src={u.photo_url} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
                       : <span>📦</span>}
                   </div>
                   <div style={{ padding: '10px 12px' }}>
@@ -396,7 +400,9 @@ export default function UnitsPage() {
                     fontSize: 20, overflow: 'hidden',
                   }}>
                     {photo
-                      ? <img src={photo} alt="" style={{ width: '100%', height: '100%', objectFit: 'contain', filter: isWrittenOff ? 'blur(2px)' : 'none' }} />
+                      ? /\.(mp4|webm|mov)$/i.test(photo)
+                        ? <video src={photo} muted preload="metadata" style={{ width: '100%', height: '100%', objectFit: 'contain' }} />
+                        : <img src={photo} alt="" style={{ width: '100%', height: '100%', objectFit: 'contain', filter: isWrittenOff ? 'blur(2px)' : 'none' }} />
                       : <span>📦</span>}
                   </div>
                   <div style={{ flex: 1, minWidth: 0 }}>
@@ -508,7 +514,7 @@ export default function UnitsPage() {
                 ) : (
                   <>
                     <div style={{ fontWeight: 600, fontSize: 16, marginBottom: 6 }}>Загрузите фото</div>
-                    <div style={{ fontSize: 13, color: 'var(--muted)', marginBottom: 20 }}>От 2 до 3 фотографий единицы</div>
+                    <div style={{ fontSize: 13, color: 'var(--muted)', marginBottom: 20 }}>Минимум 2 фото + видео по желанию</div>
 
                     <div style={{ display: 'flex', gap: 10, marginBottom: 20, flexWrap: 'wrap' }}>
                       {photos.map((f, i) => (
@@ -543,12 +549,14 @@ export default function UnitsPage() {
                       )}
                     </div>
                     <input ref={fileRef} type="file" accept="image/*,video/mp4,video/webm,video/quicktime" multiple style={{ display: 'none' }} onChange={onFilesSelected} />
-                    <input ref={camRef} type="file" accept="image/*,video/mp4,video/webm,video/quicktime" capture="environment" style={{ display: 'none' }} onChange={onFilesSelected} />
+                    <input ref={camRef} type="file" accept="image/*,video/mp4,video/webm,video/quicktime" capture="camera" style={{ display: 'none' }} onChange={onFilesSelected} />
                     <input ref={videoRef} type="file" accept="video/mp4,video/webm,video/quicktime" style={{ display: 'none' }} onChange={onFilesSelected} />
 
                     <div style={{ display: 'flex', gap: 8 }}>
                       <Button variant="secondary" fullWidth onClick={() => setShowAdd(false)}>Отмена</Button>
-                      <Button fullWidth disabled={photos.length < 2} onClick={handlePhotosReady}>Готово</Button>
+                      <Button fullWidth disabled={photos.filter(f => !isVideoFile(f)).length < 2} onClick={handlePhotosReady}>
+                        {photos.filter(f => !isVideoFile(f)).length < 2 ? `Нужно ещё ${2 - photos.filter(f => !isVideoFile(f)).length} фото` : 'Готово'}
+                      </Button>
                     </div>
                   </>
                 )}

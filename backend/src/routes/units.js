@@ -89,7 +89,7 @@ router.get('/', verifyJWT, async (req, res) => {
   try {
     let q = `
       SELECT u.*, w.name AS warehouse_name, c.code AS cell_code,
-             (SELECT url FROM unit_photos WHERE unit_id = u.id ORDER BY created_at LIMIT 1) AS photo_url
+             (SELECT url FROM unit_photos WHERE unit_id = u.id ORDER BY CASE WHEN url ~* '\.(mp4|webm|mov)$' THEN 1 ELSE 0 END, created_at LIMIT 1) AS photo_url
       FROM units u
       LEFT JOIN warehouses w ON w.id = u.warehouse_id
       LEFT JOIN cells c ON c.id = u.cell_id
