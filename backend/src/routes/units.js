@@ -492,7 +492,7 @@ router.post('/:id/request-writeoff', verifyJWT, checkRole('warehouse_deputy', 'w
 })
 
 // POST /units/backfill-tags — enqueue AI tag generation for all units without tags
-router.post('/backfill-tags', verifyJWT, checkRole('warehouse_director', 'warehouse_deputy'), async (req, res) => {
+router.post('/backfill-tags', verifyJWT, checkRole('warehouse_director', 'warehouse_deputy', 'producer'), async (req, res) => {
   try {
     const { rows } = await db.query(
       `SELECT id, name, category FROM units WHERE search_tags = '{}' OR search_tags IS NULL`
