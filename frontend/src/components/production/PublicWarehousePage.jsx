@@ -1,9 +1,11 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
 import { useParams } from 'react-router-dom'
-import { ShoppingCart, X, Minus, Plus, ChevronDown, ChevronUp, Package, Clock, CheckCircle, RotateCcw, User, FileText } from 'lucide-react'
+import { ShoppingCart, X, Minus, Plus, ChevronDown, ChevronUp, Package, Clock, CheckCircle, RotateCcw, User, FileText, ZoomIn } from 'lucide-react'
 import Badge from '../shared/Badge'
 import Button from '../shared/Button'
+import Lightbox from '../shared/Lightbox'
 import { categoryLabel } from '../../constants/categories'
+import { STATUS_LABEL, STATUS_COLOR } from '../../constants/statuses'
 
 const BASE = import.meta.env.VITE_API_URL || ''
 
@@ -61,21 +63,41 @@ export default function PublicWarehousePage() {
   const [showSuccess, setShowSuccess] = useState(false)
   const [authError, setAuthError] = useState('')
   const [selectedUnit, setSelectedUnit] = useState(null)
+  const [activePhoto, setActivePhoto] = useState(0)
+  const [lightbox, setLightbox] = useState(null)
+  const [debouncedSearch, setDebouncedSearch] = useState('')
+  const [allCategories, setAllCategories] = useState([])
+  const searchTimer = useRef(null)
 
   const phoneValid = /^\+7\s?\d{3}\s?\d{3}\s?\d{2}\s?\d{2}$/.test(form.phone.trim()) || /^\+7\d{10}$/.test(form.phone.replace(/\s/g, ''))
   const emailValid = !form.email || /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(form.email)
   const innValid = cpType !== 'company' || (form.inn.length === 10 || form.inn.length === 12)
   const canEnter = form.name && form.phone && phoneValid && emailValid && innValid
 
+  // Debounce search
   useEffect(() => {
-    fetch(`${BASE}/public/warehouse/${token}`)
+    clearTimeout(searchTimer.current)
+    searchTimer.current = setTimeout(() => setDebouncedSearch(search), 300)
+    return () => clearTimeout(searchTimer.current)
+  }, [search])
+
+  // Fetch units from server with search/category params
+  useEffect(() => {
+    const params = new URLSearchParams()
+    if (debouncedSearch.trim()) params.set('search', debouncedSearch.trim())
+    if (category && category !== 'Все') params.set('category', category)
+    const qs = params.toString()
+    fetch(`${BASE}/public/warehouse/${token}${qs ? '?' + qs : ''}`)
       .then(r => r.json())
       .then(d => {
         if (d.error) { setLoadError(d.error); return }
         setUnits(d.units || [])
+        if (!debouncedSearch && category === 'Все') {
+          setAllCategories(['Все', ...new Set((d.units || []).map(u => u.category).filter(Boolean))])
+        }
       })
       .catch(() => setLoadError('Не удалось загрузить каталог'))
-  }, [token])
+  }, [token, debouncedSearch, category])
 
   const loadDeals = useCallback(() => {
     if (!form.phone) return
@@ -91,12 +113,8 @@ export default function PublicWarehousePage() {
     if (step === 'cabinet') loadDeals()
   }, [step, cabTab, loadDeals])
 
-  const categories = ['Все', ...new Set(units.map(u => u.category).filter(Boolean))]
-  const filtered = units.filter(u => {
-    const matchSearch = !search || u.name.toLowerCase().includes(search.toLowerCase())
-    const matchCat = category === 'Все' || u.category === category
-    return matchSearch && matchCat
-  })
+  const categories = allCategories.length > 0 ? allCategories : ['Все', ...new Set(units.map(u => u.category).filter(Boolean))]
+  const filtered = units
 
   const inCart = id => cart.includes(id)
   const toggleCart = id => setCart(prev => inCart(id) ? prev.filter(x => x !== id) : [...prev, id])
@@ -399,49 +417,98 @@ export default function PublicWarehousePage() {
       )}
 
       {/* ─── UNIT DETAIL MODAL ─── */}
-      {selectedUnit && (
-        <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.45)', zIndex: 400, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16 }}
-          onClick={() => setSelectedUnit(null)}>
-          <div style={{ background: 'var(--white)', borderRadius: 'var(--radius-card)', padding: 0, maxWidth: 480, width: '100%', maxHeight: '85vh', overflowY: 'auto' }}
-            onClick={e => e.stopPropagation()}>
-            {/* Photo */}
-            {selectedUnit.photos?.[0] ? (
-              <img src={selectedUnit.photos[0]} alt="" style={{ width: '100%', maxHeight: 300, objectFit: 'cover' }} />
-            ) : (
-              <div style={{ height: 180, background: 'var(--bg)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                <Package size={48} style={{ color: 'var(--muted)', opacity: 0.3 }} />
-              </div>
-            )}
-            <div style={{ padding: '20px 24px' }}>
-              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 }}>
-                <h2 style={{ fontSize: 18, fontWeight: 600 }}>{selectedUnit.name}</h2>
-                <button onClick={() => setSelectedUnit(null)} style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--muted)', padding: 4 }}><X size={18} /></button>
-              </div>
-              <div style={{ display: 'flex', gap: 8, marginBottom: 12 }}>
-                <Badge color="muted">{categoryLabel(selectedUnit.category)}</Badge>
-                <Badge color={selectedUnit.status === 'on_stock' ? 'green' : 'muted'}>{selectedUnit.status === 'on_stock' ? 'Доступно' : 'Занято'}</Badge>
-                {selectedUnit.serial && <span style={{ fontSize: 12, color: 'var(--muted)' }}>{selectedUnit.serial}</span>}
-              </div>
-              {selectedUnit.description && (
-                <p style={{ fontSize: 13, color: 'var(--text)', lineHeight: 1.5, marginBottom: 16 }}>{selectedUnit.description}</p>
-              )}
-              {/* Photos gallery */}
-              {selectedUnit.photos?.length > 1 && (
-                <div style={{ display: 'flex', gap: 8, marginBottom: 16, overflowX: 'auto' }}>
-                  {selectedUnit.photos.map((url, i) => (
-                    <img key={i} src={url} alt="" style={{ width: 80, height: 80, objectFit: 'cover', borderRadius: 6, border: '1px solid var(--border)', flexShrink: 0 }} />
-                  ))}
+      {selectedUnit && (() => {
+        const photos = selectedUnit.photos || []
+        return (
+          <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.5)', zIndex: 500, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16 }}
+            onClick={e => { if (e.target === e.currentTarget) { setSelectedUnit(null); setActivePhoto(0); setLightbox(null) } }}>
+            <div style={{ background: 'var(--white)', borderRadius: 'var(--radius-card)', width: '100%', maxWidth: 480, maxHeight: '90vh', display: 'flex', flexDirection: 'column', overflow: 'hidden' }}
+              onClick={e => e.stopPropagation()}>
+              {/* Header */}
+              <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', padding: '18px 20px 14px', borderBottom: '1px solid var(--border)', flexShrink: 0 }}>
+                <div>
+                  <div style={{ fontWeight: 600, fontSize: 17 }}>{selectedUnit.name}</div>
+                  <div style={{ fontSize: 12, color: 'var(--muted)', marginTop: 2 }}>{categoryLabel(selectedUnit.category)}</div>
                 </div>
-              )}
-              {selectedUnit.status === 'on_stock' && (
-                <Button fullWidth onClick={() => { toggleCart(selectedUnit.id); setSelectedUnit(null) }}>
-                  {inCart(selectedUnit.id) ? 'Убрать из корзины' : 'Добавить в корзину'}
-                </Button>
-              )}
+                <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                  <Badge color={STATUS_COLOR[selectedUnit.status]}>{STATUS_LABEL[selectedUnit.status]}</Badge>
+                  <button style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--muted)', padding: 4, display: 'flex', alignItems: 'center' }}
+                    onClick={() => { setSelectedUnit(null); setActivePhoto(0); setLightbox(null) }}><X size={18} /></button>
+                </div>
+              </div>
+
+              {/* Body */}
+              <div style={{ padding: '16px 20px 20px', overflowY: 'auto', flex: 1 }}>
+                {/* Main photo */}
+                {photos.length > 0 && (
+                  <div style={{ marginBottom: 16 }}>
+                    <div style={{ width: '100%', aspectRatio: '16/9', background: 'var(--bg)', borderRadius: 10, overflow: 'hidden', display: 'flex', alignItems: 'center', justifyContent: 'center', border: '1px solid var(--border)', cursor: photos[activePhoto] ? 'zoom-in' : 'default', position: 'relative' }}
+                      onClick={e => { e.stopPropagation(); photos[activePhoto] && setLightbox(activePhoto) }}>
+                      {photos[activePhoto]
+                        ? <>
+                            <img src={photos[activePhoto]} alt="" style={{ width: '100%', height: '100%', objectFit: 'contain' }} />
+                            <div style={{ position: 'absolute', top: 8, right: 8, background: 'rgba(0,0,0,0.5)', borderRadius: '50%', width: 28, height: 28, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                              <ZoomIn size={14} color="#fff" />
+                            </div>
+                          </>
+                        : <span style={{ color: 'var(--muted)', fontSize: 13 }}>📷</span>
+                      }
+                    </div>
+                    {/* Thumbnails */}
+                    {photos.length > 1 && (
+                      <div style={{ display: 'flex', gap: 6, marginTop: 6 }}>
+                        {photos.map((url, i) => (
+                          <div key={i} onClick={e => { e.stopPropagation(); setActivePhoto(i) }} style={{
+                            width: 48, height: 48, borderRadius: 6, overflow: 'hidden', cursor: 'pointer', flexShrink: 0,
+                            border: `2px solid ${i === activePhoto ? 'var(--blue)' : 'var(--border)'}`,
+                          }}>
+                            <img src={url} alt="" style={{ width: '100%', height: '100%', objectFit: 'contain' }} />
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                {/* Info rows */}
+                {(selectedUnit.serial || selectedUnit.qty || selectedUnit.dimensions) && (() => {
+                  const rows = []
+                  if (selectedUnit.serial) rows.push({ label: 'Серийный номер', value: selectedUnit.serial })
+                  if (selectedUnit.qty) rows.push({ label: 'Количество', value: `${selectedUnit.qty} шт.` })
+                  if (selectedUnit.dimensions) rows.push({ label: 'Размеры', value: selectedUnit.dimensions })
+                  return (
+                    <div style={{ background: 'var(--bg)', borderRadius: 'var(--radius-card)', padding: '4px 14px', marginBottom: 14 }}>
+                      {rows.map((r, i) => <PubInfoRow key={r.label} label={r.label} value={r.value} last={i === rows.length - 1} />)}
+                    </div>
+                  )
+                })()}
+
+                {/* Description */}
+                {selectedUnit.description && (
+                  <div style={{ marginBottom: 14 }}>
+                    <div style={{ fontSize: 12, color: 'var(--muted)', marginBottom: 4 }}>Описание</div>
+                    <div style={{ fontSize: 13, lineHeight: 1.5 }}>{selectedUnit.description}</div>
+                  </div>
+                )}
+
+                {/* Cart button */}
+                {selectedUnit.status === 'on_stock' && (
+                  <Button fullWidth onClick={() => { toggleCart(selectedUnit.id); setSelectedUnit(null); setActivePhoto(0) }}>
+                    {inCart(selectedUnit.id) ? 'Убрать из корзины' : 'Добавить в корзину'}
+                  </Button>
+                )}
+              </div>
             </div>
+            {lightbox !== null && (
+              <Lightbox
+                photos={photos}
+                startIndex={lightbox}
+                onClose={() => setLightbox(null)}
+              />
+            )}
           </div>
-        </div>
-      )}
+        )
+      })()}
 
       {/* ─── CART MODAL ─── */}
       {showCart && (
@@ -539,6 +606,21 @@ export default function PublicWarehousePage() {
       )}
 
       <style>{`@keyframes pub-pop{from{transform:scale(0.9);opacity:0}to{transform:scale(1);opacity:1}}@media(max-width:768px){.pub-sidebar{display:none!important}}`}</style>
+    </div>
+  )
+}
+
+/* ─── Info Row (mirrors UnitCardModal) ─── */
+function PubInfoRow({ label, value, last, hidden }) {
+  if (hidden) return null
+  return (
+    <div style={{
+      display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+      padding: '10px 0',
+      borderBottom: last ? 'none' : '1px solid var(--border)',
+    }}>
+      <span style={{ color: 'var(--muted)', fontSize: 13 }}>{label}</span>
+      <span style={{ fontWeight: 500, fontSize: 13, textAlign: 'right', maxWidth: '60%' }}>{value}</span>
     </div>
   )
 }

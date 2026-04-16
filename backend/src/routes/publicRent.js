@@ -88,15 +88,45 @@ router.get('/warehouse/:token', async (req, res) => {
       [req.params.token]
     )
     if (!tkn.length) return res.status(404).json({ error: 'Invalid or expired link' })
-    const { rows } = await db.query(
-      `SELECT u.id, u.name, u.category, u.description, u.status, u.serial,
-              array_agg(p.url) FILTER (WHERE p.url IS NOT NULL) AS photos
-       FROM units u
-       LEFT JOIN unit_photos p ON p.unit_id = u.id AND p.type='stock'
-       WHERE u.status != 'written_off'
-       GROUP BY u.id
-       ORDER BY u.category, u.name`
-    )
+
+    const { search, category } = req.query
+    const params = []
+    let q = `
+      SELECT u.id, u.name, u.category, u.description, u.status, u.serial,
+             u.qty, u.dimensions,
+             array_agg(p.url) FILTER (WHERE p.url IS NOT NULL) AS photos
+      FROM units u
+      LEFT JOIN unit_photos p ON p.unit_id = u.id AND p.type='stock'
+      WHERE u.status != 'written_off'
+    `
+    if (category) {
+      params.push(category)
+      q += ` AND u.category = $${params.length}`
+    }
+
+    let tsqIdx, rawIdx
+    if (search && search.trim()) {
+      const { buildSearchQuery } = require('../services/searchService')
+      const { tsqueryStr, originalQuery } = await buildSearchQuery(search)
+      if (tsqueryStr) {
+        params.push(tsqueryStr)
+        tsqIdx = params.length
+        params.push(originalQuery)
+        rawIdx = params.length
+        q += ` AND (u.search_vector @@ to_tsquery('ru_search', $${tsqIdx})
+               OR similarity(u.name, $${rawIdx}) > 0.2)`
+      }
+    }
+
+    q += ` GROUP BY u.id`
+    if (tsqIdx) {
+      q += ` ORDER BY ts_rank_cd(u.search_vector, to_tsquery('ru_search', $${tsqIdx})) DESC,
+                       similarity(u.name, $${rawIdx}) DESC`
+    } else {
+      q += ` ORDER BY u.category, u.name`
+    }
+
+    const { rows } = await db.query(q, params)
     res.json({ units: rows })
   } catch (err) {
     console.error(err)
