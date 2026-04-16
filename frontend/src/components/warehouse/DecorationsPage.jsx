@@ -36,7 +36,9 @@ export default function DecorationsPage() {
   const [photos, setPhotos] = useState([])
   const [adding, setAdding] = useState(false)
   const [addError, setAddError] = useState('')
+  const [aiLoading, setAiLoading] = useState(false)
   const fileRef = useRef()
+  const camRef = useRef()
 
   const [detail, setDetail] = useState(null)
   const [detailLoading, setDetailLoading] = useState(false)
@@ -134,7 +136,31 @@ export default function DecorationsPage() {
 
   function onPhotosSelected(e) {
     const files = Array.from(e.target.files).slice(0, 5)
+    const isFirstPhoto = photos.length === 0
     setPhotos(prev => [...prev, ...files].slice(0, 5))
+    e.target.value = ''
+
+    if (isFirstPhoto && files.length > 0) {
+      const firstImage = files.find(f => f.type?.startsWith('image/'))
+      if (firstImage) {
+        setAiLoading(true)
+        const fd = new FormData()
+        fd.append('photo', firstImage)
+        decorationsApi.recognize(fd)
+          .then(result => {
+            if (result.name || result.type || result.description) {
+              setForm(f => ({
+                ...f,
+                name: result.name || f.name,
+                type: result.type === 'decoration' || result.type === 'pavilion' ? result.type : f.type,
+                description: result.description || f.description,
+              }))
+            }
+          })
+          .catch(() => {})
+          .finally(() => setAiLoading(false))
+      }
+    }
   }
 
   const filtered = items
@@ -383,6 +409,14 @@ export default function DecorationsPage() {
                   onChange={onPhotosSelected}
                   style={{ display: 'none' }}
                 />
+                <input
+                  ref={camRef}
+                  type="file"
+                  accept="image/*,video/mp4,video/webm,video/quicktime"
+                  capture="environment"
+                  onChange={onPhotosSelected}
+                  style={{ display: 'none' }}
+                />
                 <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
                   {photos.map((p, i) => (
                     <div key={i} style={{ position: 'relative', width: 64, height: 64, borderRadius: 8, overflow: 'hidden', border: '1px solid var(--border)' }}>
@@ -406,23 +440,43 @@ export default function DecorationsPage() {
                     </div>
                   ))}
                   {photos.length < 5 && (
-                    <button
-                      type="button"
-                      onClick={() => fileRef.current?.click()}
-                      style={{
-                        width: 64, height: 64, borderRadius: 8,
-                        border: '1px dashed var(--border)', background: 'var(--bg)',
-                        cursor: 'pointer', display: 'flex', flexDirection: 'column',
-                        alignItems: 'center', justifyContent: 'center', gap: 2,
-                        color: 'var(--muted)', fontSize: 10,
-                      }}
-                    >
-                      <Camera size={16} />
-                      Фото
-                    </button>
+                    <>
+                      <button
+                        type="button"
+                        onClick={() => fileRef.current?.click()}
+                        style={{
+                          width: 64, height: 64, borderRadius: 8,
+                          border: '1px dashed var(--border)', background: 'var(--bg)',
+                          cursor: 'pointer', display: 'flex', flexDirection: 'column',
+                          alignItems: 'center', justifyContent: 'center', gap: 2,
+                          color: 'var(--muted)', fontSize: 10,
+                        }}
+                      >
+                        <Plus size={16} />
+                        Галерея
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => camRef.current?.click()}
+                        style={{
+                          width: 64, height: 64, borderRadius: 8,
+                          border: '1px dashed var(--border)', background: 'var(--bg)',
+                          cursor: 'pointer', display: 'flex', flexDirection: 'column',
+                          alignItems: 'center', justifyContent: 'center', gap: 2,
+                          color: 'var(--muted)', fontSize: 10,
+                        }}
+                      >
+                        <Camera size={16} />
+                        Камера
+                      </button>
+                    </>
                   )}
                 </div>
               </div>
+
+              {aiLoading && (
+                <div style={{ fontSize: 13, color: 'var(--accent)', marginBottom: 12 }}>AI распознаёт фото...</div>
+              )}
 
               {addError && (
                 <div style={{ color: 'var(--red)', fontSize: 13, marginBottom: 12 }}>{addError}</div>

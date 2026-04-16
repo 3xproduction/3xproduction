@@ -31,7 +31,9 @@ export default function LocationsPage() {
   const [photos, setPhotos] = useState([])
   const [saving, setSaving] = useState(false)
   const [saveError, setSaveError] = useState('')
+  const [aiLoading, setAiLoading] = useState(false)
   const fileRef = useRef()
+  const camRef = useRef()
 
   const [detailId, setDetailId] = useState(null)
   const [detail, setDetail] = useState(null)
@@ -72,13 +74,25 @@ export default function LocationsPage() {
     return lower.includes('.mp4') || lower.includes('.webm') || lower.includes('.mov')
   }
 
-  function onFiles(e) {
+  async function onFiles(e) {
     const files = Array.from(e.target.files)
     const processed = files.map(f => isVideoFile(f) ? Promise.resolve(f) : compressImage(f))
-    Promise.all(processed).then(results => {
-      setPhotos(prev => [...prev, ...results].slice(0, 5))
-    })
+    const results = await Promise.all(processed)
+    const isFirst = photos.length === 0
+    setPhotos(prev => [...prev, ...results].slice(0, 5))
     e.target.value = ''
+
+    // AI recognition on first image
+    if (isFirst && results.length > 0 && results[0].type?.startsWith('image/')) {
+      setAiLoading(true)
+      const fd = new FormData()
+      fd.append('photo', results[0])
+      try {
+        const result = await locationsApi.recognize(fd)
+        if (result.name) setForm(prev => ({ ...prev, name: result.name || prev.name, type: result.type || prev.type, description: result.description || prev.description }))
+      } catch (e) { console.error('AI recognition failed:', e) }
+      setAiLoading(false)
+    }
   }
 
   function compressImage(file, maxSize = 1200, quality = 0.6) {
@@ -328,19 +342,29 @@ export default function LocationsPage() {
                 </div>
               ))}
               {photos.length < 5 && (
-                <button
-                  onClick={() => fileRef.current?.click()}
-                  style={{ width: 80, height: 80, borderRadius: 'var(--radius-btn)', border: '2px dashed var(--border)', background: 'var(--bg)', cursor: 'pointer', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 4, color: 'var(--muted)', fontSize: 11 }}
-                >
-                  <Camera size={20} />
-                  Фото
-                </button>
+                <>
+                  <button
+                    onClick={() => fileRef.current?.click()}
+                    style={{ width: 80, height: 80, borderRadius: 'var(--radius-btn)', border: '2px dashed var(--border)', background: 'var(--bg)', cursor: 'pointer', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 4, color: 'var(--muted)', fontSize: 11 }}
+                  >
+                    <Plus size={20} />
+                    Файл
+                  </button>
+                  <button
+                    onClick={() => camRef.current?.click()}
+                    style={{ width: 80, height: 80, borderRadius: 'var(--radius-btn)', border: '2px dashed var(--border)', background: 'var(--bg)', cursor: 'pointer', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 4, color: 'var(--muted)', fontSize: 11 }}
+                  >
+                    <Camera size={20} />
+                    Камера
+                  </button>
+                </>
               )}
             </div>
             <input ref={fileRef} type="file" accept="image/*,video/mp4,video/webm,video/quicktime" multiple style={{ display: 'none' }} onChange={onFiles} />
+            <input ref={camRef} type="file" accept="image/*,video/mp4,video/webm,video/quicktime" capture="environment" style={{ display: 'none' }} onChange={onFiles} />
 
             {/* Name */}
-            <FL>Название *</FL>
+            <FL>Название *{aiLoading && <span style={{ marginLeft: 8, fontWeight: 400, color: 'var(--accent)' }}>AI распознаёт...</span>}</FL>
             <FI value={form.name} onChange={v => setForm(f => ({ ...f, name: v }))} placeholder="Лофт на Красной Пресне" />
 
             {/* Type */}

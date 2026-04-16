@@ -59,7 +59,42 @@ router.get('/:id', verifyJWT, async (req, res) => {
   }
 })
 
-// POST /vehicles
+// POST /vehicles/recognize — AI photo recognition for vehicles
+router.post('/recognize', verifyJWT, upload.single('photo'), async (req, res) => {
+  if (!req.file) return res.status(400).json({ error: 'No photo provided' })
+  if (!process.env.ANTHROPIC_API_KEY) return res.status(500).json({ error: 'AI not configured' })
+  try {
+    const sharp = require('sharp')
+    const Anthropic = require('@anthropic-ai/sdk')
+    const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY, baseURL: 'https://anthropic-proxy.pavelbelov590.workers.dev' })
+    const resized = await sharp(req.file.buffer).resize(800, 800, { fit: 'inside', withoutEnlargement: true }).jpeg({ quality: 70 }).toBuffer()
+    const response = await client.messages.create({
+      model: 'claude-haiku-4-5', max_tokens: 1024,
+      messages: [{ role: 'user', content: [
+        { type: 'image', source: { type: 'base64', media_type: 'image/jpeg', data: resized.toString('base64') } },
+        { type: 'text', text: `Ты — система распознавания транспорта для кинопроизводства.
+Проанализируй фото и верни JSON:
+- name: полное название (марка модель, по-русски если возможно)
+- type: один из: car, truck, bus, motorcycle, special
+- brand: марка (Toyota, BMW, УАЗ, ГАЗ и т.д.)
+- model: модель
+- color: цвет (по-русски)
+- year: примерный год выпуска (число) или null
+- description: описание (состояние, особенности, эпоха)
+
+Отвечай ТОЛЬКО JSON, без markdown.` }
+      ]}],
+    })
+    const text = response.content.find(b => b.type === 'text')?.text || ''
+    const clean = text.replace(/^```(?:json)?/m, '').replace(/```$/m, '').trim()
+    res.json(JSON.parse(clean))
+  } catch (err) {
+    console.error('Vehicle recognition error:', err.message)
+    res.status(500).json({ error: err.message || 'Recognition failed' })
+  }
+})
+
+// POST /vehicles — create
 router.post('/', verifyJWT, async (req, res) => {
   const { name, type, brand, model, year, color, license_plate, vin, description, condition, status, daily_rate, owner_name, owner_contact, project_id } = req.body
   if (!name) return res.status(400).json({ error: 'Name required' })

@@ -244,6 +244,7 @@ export const locations = {
   update:      (id, body)    => request('PUT',    `/locations/${id}`, body),
   delete:      (id)          => request('DELETE', `/locations/${id}`),
   uploadPhoto: (id, formData) => request('POST',  `/locations/${id}/photos`, formData),
+  recognize:   (formData)     => request('POST',  '/locations/recognize', formData),
 }
 
 // ─── Decorations ────────────────────────────────────────────────────────────
@@ -259,6 +260,7 @@ export const decorations = {
   uploadPhoto: (id, formData) => request('POST',  `/decorations/${id}/photos`, formData),
   linkUnits:   (id, unit_ids) => request('POST',  `/decorations/${id}/units`, { unit_ids }),
   unlinkUnit:  (id, unitId)   => request('DELETE', `/decorations/${id}/units/${unitId}`),
+  recognize:   (formData)     => request('POST',  '/decorations/recognize', formData),
 }
 
 // ─── Vehicles ───────────────────────────────────────────────────────────────
@@ -272,6 +274,7 @@ export const vehicles = {
   update:      (id, body)    => request('PUT',    `/vehicles/${id}`, body),
   delete:      (id)          => request('DELETE', `/vehicles/${id}`),
   uploadPhoto: (id, formData) => request('POST',  `/vehicles/${id}/photos`, formData),
+  recognize:   (formData)     => request('POST',  '/vehicles/recognize', formData),
 }
 
 // ─── Casting ────────────────────────────────────────────────────────────────

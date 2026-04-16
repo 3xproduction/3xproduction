@@ -57,6 +57,38 @@ router.get('/:id', verifyJWT, async (req, res) => {
   }
 })
 
+// POST /locations/recognize — AI photo recognition for locations
+router.post('/recognize', verifyJWT, upload.single('photo'), async (req, res) => {
+  if (!req.file) return res.status(400).json({ error: 'No photo provided' })
+  if (!process.env.ANTHROPIC_API_KEY) return res.status(500).json({ error: 'AI not configured' })
+  try {
+    const sharp = require('sharp')
+    const Anthropic = require('@anthropic-ai/sdk')
+    const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY, baseURL: 'https://anthropic-proxy.pavelbelov590.workers.dev' })
+    const resized = await sharp(req.file.buffer).resize(800, 800, { fit: 'inside', withoutEnlargement: true }).jpeg({ quality: 70 }).toBuffer()
+    const response = await client.messages.create({
+      model: 'claude-haiku-4-5', max_tokens: 1024,
+      messages: [{ role: 'user', content: [
+        { type: 'image', source: { type: 'base64', media_type: 'image/jpeg', data: resized.toString('base64') } },
+        { type: 'text', text: `Ты — система распознавания локаций для кинопроизводства.
+Проанализируй фото и верни JSON:
+- name: название локации (кратко, по-русски, например "Заброшенный цех", "Загородный дом")
+- type: "interior" или "exterior"
+- description: описание пространства (размер, освещение, состояние, атмосфера)
+- features: массив особенностей из списка: ["парковка","электричество","вода","туалет","гримёрная","кухня","лифт","кондиционер","отопление","интернет","звукоизоляция","высокие_потолки","панорамные_окна","чёрный_зал"]
+
+Отвечай ТОЛЬКО JSON, без markdown.` }
+      ]}],
+    })
+    const text = response.content.find(b => b.type === 'text')?.text || ''
+    const clean = text.replace(/^```(?:json)?/m, '').replace(/```$/m, '').trim()
+    res.json(JSON.parse(clean))
+  } catch (err) {
+    console.error('Location recognition error:', err.message)
+    res.status(500).json({ error: err.message || 'Recognition failed' })
+  }
+})
+
 // POST /locations
 router.post('/', verifyJWT, async (req, res) => {
   const { name, type, address, description, contact_name, contact_phone, price_per_day, area_sqm, features, notes, project_id } = req.body

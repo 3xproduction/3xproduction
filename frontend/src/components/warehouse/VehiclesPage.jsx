@@ -82,8 +82,10 @@ export default function VehiclesPage() {
   const [detailLoading, setDetailLoading] = useState(false)
   const [form, setForm] = useState(EMPTY_FORM)
   const [saving, setSaving] = useState(false)
-  const [photoFile, setPhotoFile] = useState(null)
+  const [photos, setPhotos] = useState([])
+  const [aiLoading, setAiLoading] = useState(false)
   const fileRef = useRef(null)
+  const camRef = useRef(null)
 
   const load = () => {
     setLoading(true)
@@ -116,6 +118,61 @@ export default function VehiclesPage() {
     }
   }
 
+  function isVideoFile(file) {
+    return file.type?.startsWith('video/')
+  }
+
+  function compressImage(file, maxSize = 1200, quality = 0.6) {
+    return new Promise(resolve => {
+      const img = new Image()
+      img.onload = () => {
+        const canvas = document.createElement('canvas')
+        let { width, height } = img
+        if (width > maxSize || height > maxSize) {
+          if (width > height) { height = Math.round(height * maxSize / width); width = maxSize }
+          else { width = Math.round(width * maxSize / height); height = maxSize }
+        }
+        canvas.width = width
+        canvas.height = height
+        canvas.getContext('2d').drawImage(img, 0, 0, width, height)
+        canvas.toBlob(blob => resolve(new File([blob], file.name, { type: 'image/jpeg' })), 'image/jpeg', quality)
+      }
+      img.src = URL.createObjectURL(file)
+    })
+  }
+
+  async function onFiles(e) {
+    const files = Array.from(e.target.files)
+    const processed = files.map(f => isVideoFile(f) ? Promise.resolve(f) : compressImage(f))
+    const results = await Promise.all(processed)
+    const isFirst = photos.length === 0
+    setPhotos(prev => [...prev, ...results].slice(0, 5))
+    e.target.value = ''
+
+    // AI recognition on first image
+    if (isFirst && results.length > 0 && results[0].type?.startsWith('image/')) {
+      setAiLoading(true)
+      const fd = new FormData()
+      fd.append('photo', results[0])
+      try {
+        const result = await vehiclesApi.recognize(fd)
+        if (result.name || result.type || result.brand || result.model || result.color || result.description) {
+          setForm(prev => ({
+            ...prev,
+            name: result.name || prev.name,
+            type: result.type || prev.type,
+            brand: result.brand || prev.brand,
+            model: result.model || prev.model,
+            color: result.color || prev.color,
+            year: result.year || prev.year,
+            description: result.description || prev.description,
+          }))
+        }
+      } catch (e) { console.error('AI recognition failed:', e) }
+      setAiLoading(false)
+    }
+  }
+
   const handleAdd = async e => {
     e.preventDefault()
     setSaving(true)
@@ -126,15 +183,17 @@ export default function VehiclesPage() {
       const created = await vehiclesApi.create(body)
       const newVehicle = created.vehicle || created
 
-      if (photoFile && newVehicle.id) {
-        const fd = new FormData()
-        fd.append('photo', photoFile)
-        await vehiclesApi.uploadPhoto(newVehicle.id, fd)
+      if (newVehicle.id && photos.length > 0) {
+        for (const file of photos) {
+          const fd = new FormData()
+          fd.append('photo', file)
+          try { await vehiclesApi.uploadPhoto(newVehicle.id, fd) } catch { /* skip */ }
+        }
       }
 
       setShowAdd(false)
       setForm(EMPTY_FORM)
-      setPhotoFile(null)
+      setPhotos([])
       load()
     } catch {
       /* silent */
@@ -385,21 +444,49 @@ export default function VehiclesPage() {
 
               {/* Photo upload */}
               <div style={{ marginBottom: 20 }}>
-                <label style={{ display: 'block', fontWeight: 500, marginBottom: 6, fontSize: 13 }}>Фото</label>
-                <input type="file" accept="image/*,video/mp4,video/webm,video/quicktime" ref={fileRef} onChange={e => setPhotoFile(e.target.files[0] || null)} style={{ display: 'none' }} />
-                <button
-                  type="button"
-                  onClick={() => fileRef.current?.click()}
-                  style={{
-                    display: 'flex', alignItems: 'center', gap: 8, padding: '10px 16px',
-                    background: 'var(--bg)', border: '1px dashed var(--border)',
-                    borderRadius: 'var(--radius-btn)', cursor: 'pointer', fontSize: 13,
-                    color: 'var(--muted)', width: '100%',
-                  }}
-                >
-                  <Camera size={16} />
-                  {photoFile ? photoFile.name : 'Выбрать фото'}
-                </button>
+                <label style={{ display: 'block', fontWeight: 500, marginBottom: 6, fontSize: 13 }}>
+                  Фото {aiLoading && <span style={{ fontWeight: 400, color: 'var(--blue)' }}> — AI распознаёт...</span>}
+                </label>
+                <div style={{ display: 'flex', gap: 10, marginBottom: 10, flexWrap: 'wrap' }}>
+                  {photos.map((f, i) => (
+                    <div key={i} style={{ position: 'relative', width: 80, height: 80 }}>
+                      {isVideoFile(f) ? (
+                        <video src={URL.createObjectURL(f)} muted preload="metadata" style={{ width: 80, height: 80, objectFit: 'cover', borderRadius: 'var(--radius-btn)', border: '1px solid var(--border)' }} />
+                      ) : (
+                        <img src={URL.createObjectURL(f)} alt="" style={{ width: 80, height: 80, objectFit: 'cover', borderRadius: 'var(--radius-btn)', border: '1px solid var(--border)' }} />
+                      )}
+                      <button
+                        type="button"
+                        onClick={() => setPhotos(p => p.filter((_, j) => j !== i))}
+                        style={{ position: 'absolute', top: -6, right: -6, background: 'var(--red, #ef4444)', border: 'none', borderRadius: '50%', width: 20, height: 20, color: '#fff', fontSize: 12, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center' }}
+                      >
+                        <X size={12} />
+                      </button>
+                    </div>
+                  ))}
+                  {photos.length < 5 && (
+                    <>
+                      <button
+                        type="button"
+                        onClick={() => fileRef.current?.click()}
+                        style={{ width: 80, height: 80, borderRadius: 'var(--radius-btn)', border: '2px dashed var(--border)', background: 'var(--bg)', cursor: 'pointer', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 4, color: 'var(--muted)', fontSize: 11 }}
+                      >
+                        <Plus size={20} />
+                        Файл
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => camRef.current?.click()}
+                        style={{ width: 80, height: 80, borderRadius: 'var(--radius-btn)', border: '2px dashed var(--border)', background: 'var(--bg)', cursor: 'pointer', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 4, color: 'var(--muted)', fontSize: 11 }}
+                      >
+                        <Camera size={20} />
+                        Камера
+                      </button>
+                    </>
+                  )}
+                </div>
+                <input ref={fileRef} type="file" accept="image/*,video/mp4,video/webm,video/quicktime" multiple style={{ display: 'none' }} onChange={onFiles} />
+                <input ref={camRef} type="file" accept="image/*,video/mp4,video/webm,video/quicktime" capture="environment" style={{ display: 'none' }} onChange={onFiles} />
               </div>
 
               <div style={{ display: 'flex', gap: 10, justifyContent: 'flex-end' }}>
