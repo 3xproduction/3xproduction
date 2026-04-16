@@ -4,6 +4,19 @@
 -- extends ai_tasks for unit tagging, replaces all synonyms
 -- ============================================================
 
+-- 0. Ensure search_vector column and text search config exist (in case 032 failed)
+ALTER TABLE units ADD COLUMN IF NOT EXISTS search_vector tsvector;
+CREATE INDEX IF NOT EXISTS idx_units_search_vector ON units USING gin (search_vector);
+
+DO $$ BEGIN
+  CREATE TEXT SEARCH CONFIGURATION ru_search (COPY = russian);
+EXCEPTION WHEN unique_violation THEN NULL;
+END $$;
+
+ALTER TEXT SEARCH CONFIGURATION ru_search
+  ALTER MAPPING FOR asciiword, asciihword, hword_asciipart, word, hword, hword_part
+  WITH unaccent, russian_stem;
+
 -- 1. Add search_tags column to units
 ALTER TABLE units ADD COLUMN IF NOT EXISTS search_tags TEXT[] DEFAULT '{}';
 
@@ -28,7 +41,17 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql;
 
--- 4. Clear old synonyms and insert 1000 new groups
+-- 4. Ensure search_synonyms table exists (024/032 may fail on CREATE EXTENSION)
+CREATE TABLE IF NOT EXISTS search_synonyms (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  term TEXT NOT NULL,
+  synonyms TEXT[] NOT NULL DEFAULT '{}',
+  category TEXT DEFAULT 'general',
+  created_at TIMESTAMPTZ DEFAULT now()
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_synonyms_term ON search_synonyms (lower(term));
+
+-- 5. Clear old synonyms and insert 1000 new groups
 DELETE FROM search_synonyms;
 
 INSERT INTO search_synonyms (term, synonyms, category) VALUES ('стул', ARRAY['сиденье','табурет','стульчик','седалище','место','посадочное_место'], 'furniture') ON CONFLICT (lower(term)) DO UPDATE SET synonyms = EXCLUDED.synonyms, category = EXCLUDED.category;
