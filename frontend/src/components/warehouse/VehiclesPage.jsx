@@ -86,6 +86,7 @@ export default function VehiclesPage() {
   const [aiLoading, setAiLoading] = useState(false)
   const fileRef = useRef(null)
   const camRef = useRef(null)
+  const videoRef = useRef(null)
 
   const load = () => {
     setLoading(true)
@@ -482,11 +483,20 @@ export default function VehiclesPage() {
                         <Camera size={20} />
                         Камера
                       </button>
+                      <button
+                        type="button"
+                        onClick={() => videoRef.current?.click()}
+                        style={{ width: 80, height: 80, borderRadius: 'var(--radius-btn)', border: '2px dashed var(--accent)', background: 'var(--bg)', cursor: 'pointer', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 4, color: 'var(--accent)', fontSize: 11 }}
+                      >
+                        <span style={{ fontSize: 20 }}>🎬</span>
+                        Видео
+                      </button>
                     </>
                   )}
                 </div>
                 <input ref={fileRef} type="file" accept="image/*,video/mp4,video/webm,video/quicktime" multiple style={{ display: 'none' }} onChange={onFiles} />
                 <input ref={camRef} type="file" accept="image/*,video/mp4,video/webm,video/quicktime" capture="environment" style={{ display: 'none' }} onChange={onFiles} />
+                <input ref={videoRef} type="file" accept="video/mp4,video/webm,video/quicktime" style={{ display: 'none' }} onChange={onFiles} />
               </div>
 
               <div style={{ display: 'flex', gap: 10, justifyContent: 'flex-end' }}>

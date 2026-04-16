@@ -39,6 +39,7 @@ export default function DecorationsPage() {
   const [aiLoading, setAiLoading] = useState(false)
   const fileRef = useRef()
   const camRef = useRef()
+  const videoRef = useRef()
 
   const [detail, setDetail] = useState(null)
   const [detailLoading, setDetailLoading] = useState(false)
@@ -417,6 +418,13 @@ export default function DecorationsPage() {
                   onChange={onPhotosSelected}
                   style={{ display: 'none' }}
                 />
+                <input
+                  ref={videoRef}
+                  type="file"
+                  accept="video/mp4,video/webm,video/quicktime"
+                  onChange={onPhotosSelected}
+                  style={{ display: 'none' }}
+                />
                 <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
                   {photos.map((p, i) => (
                     <div key={i} style={{ position: 'relative', width: 64, height: 64, borderRadius: 8, overflow: 'hidden', border: '1px solid var(--border)' }}>
@@ -468,6 +476,20 @@ export default function DecorationsPage() {
                       >
                         <Camera size={16} />
                         Камера
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => videoRef.current?.click()}
+                        style={{
+                          width: 64, height: 64, borderRadius: 8,
+                          border: '1px dashed var(--accent)', background: 'var(--bg)',
+                          cursor: 'pointer', display: 'flex', flexDirection: 'column',
+                          alignItems: 'center', justifyContent: 'center', gap: 2,
+                          color: 'var(--accent)', fontSize: 10,
+                        }}
+                      >
+                        <span style={{ fontSize: 16 }}>🎬</span>
+                        Видео
                       </button>
                     </>
                   )}

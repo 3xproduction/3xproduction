@@ -58,6 +58,7 @@ export default function UnitsPage() {
   const [showBulkConfirm, setShowBulkConfirm] = useState(false)
   const fileRef = useRef()
   const camRef = useRef()
+  const videoRef = useRef()
 
   const canSeeSource = ['warehouse_director', 'warehouse_deputy', 'producer'].includes(user?.role)
 
@@ -530,14 +531,20 @@ export default function UnitsPage() {
                           </button>
                           <button onClick={() => camRef.current?.click()}
                             style={{ width: 100, height: 100, borderRadius: 'var(--radius-btn)', border: '2px dashed var(--border)', background: 'var(--bg)', cursor: 'pointer', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 4, color: 'var(--muted)', fontSize: 12 }}>
-                            <span style={{ fontSize: 24 }}>cam</span>
+                            <span style={{ fontSize: 24 }}>📷</span>
                             Камера
+                          </button>
+                          <button onClick={() => videoRef.current?.click()}
+                            style={{ width: 100, height: 100, borderRadius: 'var(--radius-btn)', border: '2px dashed var(--accent)', background: 'var(--bg)', cursor: 'pointer', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 4, color: 'var(--accent)', fontSize: 12 }}>
+                            <span style={{ fontSize: 24 }}>🎬</span>
+                            Видео
                           </button>
                         </>
                       )}
                     </div>
                     <input ref={fileRef} type="file" accept="image/*,video/mp4,video/webm,video/quicktime" multiple style={{ display: 'none' }} onChange={onFilesSelected} />
                     <input ref={camRef} type="file" accept="image/*,video/mp4,video/webm,video/quicktime" capture="environment" style={{ display: 'none' }} onChange={onFilesSelected} />
+                    <input ref={videoRef} type="file" accept="video/mp4,video/webm,video/quicktime" style={{ display: 'none' }} onChange={onFilesSelected} />
 
                     <div style={{ display: 'flex', gap: 8 }}>
                       <Button variant="secondary" fullWidth onClick={() => setShowAdd(false)}>Отмена</Button>
