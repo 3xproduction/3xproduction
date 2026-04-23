@@ -3,9 +3,11 @@ const express     = require('express')
 const cors        = require('cors')
 const helmet      = require('helmet')
 const rateLimit   = require('express-rate-limit')
+const pinoHttp    = require('pino-http')
 const fs          = require('fs')
 const path        = require('path')
 const { pool } = require('./db')
+const logger   = require('./logger')
 
 // Run pending migrations on startup (with retry for DNS resolution on cold start)
 async function runMigrations() {
@@ -15,7 +17,7 @@ async function runMigrations() {
       client = await pool.connect()
       break
     } catch (err) {
-      console.log(`DB connect attempt ${attempt}/5 failed: ${err.code || err.message}`)
+      logger.warn({ attempt, code: err.code, msg: err.message }, 'DB connect attempt failed')
       if (attempt === 5) throw err
       await new Promise(r => setTimeout(r, 2000 * attempt))
     }
@@ -38,10 +40,10 @@ async function runMigrations() {
         await client.query(sql)
         await client.query('INSERT INTO _migrations (filename) VALUES ($1)', [file])
         await client.query('COMMIT')
-        console.log(`migration applied: ${file}`)
+        logger.info({ file }, 'migration applied')
       } catch (err) {
         await client.query('ROLLBACK')
-        console.error(`migration failed: ${file}`, err.message)
+        logger.error({ file, err: err.message }, 'migration failed')
       }
     }
   } finally {
@@ -54,14 +56,41 @@ const app = express()
 // Trust proxy (required for express-rate-limit behind Yandex Cloud load balancer)
 app.set('trust proxy', 1)
 
+// HTTP request logging (auto-generates logs for every request with request id,
+// method, url, status, response time — все чувствительные заголовки и поля
+// редактируются в logger.js через redact).
+app.use(pinoHttp({ logger }))
+
 // Security headers
 app.use(helmet({ contentSecurityPolicy: false }))
 
-// Disable ETag caching for API responses — prevents stale data after mutations
+// Кэш-политика:
+//   • Статика (JS/CSS/картинки) — не трогаем, пусть её обрабатывает Express static.
+//   • Не-GET (POST/PUT/PATCH/DELETE) — всегда no-store.
+//   • Workflow-эндпоинты, где важна свежесть между ролями (заявки, выдачи,
+//     уведомления, согласования, поиск, auth) — no-store.
+//   • Остальные GET (справочники: склады, проекты, команда, каталоги) —
+//     30 сек клиентский кэш. Это убирает лишние fetch-ы при навигации
+//     Назад/Вперёд и между вкладками SectionTabs, не создавая stale данных
+//     дольше полуминуты.
+// ETag оставлен выключенным — кэш работает через max-age, без conditional-запросов.
 app.set('etag', false)
+const NO_CACHE_PREFIXES = [
+  '/auth', '/notifications', '/requests', '/issuances', '/rent',
+  '/debts', '/search', '/push', '/admin', '/approvals',
+  // /warehouses: каталог-интерфейс создаёт ячейку + размещает юнит
+  // двумя последовательными запросами. 30-секундный кэш после reload()
+  // скрывал свежее размещение → UX «ничего не произошло».
+  '/warehouses',
+]
 app.use((req, res, next) => {
-  if (!req.path.match(/\.(js|css|png|jpg|svg|ico|woff2?)$/)) {
+  if (req.path.match(/\.(js|css|png|jpg|svg|ico|woff2?)$/)) return next()
+  if (req.method !== 'GET'
+      || req.path.startsWith('/units/approvals')
+      || NO_CACHE_PREFIXES.some(p => req.path.startsWith(p))) {
     res.set('Cache-Control', 'no-store')
+  } else {
+    res.set('Cache-Control', 'private, max-age=30')
   }
   next()
 })
@@ -107,6 +136,9 @@ if (fs.existsSync(frontendDist)) {
 app.use('/auth',       require('./routes/auth'))
 app.use('/invites',    require('./routes/invites'))
 app.use('/units',      require('./routes/units'))
+app.use('/project-units', require('./routes/projectUnits'))
+app.use('/handovers',  require('./routes/handovers'))
+app.use('/colleagues', require('./routes/colleagues'))
 app.use('/warehouses', require('./routes/warehouses'))
 app.use('/requests',   require('./routes/requests'))
 app.use('/issuances',  require('./routes/issuances'))
@@ -117,6 +149,7 @@ app.use('/analytics',  require('./routes/analytics'))
 app.use('/team',       require('./routes/team'))
 app.use('/lists',      require('./routes/lists'))
 app.use('/debts',        require('./routes/debts'))
+app.use('/writeoffs',    require('./routes/writeoffs'))
 app.use('/locations',    require('./routes/locations'))
 app.use('/decorations',  require('./routes/decorations'))
 app.use('/vehicles',     require('./routes/vehicles'))
@@ -860,17 +893,17 @@ app.use((req, res) => res.status(404).json({ error: 'Not found' }))
 
 // Error handler
 app.use((err, req, res, next) => {
-  console.error(err)
+  ;(req.log || logger).error({ err, url: req.originalUrl, method: req.method }, 'unhandled error')
   res.status(500).json({ error: 'Internal server error' })
 })
 
 // Validate required secrets at startup
 if (!process.env.JWT_SECRET || process.env.JWT_SECRET.length < 32) {
-  console.error('FATAL: JWT_SECRET must be set and at least 32 characters long')
+  logger.fatal('JWT_SECRET must be set and at least 32 characters long')
   process.exit(1)
 }
 
 const PORT = process.env.PORT || 3000
 runMigrations()
-  .then(() => app.listen(PORT, () => console.log(`Server running on port ${PORT}`)))
-  .catch(err => { console.error('Migration error:', err); process.exit(1) })
+  .then(() => app.listen(PORT, () => logger.info({ port: PORT, env: process.env.NODE_ENV }, 'server started')))
+  .catch(err => { logger.fatal({ err }, 'migration error'); process.exit(1) })

@@ -11,19 +11,28 @@ import DashboardPage from './components/warehouse/DashboardPage'
 import UnitPage from './components/warehouse/UnitPage'
 import IssuePage from './components/movement/IssuePage'
 import ReturnPage from './components/movement/ReturnPage'
-import CellsPage from './components/warehouse/CellsPage'
+import CellsIndex from './components/warehouse/cells/CellsIndex'
+import CellsTypeView from './components/warehouse/cells/CellsTypeView'
+import CellsHallView from './components/warehouse/cells/CellsHallView'
+import CellsSectionView from './components/warehouse/cells/CellsSectionView'
 import UnitsPage from './components/warehouse/UnitsPage'
 import RentPage from './components/rent/RentPage'
-import CellConstructorPage from './components/warehouse/CellConstructorPage'
 import RequestsPage from './components/warehouse/RequestsPage'
 import TeamPage from './components/warehouse/TeamPage'
 import ActsPage from './components/warehouse/ActsPage'
 import DebtsPage from './components/warehouse/DebtsPage'
+import ReturnsPage from './components/warehouse/ReturnsPage'
+import WriteoffsPage from './components/warehouse/WriteoffsPage'
+import MisplacedPage from './components/warehouse/MisplacedPage'
 import ApprovalsPage from './components/warehouse/ApprovalsPage'
 import DocumentsPage from './components/production/DocumentsPage'
 import DocumentViewer from './components/production/DocumentViewer'
 import RequestsProductionPage from './components/production/RequestsProductionPage'
 import WarehouseViewPage from './components/production/WarehouseViewPage'
+import ProjectWarehousePage from './components/production/ProjectWarehousePage'
+import HandoversPage from './components/production/HandoversPage'
+import ColleaguesPage from './components/production/ColleaguesPage'
+import ProjectWarehouseHub from './components/production/ProjectWarehouseHub'
 import PublicWarehousePage from './components/production/PublicWarehousePage'
 import NotificationsPage from './components/shared/NotificationsPage'
 import ProfilePage from './components/shared/ProfilePage'
@@ -73,6 +82,7 @@ function ImpersonateBanner() {
   document.documentElement.style.setProperty('--impersonate-offset', '0px')
 
   if (!producerToken) return null
+  if (import.meta.env.PROD) return null
 
   function handleReturn() {
     const token = sessionStorage.getItem('producer_token')
@@ -86,20 +96,53 @@ function ImpersonateBanner() {
   }
 
   return (
-    <button onClick={handleReturn} style={{
-      position: 'fixed', top: 16, right: 16, zIndex: 9999,
-      background: '#f59e0b', color: '#000', border: 'none', borderRadius: 8,
-      padding: '8px 16px', fontSize: 13, fontWeight: 600, cursor: 'pointer',
-      boxShadow: '0 2px 12px rgba(0,0,0,0.15)',
-    }}>
-      ← Вернуться
+    <button
+      className="impersonate-banner"
+      onClick={handleReturn}
+      style={{
+        position: 'fixed', top: 68, right: 20, zIndex: 9999,
+        background: '#0A0A0A', color: '#fff',
+        border: '1px solid #B8935A',
+        borderRadius: 10,
+        padding: '6px 12px 6px 10px',
+        fontSize: 12, fontWeight: 500,
+        cursor: 'pointer',
+        boxShadow: '0 4px 14px rgba(0,0,0,0.25)',
+        display: 'inline-flex', alignItems: 'center', gap: 6,
+        letterSpacing: '0.01em',
+        fontFamily: 'inherit',
+      }}
+    >
+      <span style={{ color: '#C9A876', fontSize: 14, lineHeight: 1 }}>←</span>
+      Вернуться
     </button>
+  )
+}
+
+// Полоса «DEV — тестовая среда» сверху экрана. Показывается в dev-режиме
+// локально и в staging-сборке (VITE_APP_ENV=staging). В проде скрыта.
+function DevEnvBanner() {
+  const env = import.meta.env.VITE_APP_ENV
+  const isDev = !import.meta.env.PROD
+  if (!isDev && env !== 'staging') return null
+  const label = env === 'staging' ? 'STAGING — тестовый стенд' : 'DEV — локальная разработка'
+  return (
+    <div style={{
+      position: 'fixed', top: 0, left: 0, right: 0, zIndex: 10000,
+      background: '#E8A500', color: '#0A0A0A',
+      fontSize: 11, fontWeight: 700, letterSpacing: '0.04em',
+      padding: '3px 12px', textAlign: 'center',
+      fontFamily: 'inherit', textTransform: 'uppercase',
+    }}>
+      ⚠ {label} — данные не реальные
+    </div>
   )
 }
 
 function App() {
   return (
     <BrowserRouter>
+      <DevEnvBanner />
       <ImpersonateBanner />
       <Routes>
         <Route path="/" element={<Navigate to="/login" replace />} />
@@ -112,15 +155,25 @@ function App() {
         <Route path="/dashboard"               element={<WarehouseRoute><DashboardPage /></WarehouseRoute>} />
         <Route path="/units"                   element={<WarehouseRoute><UnitsPage /></WarehouseRoute>} />
         <Route path="/units/:id"               element={<WarehouseRoute><UnitPage /></WarehouseRoute>} />
-        <Route path="/cells"                   element={<WarehouseRoute><CellsPage /></WarehouseRoute>} />
-        <Route path="/cells/constructor"       element={<WarehouseRoute><CellConstructorPage /></WarehouseRoute>} />
+        <Route path="/cells"                                     element={<WarehouseRoute><CellsIndex /></WarehouseRoute>} />
+        <Route path="/cells/constructor"                         element={<Navigate replace to="/cells" />} />
+        <Route path="/cells/:warehouseId"                        element={<WarehouseRoute><CellsIndex /></WarehouseRoute>} />
+        <Route path="/cells/:warehouseId/type/:type"             element={<WarehouseRoute><CellsTypeView /></WarehouseRoute>} />
+        <Route path="/cells/:warehouseId/hall/:hallId"           element={<WarehouseRoute><CellsHallView /></WarehouseRoute>} />
+        <Route path="/cells/:warehouseId/section/:sectionId"     element={<WarehouseRoute><CellsSectionView /></WarehouseRoute>} />
         <Route path="/rent"                    element={<PrivateRoute><RentPage /></PrivateRoute>} />
+        <Route path="/issue/rent/:id"          element={<WarehouseRoute><IssuePage /></WarehouseRoute>} />
         <Route path="/issue/:id"               element={<WarehouseRoute><IssuePage /></WarehouseRoute>} />
+        <Route path="/return/rent/:id"         element={<WarehouseRoute><ReturnPage /></WarehouseRoute>} />
         <Route path="/return/:id"              element={<WarehouseRoute><ReturnPage /></WarehouseRoute>} />
         <Route path="/requests"                element={<WarehouseRoute><RequestsPage /></WarehouseRoute>} />
         <Route path="/team"                    element={<PrivateRoute><TeamPage /></PrivateRoute>} />
         <Route path="/acts"                    element={<WarehouseRoute><ActsPage /></WarehouseRoute>} />
-        <Route path="/debts"                   element={<WarehouseRoute><DebtsPage /></WarehouseRoute>} />
+        {/* Долги/Активы/Возвраты доступны также продюсеру (production world) — через PrivateRoute */}
+        <Route path="/debts"                   element={<PrivateRoute><DebtsPage /></PrivateRoute>} />
+        <Route path="/returns"                 element={<PrivateRoute><ReturnsPage /></PrivateRoute>} />
+        <Route path="/writeoffs"               element={<PrivateRoute><WriteoffsPage /></PrivateRoute>} />
+        <Route path="/misplaced"               element={<PrivateRoute><MisplacedPage /></PrivateRoute>} />
         <Route path="/approvals"               element={<WarehouseRoute><ApprovalsPage /></WarehouseRoute>} />
         <Route path="/analytics"               element={<WarehouseRoute><WarehouseAnalyticsPage /></WarehouseRoute>} />
         <Route path="/assets"                  element={<PrivateRoute><AssetsPage /></PrivateRoute>} />
@@ -136,6 +189,12 @@ function App() {
         <Route path="/production/documents/:projectId/:docId" element={<ProductionRoute><DocumentViewer /></ProductionRoute>} />
         <Route path="/production/lists"        element={<Navigate to="/production/documents" replace />} />
         <Route path="/production/warehouse"    element={<ProductionRoute><WarehouseViewPage /></ProductionRoute>} />
+        {/* Хаб «Склад проекта» с 4 вкладками. Доступен и warehouse_director/deputy,
+            поэтому просто PrivateRoute (хаб сам выбирает layout по роли). */}
+        <Route path="/production/project-warehouse" element={<PrivateRoute><ProjectWarehouseHub /></PrivateRoute>} />
+        <Route path="/production/handovers"   element={<ProductionRoute><Navigate to="/production/project-warehouse?tab=handovers" replace /></ProductionRoute>} />
+        <Route path="/production/handovers/:id" element={<ProductionRoute><HandoversPage /></ProductionRoute>} />
+        <Route path="/production/colleagues"  element={<ProductionRoute><Navigate to="/production/project-warehouse?tab=colleagues" replace /></ProductionRoute>} />
         <Route path="/production/units"        element={<ProductionRoute><UnitsPage /></ProductionRoute>} />
         <Route path="/production/rent"            element={<ProductionRoute><RentPage /></ProductionRoute>} />
         <Route path="/production/acts"            element={<ProductionRoute><ActsPage /></ProductionRoute>} />
