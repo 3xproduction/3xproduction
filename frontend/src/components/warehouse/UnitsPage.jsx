@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef } from 'react'
-import { useNavigate, useSearchParams } from 'react-router-dom'
+import { useSearchParams } from 'react-router-dom'
+import { Search as SearchIcon, Package, Star, Camera, Film, Link as LinkIcon } from 'lucide-react'
 import WarehouseLayout from './WarehouseLayout'
 import ProductionLayout from '../production/ProductionLayout'
 import { ROLES } from '../../constants/roles'
@@ -9,6 +10,7 @@ import Badge from '../shared/Badge'
 import Button from '../shared/Button'
 import { STATUS_LABEL, STATUS_COLOR } from '../../constants/statuses'
 import { ALL_CATEGORIES, CATEGORY_MAP, categoryLabel } from '../../constants/categories'
+import { unitFund, FUND_VALUABLE, FUND_CONSUMABLE } from '../../constants/funds'
 import { units as unitsApi, warehouses as warehousesApi, rent as rentApi } from '../../services/api'
 import { useAuth } from '../../hooks/useAuth'
 import { useToast } from '../shared/Toast'
@@ -27,7 +29,6 @@ const IS_CLOTHING_CAT = (cat) => ['costumes', 'clothing'].includes(cat)
 const catOption = (key) => key === 'all' ? 'Выбрать категорию' : categoryLabel(key)
 
 export default function UnitsPage() {
-  const navigate = useNavigate()
   const [searchParams, setSearchParams] = useSearchParams()
   const { user } = useAuth()
   const toast = useToast()
@@ -41,9 +42,6 @@ export default function UnitsPage() {
   const [allUnits, setAllUnits] = useState([])
   const [loading, setLoading] = useState(true)
 
-  const [publicLink, setPublicLink] = useState('')
-  const [linkCopied, setLinkCopied] = useState(false)
-
   const [showAdd, setShowAdd] = useState(false)
   const [addStep, setAddStep] = useState(1) // 1=photos, 2=details, 3=source+warehouse, 4=preview
   const [sizeType, setSizeType] = useState('clothing') // 'clothing' or 'shoe'
@@ -53,6 +51,9 @@ export default function UnitsPage() {
   const [addError, setAddError] = useState('')
   const [cardId, setCardId] = useState(null)
   const [recognizing, setRecognizing] = useState(false)
+  // Индексы фото (в массиве photos), которые AI счёл «другим предметом».
+  // Сбрасывается при любом изменении photos.
+  const [outliers, setOutliers] = useState(new Set())
   const [selectionMode, setSelectionMode] = useState(false)
   const [selectedIds, setSelectedIds] = useState(new Set())
   const [showBulkConfirm, setShowBulkConfirm] = useState(false)
@@ -74,14 +75,26 @@ export default function UnitsPage() {
   useEffect(() => {
     const params = {}
     if (debouncedSearch.trim()) params.search = debouncedSearch.trim()
-    setLoading(true)
+    // Don't setLoading(true) on search — keeps current results visible while fetching
     unitsApi.list(params).then(data => setAllUnits(data.units || [])).catch(() => {}).finally(() => setLoading(false))
   }, [debouncedSearch])
 
   useEffect(() => {
     warehousesApi.list().then(d => setWarehouses(d.warehouses || [])).catch(() => {})
     if (searchParams.get('add') === '1') {
-      setForm(EMPTY_FORM); setPhotos([]); setAddError(''); setAddStep(1); setSizeType('clothing'); setShowAdd(true)
+      // Префилл склада/ячейки, если пришли с карты «Добавить единицу сюда».
+      // В этом случае прыгаем сразу на шаг «Детали» (шаг 2) — фото юзер
+      // добавит потом перед сохранением.
+      const prefillCellId = searchParams.get('cellId') || ''
+      const prefillWhId   = searchParams.get('warehouseId') || ''
+      const nextForm = { ...EMPTY_FORM }
+      if (prefillWhId)   nextForm.warehouse_id = prefillWhId
+      if (prefillCellId) nextForm.cell_id = prefillCellId
+      setForm(nextForm)
+      setPhotos([]); setOutliers(new Set()); setAddError('')
+      setAddStep(prefillCellId ? 2 : 1)
+      setSizeType('clothing')
+      setShowAdd(true)
       setSearchParams({}, { replace: true })
     }
   }, [])
@@ -100,6 +113,12 @@ export default function UnitsPage() {
     return matchCat && matchStatus
   })
 
+  // Split into 3 tiers: direct → similar (close synonyms) → related (category siblings)
+  const directUnits = filtered.filter(u => !u._match || u._match === 'direct')
+  const similarUnits = filtered.filter(u => u._match === 'similar')
+  const relatedUnits = filtered.filter(u => u._match === 'related')
+  const isSearching = debouncedSearch.trim().length > 0
+
   function isVideoFile(file) {
     return file.type?.startsWith('video/')
   }
@@ -107,18 +126,35 @@ export default function UnitsPage() {
   async function onFilesSelected(e) {
     const files = Array.from(e.target.files)
     const processed = await Promise.all(files.map(f => isVideoFile(f) ? f : compressImage(f)))
-    setPhotos(prev => [...prev, ...processed].slice(0, 3))
+    setPhotos(prev => [...prev, ...processed].slice(0, 5))
+    setOutliers(new Set()) // новые фото — сбрасываем предыдущую подсветку
   }
 
   async function handlePhotosReady() {
-    const firstImage = photos.find(f => !isVideoFile(f))
-    if (!firstImage) { toast?.('Добавьте хотя бы одно фото (не видео) для распознавания', 'error'); return }
+    // Индексы фото-файлов (не видео) в массиве photos. Backend возвращает
+    // outlier_indices в пространстве картинок (0..N-1), мапим обратно.
+    const imagePhotoIdx = photos.map((p, i) => isVideoFile(p) ? -1 : i).filter(i => i !== -1)
+    const images = imagePhotoIdx.map(i => photos[i])
+    if (images.length < 2) {
+      toast?.('Загрузите минимум 2 фото одного предмета', 'error')
+      return
+    }
     setRecognizing(true)
+    setOutliers(new Set())
     try {
       const fd = new FormData()
-      fd.append('photo', firstImage)
+      for (const img of images) fd.append('photos', img)
       const result = await unitsApi.recognize(fd)
-      if (result.name || result.category || result.description) {
+      if (result?.same_item === false) {
+        const outlierImageIdxs = Array.isArray(result.outlier_indices) ? result.outlier_indices : []
+        const outlierPhotoIdxs = outlierImageIdxs
+          .map(i => imagePhotoIdx[i])
+          .filter(i => typeof i === 'number')
+        setOutliers(new Set(outlierPhotoIdxs))
+        toast?.(result.message || 'Загруженные фото относятся к разным предметам. Пожалуйста, перезагрузите фотографии одного предмета', 'error')
+        return
+      }
+      if (result?.name || result?.category || result?.description) {
         setForm(f => ({
           ...f,
           name: result.name || f.name,
@@ -240,46 +276,38 @@ export default function UnitsPage() {
 
   return (
     <Layout>
+      <style>{`
+        /* На мобильной скрываем верхние действия (Экспорт / + Новое)
+           и статусный фильтр — создание/экспорт/фильтры идут через FAB и категории. */
+        @media (max-width: 768px) {
+          .units-top-actions { display: none !important; }
+          .units-filter-status { display: none !important; }
+        }
+      `}</style>
       <div style={{ padding: '24px 32px' }}>
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 20, gap: 12, flexWrap: 'wrap' }}>
-          <h1 style={{ fontSize: 20, fontWeight: 600 }}>Склад</h1>
-          <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+          <h1 style={{ fontSize: 20, fontWeight: 600 }}>Каталог</h1>
+          <div className="units-top-actions" style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
             {ROLES[user?.role]?.canPublicLink && (
-              <Button variant="secondary" onClick={async () => {
+              <Button onClick={async () => {
                 try {
                   const data = await rentApi.generateLink()
                   const url = data.url || data.link
-                  if (url) setPublicLink(`${window.location.origin}${url}`)
-                } catch { /* silent */ }
-              }}>
-                Публичная ссылка
-              </Button>
+                  if (url) {
+                    const full = `${window.location.origin}${url}`
+                    await navigator.clipboard.writeText(full)
+                    toast?.('Ссылка скопирована', 'success')
+                  }
+                } catch (e) {
+                  toast?.(e.message || 'Не удалось создать ссылку', 'error')
+                }
+              }}><LinkIcon size={14} /> Поделиться ссылкой</Button>
             )}
-            {isDirector && (
-              <Button variant="secondary" onClick={() => {
-                const base = import.meta.env.VITE_API_URL || ''
-                const token = localStorage.getItem('token')
-                const a = document.createElement('a')
-                a.href = `${base}/units/export`
-                a.download = 'warehouse_export.xlsx'
-                // Use fetch with auth header for download
-                fetch(`${base}/units/export`, { headers: { 'Authorization': `Bearer ${token}` } })
-                  .then(r => r.blob())
-                  .then(blob => { a.href = URL.createObjectURL(blob); a.click() })
-                  .catch(() => alert('Ошибка экспорта'))
-              }}>
-                Экспорт
-              </Button>
-            )}
-            <Button onClick={() => {
-              setForm(EMPTY_FORM); setPhotos([]); setAddError(''); setAddStep(1); setSizeType('clothing'); setShowAdd(true)
-              warehousesApi.list().then(d => setWarehouses(d.warehouses || [])).catch(() => {})
-            }}>+ Новое</Button>
           </div>
         </div>
 
         <div style={{ position: 'relative', marginBottom: 14 }}>
-          <span style={{ position: 'absolute', left: 12, top: '50%', transform: 'translateY(-50%)', color: 'var(--muted)', fontSize: 16 }}>🔍</span>
+          <SearchIcon size={14} style={{ position: 'absolute', left: 12, top: '50%', transform: 'translateY(-50%)', color: 'var(--muted)' }} />
           <input value={search} onChange={e => setSearch(e.target.value)}
             placeholder="Найдите по названию или серийному номеру..."
             style={{ width: '100%', height: 40, padding: '0 12px 0 36px', border: '1px solid var(--border)', borderRadius: 'var(--radius-btn)', fontSize: 14, background: 'var(--white)', outline: 'none' }}
@@ -287,7 +315,7 @@ export default function UnitsPage() {
         </div>
 
         <div style={{ display: 'flex', gap: 8, marginBottom: 20, flexWrap: 'wrap' }}>
-          <Select value={statusFilter} onChange={setStatusFilter} options={STATUSES} />
+          <div className="units-filter-status"><Select value={statusFilter} onChange={setStatusFilter} options={STATUSES} /></div>
           <select value={category} onChange={e => setCategory(e.target.value)} style={{
             height: 36, padding: '0 10px', border: '1px solid var(--border)',
             borderRadius: 'var(--radius-btn)', fontSize: 13, background: 'var(--white)', cursor: 'pointer', color: 'var(--text)',
@@ -329,9 +357,10 @@ export default function UnitsPage() {
 
         {/* Grid — карточки-сетка */}
         {viewMode === 'grid' && (
+          <div>
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(170px, 1fr))', gap: 12 }}>
-            {filtered.map(u => {
-              const isWrittenOff = u.status === 'written_off'
+            {(isSearching ? directUnits : filtered).map(u => {
+              const isWrittenOff = u.status === 'written_off' || u.misplaced
               const isSelected = selectedIds.has(u.id)
               return (
                 <div key={u.id} onClick={() => selectionMode ? toggleSelection(u.id) : setCardId(u.id)} style={{
@@ -357,16 +386,70 @@ export default function UnitsPage() {
                       ? /\.(mp4|webm|mov)$/i.test(u.photo_url)
                         ? <video src={u.photo_url} muted preload="metadata" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
                         : <img src={u.photo_url} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
-                      : <span>📦</span>}
+                      : <Package size={22} color="var(--subtle)" strokeWidth={1.4} />}
                   </div>
                   <div style={{ padding: '10px 12px' }}>
-                    <div style={{ fontWeight: 500, fontSize: 13, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', color: isWrittenOff ? 'var(--muted)' : 'var(--text)', textDecoration: isWrittenOff ? 'line-through' : 'none' }}>{u.name}</div>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+                      {unitFund(u) === FUND_VALUABLE && (
+                        <Star size={12} fill="var(--gold-500)" color="var(--gold-500)" style={{ flexShrink: 0 }} />
+                      )}
+                      <div style={{ fontWeight: 500, fontSize: 13, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', color: isWrittenOff ? 'var(--muted)' : 'var(--text)', textDecoration: isWrittenOff ? 'line-through' : 'none' }}>{u.name}</div>
+                    </div>
                     <div style={{ fontSize: 11, color: 'var(--muted)', marginTop: 2 }}>{categoryLabel(u.category)}</div>
-                    <div style={{ marginTop: 6 }}><Badge color={STATUS_COLOR[u.status]}>{STATUS_LABEL[u.status]}</Badge></div>
+                    <div style={{ marginTop: 6, display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
+                      <Badge color={STATUS_COLOR[u.status]}>{STATUS_LABEL[u.status]}</Badge>
+                      {u.status === 'on_stock' && (u.warehouse_address || u.warehouse_name) && (
+                        <span style={{
+                          fontSize: 10, fontWeight: 500, color: 'var(--muted)',
+                          overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+                        }} title={u.warehouse_address || u.warehouse_name}>
+                          {u.warehouse_address || u.warehouse_name}
+                        </span>
+                      )}
+                    </div>
                   </div>
                 </div>
               )
             })}
+          </div>
+          {isSearching && [
+            { items: similarUnits, label: 'Похожее', opacity: 0.85 },
+            { items: relatedUnits, label: 'Из категории', opacity: 0.65 },
+          ].map(({ items, label, opacity }) => items.length > 0 && (
+            <div key={label}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 10, margin: '20px 0 12px', color: 'var(--muted)' }}>
+                <div style={{ flex: 1, height: 1, background: 'var(--border)' }} />
+                <span style={{ fontSize: 13, fontWeight: 500, whiteSpace: 'nowrap' }}>{label}</span>
+                <div style={{ flex: 1, height: 1, background: 'var(--border)' }} />
+              </div>
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(170px, 1fr))', gap: 12 }}>
+                {items.map(u => {
+                  const isWrittenOff = u.status === 'written_off' || u.misplaced
+                  return (
+                    <div key={u.id} onClick={() => setCardId(u.id)} style={{
+                      background: isWrittenOff ? 'var(--bg-secondary)' : 'var(--card)',
+                      borderRadius: 'var(--radius-card)', border: '1px solid var(--border)',
+                      filter: isWrittenOff ? 'grayscale(1)' : 'none', opacity,
+                      cursor: 'pointer', overflow: 'hidden',
+                    }}>
+                      <div style={{ aspectRatio: '1', background: 'var(--bg)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 40, overflow: 'hidden' }}>
+                        {u.photo_url
+                          ? /\.(mp4|webm|mov)$/i.test(u.photo_url)
+                            ? <video src={u.photo_url} muted preload="metadata" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+                            : <img src={u.photo_url} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+                          : <Package size={22} color="var(--subtle)" strokeWidth={1.4} />}
+                      </div>
+                      <div style={{ padding: '10px 12px' }}>
+                        <div style={{ fontWeight: 500, fontSize: 13, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{u.name}</div>
+                        <div style={{ fontSize: 11, color: 'var(--muted)', marginTop: 2 }}>{categoryLabel(u.category)}</div>
+                        <div style={{ marginTop: 6 }}><Badge color={STATUS_COLOR[u.status]}>{STATUS_LABEL[u.status]}</Badge></div>
+                      </div>
+                    </div>
+                  )
+                })}
+              </div>
+            </div>
+          ))}
           </div>
         )}
 
@@ -374,7 +457,7 @@ export default function UnitsPage() {
         {viewMode === 'rows' && (
           <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
             {filtered.map(u => {
-              const isWrittenOff = u.status === 'written_off'
+              const isWrittenOff = u.status === 'written_off' || u.misplaced
               const photo = u.photo_url
               const isSelected = selectedIds.has(u.id)
               return (
@@ -403,15 +486,17 @@ export default function UnitsPage() {
                       ? /\.(mp4|webm|mov)$/i.test(photo)
                         ? <video src={photo} muted preload="metadata" style={{ width: '100%', height: '100%', objectFit: 'contain' }} />
                         : <img src={photo} alt="" style={{ width: '100%', height: '100%', objectFit: 'contain', filter: isWrittenOff ? 'blur(2px)' : 'none' }} />
-                      : <span>📦</span>}
+                      : <Package size={22} color="var(--subtle)" strokeWidth={1.4} />}
                   </div>
                   <div style={{ flex: 1, minWidth: 0 }}>
-                    <div style={{ fontWeight: 500, fontSize: 14, textDecoration: isWrittenOff ? 'line-through' : 'none', color: isWrittenOff ? 'var(--muted)' : 'var(--text)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{u.name}</div>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                      {unitFund(u) === FUND_VALUABLE && <Star size={13} fill="var(--gold-500)" color="var(--gold-500)" />}
+                      <div style={{ fontWeight: 500, fontSize: 14, textDecoration: isWrittenOff ? 'line-through' : 'none', color: isWrittenOff ? 'var(--muted)' : 'var(--text)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{u.name}</div>
+                    </div>
                     <div style={{ fontSize: 12, color: 'var(--muted)', marginTop: 2 }}>{u.serial ? `${u.serial} · ` : ''}{categoryLabel(u.category)}</div>
                   </div>
                   <div style={{ fontSize: 12, color: 'var(--muted)', textAlign: 'right', flexShrink: 0 }}>
-                    {u.cell_name && <div>Полка {u.cell_name}</div>}
-                    {u.warehouse_name && <div style={{ marginTop: 2 }}>{u.warehouse_name}</div>}
+                    {(u.warehouse_address || u.warehouse_name) && <div>{u.warehouse_address || u.warehouse_name}</div>}
                   </div>
                   <div style={{ flexShrink: 0 }}>
                     <Badge color={STATUS_COLOR[u.status]}>{STATUS_LABEL[u.status]}</Badge>
@@ -427,7 +512,7 @@ export default function UnitsPage() {
         {viewMode === 'list' && (
           <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
             {filtered.map(u => {
-              const isWrittenOff = u.status === 'written_off'
+              const isWrittenOff = u.status === 'written_off' || u.misplaced
               const isSelected = selectedIds.has(u.id)
               return (
                 <div key={u.id} onClick={() => selectionMode ? toggleSelection(u.id) : setCardId(u.id)} style={{
@@ -444,9 +529,15 @@ export default function UnitsPage() {
                       display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer',
                     }}>{isSelected && <span style={{ color: '#fff', fontSize: 12, fontWeight: 700, lineHeight: 1 }}>✓</span>}</div>
                   )}
+                  {unitFund(u) === FUND_VALUABLE && <Star size={12} fill="var(--gold-500)" color="var(--gold-500)" style={{ flexShrink: 0 }} />}
                   <div style={{ flex: 1, minWidth: 0, fontSize: 13, fontWeight: 500, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', color: isWrittenOff ? 'var(--muted)' : 'var(--text)', textDecoration: isWrittenOff ? 'line-through' : 'none' }}>{u.name}</div>
                   {u.serial && <span style={{ fontSize: 12, color: 'var(--muted)', flexShrink: 0 }}>{u.serial}</span>}
                   <span style={{ fontSize: 12, color: 'var(--muted)', flexShrink: 0 }}>{categoryLabel(u.category)}</span>
+                  {u.status === 'on_stock' && (u.warehouse_address || u.warehouse_name) && (
+                    <span style={{ fontSize: 11, color: 'var(--muted)', flexShrink: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: 180 }}>
+                      {u.warehouse_address || u.warehouse_name}
+                    </span>
+                  )}
                   <Badge color={STATUS_COLOR[u.status]}>{STATUS_LABEL[u.status]}</Badge>
                 </div>
               )
@@ -470,7 +561,7 @@ export default function UnitsPage() {
             <button onClick={() => setShowBulkConfirm(true)} style={{
               height: 34, padding: '0 14px', border: 'none',
               borderRadius: 'var(--radius-btn)', fontSize: 13, cursor: 'pointer',
-              background: 'var(--red, #ef4444)', color: '#fff', fontWeight: 500,
+              background: 'var(--red)', color: '#fff', fontWeight: 500,
             }}>Удалить</button>
           </div>
         )}
@@ -514,21 +605,39 @@ export default function UnitsPage() {
                 ) : (
                   <>
                     <div style={{ fontWeight: 600, fontSize: 16, marginBottom: 6 }}>Загрузите фото</div>
-                    <div style={{ fontSize: 13, color: 'var(--muted)', marginBottom: 20 }}>Минимум 2 фото + видео по желанию</div>
+                    <div style={{ fontSize: 13, color: 'var(--muted)', marginBottom: 20 }}>От 2 до 5 фото одного предмета (разные ракурсы). Видео — опционально.</div>
+
+                    {outliers.size > 0 && (
+                      <div style={{
+                        background: 'var(--red-dim)', color: 'var(--red)',
+                        border: '1px solid var(--red)', borderRadius: 'var(--radius-btn)',
+                        padding: '10px 12px', marginBottom: 16, fontSize: 13, lineHeight: 1.4,
+                      }}>
+                        Загруженные фото относятся к разным предметам. Удалите лишние (подсвечены красным) и загрузите фотографии одного предмета.
+                      </div>
+                    )}
 
                     <div style={{ display: 'flex', gap: 10, marginBottom: 20, flexWrap: 'wrap' }}>
-                      {photos.map((f, i) => (
+                      {photos.map((f, i) => {
+                        const isOutlier = outliers.has(i)
+                        const border = isOutlier ? '2px solid var(--red)' : '1px solid var(--border)'
+                        return (
                         <div key={i} style={{ position: 'relative', width: 100, height: 100 }}>
                           {isVideoFile(f) ? (
-                            <video src={URL.createObjectURL(f)} muted preload="metadata" style={{ width: 100, height: 100, objectFit: 'cover', borderRadius: 'var(--radius-btn)', border: '1px solid var(--border)' }} />
+                            <video src={URL.createObjectURL(f)} muted preload="metadata" style={{ width: 100, height: 100, objectFit: 'cover', borderRadius: 'var(--radius-btn)', border }} />
                           ) : (
-                            <img src={URL.createObjectURL(f)} alt="" style={{ width: 100, height: 100, objectFit: 'cover', borderRadius: 'var(--radius-btn)', border: '1px solid var(--border)' }} />
+                            <img src={URL.createObjectURL(f)} alt="" style={{ width: 100, height: 100, objectFit: 'cover', borderRadius: 'var(--radius-btn)', border }} />
                           )}
-                          <button onClick={() => setPhotos(p => p.filter((_, j) => j !== i))}
+                          {isOutlier && (
+                            <div style={{ position: 'absolute', bottom: 4, left: 4, right: 4, background: 'var(--red)', color: '#fff', fontSize: 10, fontWeight: 600, textAlign: 'center', borderRadius: 4, padding: '1px 0' }}>
+                              Другой предмет
+                            </div>
+                          )}
+                          <button onClick={() => { setPhotos(p => p.filter((_, j) => j !== i)); setOutliers(new Set()) }}
                             style={{ position: 'absolute', top: -6, right: -6, background: 'var(--red)', border: 'none', borderRadius: '50%', width: 20, height: 20, color: '#fff', fontSize: 12, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>×</button>
                         </div>
-                      ))}
-                      {photos.length < 3 && (
+                      )})}
+                      {photos.length < 5 && (
                         <>
                           <button onClick={() => fileRef.current?.click()}
                             style={{ width: 100, height: 100, borderRadius: 'var(--radius-btn)', border: '2px dashed var(--border)', background: 'var(--bg)', cursor: 'pointer', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 4, color: 'var(--muted)', fontSize: 12 }}>
@@ -537,12 +646,12 @@ export default function UnitsPage() {
                           </button>
                           <button onClick={() => camRef.current?.click()}
                             style={{ width: 100, height: 100, borderRadius: 'var(--radius-btn)', border: '2px dashed var(--border)', background: 'var(--bg)', cursor: 'pointer', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 4, color: 'var(--muted)', fontSize: 12 }}>
-                            <span style={{ fontSize: 24 }}>📷</span>
+                            <Camera size={22} color="var(--muted)" strokeWidth={1.4} />
                             Камера
                           </button>
                           <button onClick={() => videoRef.current?.click()}
                             style={{ width: 100, height: 100, borderRadius: 'var(--radius-btn)', border: '2px dashed var(--accent)', background: 'var(--bg)', cursor: 'pointer', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 4, color: 'var(--accent)', fontSize: 12 }}>
-                            <span style={{ fontSize: 24 }}>🎬</span>
+                            <Film size={22} color="var(--muted)" strokeWidth={1.4} />
                             Видео
                           </button>
                         </>
@@ -684,23 +793,6 @@ export default function UnitsPage() {
       {cardId && <UnitCardModal unitId={cardId} onClose={() => setCardId(null)} onChanged={() => {
         unitsApi.list().then(d => setAllUnits(d.units || [])).catch(() => {})
       }} />}
-      {publicLink && (
-        <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.45)', zIndex: 500, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16 }}
-          onClick={() => { setPublicLink(''); setLinkCopied(false) }}>
-          <div style={{ background: 'var(--white)', borderRadius: 'var(--radius-card)', padding: 24, maxWidth: 440, width: '100%' }}
-            onClick={e => e.stopPropagation()}>
-            <div style={{ fontWeight: 600, fontSize: 16, marginBottom: 8 }}>Публичная ссылка на склад</div>
-            <div style={{ fontSize: 13, color: 'var(--muted)', marginBottom: 16 }}>Отправьте эту ссылку для просмотра склада и подачи заявки на аренду</div>
-            <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 16 }}>
-              <input readOnly value={publicLink} style={{ flex: 1, height: 38, padding: '0 10px', border: '1px solid var(--border)', borderRadius: 'var(--radius-btn)', fontSize: 12, background: 'var(--bg)', fontFamily: 'monospace' }} />
-              <Button onClick={() => { navigator.clipboard.writeText(publicLink); setLinkCopied(true) }}>
-                {linkCopied ? '✓ Скопировано' : 'Копировать'}
-              </Button>
-            </div>
-            <Button variant="secondary" fullWidth onClick={() => { setPublicLink(''); setLinkCopied(false) }}>Закрыть</Button>
-          </div>
-        </div>
-      )}
     </Layout>
   )
 }

@@ -336,7 +336,7 @@ export default function LocationsPage() {
                   )}
                   <button
                     onClick={() => setPhotos(p => p.filter((_, j) => j !== i))}
-                    style={{ position: 'absolute', top: -6, right: -6, background: 'var(--red, #ef4444)', border: 'none', borderRadius: '50%', width: 20, height: 20, color: '#fff', fontSize: 12, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center' }}
+                    style={{ position: 'absolute', top: -6, right: -6, background: 'var(--red)', border: 'none', borderRadius: '50%', width: 20, height: 20, color: '#fff', fontSize: 12, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center' }}
                   >
                     <X size={12} />
                   </button>
@@ -457,7 +457,7 @@ export default function LocationsPage() {
               style={{ width: '100%', height: 56, padding: '8px 10px', border: '1px solid var(--border)', borderRadius: 'var(--radius-btn)', fontSize: 13, resize: 'vertical', marginBottom: 16, fontFamily: 'inherit', boxSizing: 'border-box' }}
             />
 
-            {saveError && <div style={{ color: 'var(--red, #ef4444)', fontSize: 13, marginBottom: 12 }}>{saveError}</div>}
+            {saveError && <div style={{ color: 'var(--red)', fontSize: 13, marginBottom: 12 }}>{saveError}</div>}
 
             <div style={{ display: 'flex', gap: 8 }}>
               <Button variant="secondary" fullWidth onClick={() => setShowAdd(false)}>Отмена</Button>

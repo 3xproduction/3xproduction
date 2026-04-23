@@ -5,6 +5,34 @@ const sharp = require('sharp')
 const db     = require('../db')
 const { verifyJWT, checkRole } = require('../middleware/auth')
 const { uploadFile, deleteFile } = require('../services/r2')
+const { CATEGORIES_BY_STORAGE } = require('../constants/storageRules')
+
+// Validate that a unit move to target cell is allowed.
+// Места безлимитные, ограничение одно: на ВЕШАЛКАХ (hanger) разрешены только
+// костюмы/обувь/аксессуары/украшения. На полках и местах — любая категория.
+// Секции type='hall' (залы-контейнеры) не хранят единицы напрямую.
+async function validateCellMove(unitRow, targetCellId) {
+  if (!targetCellId) return { ok: true }
+  const { rows } = await db.query(
+    `SELECT c.id AS cell_id, sec.type AS target_type
+     FROM cells c
+     JOIN warehouse_sections sec ON sec.id = c.section_id
+     WHERE c.id = $1`,
+    [targetCellId]
+  )
+  if (!rows.length) return { ok: false, error: 'Ячейка не найдена' }
+  const targetType = rows[0].target_type
+  if (targetType === 'hanger') {
+    const allowed = CATEGORIES_BY_STORAGE.hanger
+    if (unitRow.category && !allowed.includes(unitRow.category)) {
+      return {
+        ok: false,
+        error: 'На вешалке размещаются только костюмы, обувь, аксессуары и украшения',
+      }
+    }
+  }
+  return { ok: true }
+}
 
 const ALLOWED_MEDIA_TYPES = ['image/jpeg', 'image/png', 'image/webp', 'video/mp4', 'video/webm', 'video/quicktime']
 const upload = multer({
@@ -85,50 +113,101 @@ router.get('/export', verifyJWT, checkRole('warehouse_director', 'warehouse_depu
 
 // GET /units
 router.get('/', verifyJWT, async (req, res) => {
-  const { warehouse, status, category, search, cell_id } = req.query
+  const { warehouse, status, category, search, cell_id, scope, misplaced } = req.query
+  // scope: 'common' (default) — only warehouse units, 'project' — only project-kept, 'all' — both
   try {
     let q = `
-      SELECT u.*, w.name AS warehouse_name, c.code AS cell_code,
+      SELECT u.*, w.name AS warehouse_name, w.address AS warehouse_address,
+             c.code AS cell_code, c.custom_name AS cell_custom,
+             sec.name AS section_name, sec.type AS section_type,
+             pav.name AS pavilion_name,
              (SELECT url FROM unit_photos WHERE unit_id = u.id ORDER BY CASE WHEN url ~* '\.(mp4|webm|mov)$' THEN 1 ELSE 0 END, created_at LIMIT 1) AS photo_url
       FROM units u
       LEFT JOIN warehouses w ON w.id = u.warehouse_id
       LEFT JOIN cells c ON c.id = u.cell_id
+      LEFT JOIN warehouse_sections sec ON sec.id = c.section_id
+      LEFT JOIN decorations pav ON pav.id = u.pavilion_id AND pav.type = 'pavilion'
       WHERE 1=1
     `
     const params = []
+    // Видимость writted_off и misplaced:
+    //   - Списанные (written_off): producer + warehouse_director/deputy.
+    //   - Пересорт (misplaced): те же + warehouse_staff — им нужно «находить» их на /misplaced.
+    //   - Остальные (production-роли, публика) — не видят ни то, ни другое.
+    const CAN_SEE_WRITTEN_OFF = ['producer', 'warehouse_director', 'warehouse_deputy']
+    const CAN_SEE_MISPLACED   = [...CAN_SEE_WRITTEN_OFF, 'warehouse_staff']
+    if (!CAN_SEE_WRITTEN_OFF.includes(req.user.role)) {
+      q += ` AND u.status != 'written_off'`
+    }
+    if (!CAN_SEE_MISPLACED.includes(req.user.role)) {
+      q += ` AND COALESCE(u.misplaced, false) = false`
+    }
+    // Default scope: only common warehouse units. Project-kept units are requested explicitly
+    // via scope=project (director UI) or scope=all. This keeps public/search paths clean.
+    if (scope === 'project') {
+      q += ` AND u.is_project_kept = true`
+    } else if (scope === 'all') {
+      // no extra filter
+    } else {
+      q += ` AND COALESCE(u.is_project_kept, false) = false`
+    }
     if (warehouse) { params.push(warehouse); q += ` AND u.warehouse_id = $${params.length}` }
     if (status)    { params.push(status);    q += ` AND u.status = $${params.length}` }
     if (category)  { params.push(category);  q += ` AND u.category = $${params.length}` }
     if (cell_id)   { params.push(cell_id);   q += ` AND u.cell_id = $${params.length}` }
+    if (misplaced === 'true')  q += ` AND u.misplaced = true`
+    if (misplaced === 'false') q += ` AND u.misplaced = false`
+    let searchApplied = false
+    let tsqIdx, rawIdx
+    let closeSynonyms = []
     if (search) {
       const { buildSearchQuery } = require('../services/searchService')
-      const { tsqueryStr, originalQuery } = await buildSearchQuery(search)
-      params.push(tsqueryStr)
-      const tsqIdx = params.length
-      params.push(originalQuery)
-      const rawIdx = params.length
-      q += ` AND (u.search_vector @@ to_tsquery('ru_search', $${tsqIdx})
-             OR similarity(u.name, $${rawIdx}) > 0.2)`
+      const result = await buildSearchQuery(search)
+      if (result.tsqueryStr) {
+        params.push(result.tsqueryStr)
+        tsqIdx = params.length
+        params.push(result.originalQuery)
+        rawIdx = params.length
+        closeSynonyms = result.closeSynonyms || []
+        q += ` AND (
+          ts_rank_cd(u.search_vector, to_tsquery('ru_search', $${tsqIdx})) > 0.5
+          OR u.name ILIKE '%' || $${rawIdx} || '%'
+        )`
+        searchApplied = true
+      }
     }
-    if (search) {
-      const tsqIdx = params.length - 1
-      const rawIdx = params.length
-      q += ` ORDER BY ts_rank_cd(u.search_vector, to_tsquery('ru_search', $${tsqIdx})) DESC,
-                       similarity(u.name, $${rawIdx}) DESC, u.created_at DESC`
+    if (searchApplied) {
+      q += ` ORDER BY
+        CASE WHEN u.name ILIKE '%' || $${rawIdx} || '%' THEN 2000 ELSE 0 END
+        + ts_rank_cd(u.search_vector, to_tsquery('ru_search', $${tsqIdx})) DESC,
+        u.created_at DESC`
     } else {
       q += ` ORDER BY u.created_at DESC`
     }
 
     const { rows } = await db.query(q, params)
     const canSeeValuation = ['warehouse_director', 'warehouse_deputy', 'producer'].includes(req.user.role)
+    const searchLower = search ? search.trim().toLowerCase() : ''
     const units = rows.map(({ search_tags, search_vector, ...rest }) => {
-      if (!canSeeValuation) { const { valuation, ...r } = rest; return r }
+      if (!canSeeValuation) { const { valuation, ...r } = rest; rest = r }
+      // 3-tier marking: direct → similar → related
+      if (searchApplied) {
+        const nameLower = rest.name.toLowerCase()
+        if (nameLower.includes(searchLower)) {
+          rest._match = 'direct'
+        } else if (closeSynonyms.some(s => nameLower.includes(s))) {
+          rest._match = 'similar'
+        } else {
+          rest._match = 'related'
+        }
+      }
       return rest
     })
     res.json({ units })
   } catch (err) {
-    console.error(err)
-    res.status(500).json({ error: 'Server error' })
+    console.error('Units search error:', err)
+    // Return empty results instead of 500 to prevent frontend flicker
+    res.json({ units: [] })
   }
 })
 
@@ -150,62 +229,118 @@ router.get('/ai-test', async (req, res) => {
   }
 })
 
-// POST /units/recognize — AI photo recognition to auto-fill unit fields
-router.post('/recognize', verifyJWT, upload.single('photo'), async (req, res) => {
-  if (!req.file) return res.status(400).json({ error: 'No photo provided' })
+// POST /units/recognize — мультифото AI-распознавание.
+// Принимает 1..5 фото одного предмета. Claude проверяет, что все фото
+// показывают ОДИН и тот же предмет с разных ракурсов. Если хотя бы одно
+// фото о другом — возвращает outlier_indices (0-based) для подсветки на
+// фронте и same_item=false. Если все фото — один предмет, заполняет поля.
+router.post('/recognize', verifyJWT, upload.array('photos', 5), async (req, res) => {
+  const files = req.files || []
+  if (!files.length) return res.status(400).json({ error: 'No photos provided' })
   if (!process.env.ANTHROPIC_API_KEY) return res.status(500).json({ error: 'AI not configured' })
 
-  const resized = await sharp(req.file.buffer)
-    .resize(800, 800, { fit: 'inside', withoutEnlargement: true })
-    .jpeg({ quality: 70 })
-    .toBuffer()
-  const base64 = resized.toString('base64')
-  const mediaType = 'image/jpeg'
+  // Redact-helper — не допускаем попадания API key или proxy URL в строки.
+  const redact = (s) => {
+    let str = String(s || '')
+    const key = process.env.ANTHROPIC_API_KEY
+    if (key && key.length > 8) str = str.split(key).join('[redacted]')
+    return str.slice(0, 300)
+  }
 
   try {
+    // Resize each photo: 800×800 JPEG q70 → base64 (идентично прошлому флоу).
+    const images = await Promise.all(files.map(async (f) => {
+      const resized = await sharp(f.buffer)
+        .resize(800, 800, { fit: 'inside', withoutEnlargement: true })
+        .jpeg({ quality: 70 })
+        .toBuffer()
+      return resized.toString('base64')
+    }))
+
+    // Собираем content: для каждого фото — лейбл «Фото N:» + сам blob.
+    // AI видит нумерацию 0-based (0..N-1), что совпадёт с индексами на фронте.
+    const content = []
+    images.forEach((data, idx) => {
+      content.push({ type: 'text', text: `Фото ${idx}:` })
+      content.push({ type: 'image', source: { type: 'base64', media_type: 'image/jpeg', data } })
+    })
+    content.push({
+      type: 'text',
+      text: `Ты — система распознавания для склада кинопроизводства. Передано ${images.length} фото (0..${images.length - 1}) одного предмета.
+
+ЗАДАЧА — прогрессивный сбор деталей:
+— Фото 0 = основное: определи предмет, его тип, категорию, эпоху.
+— Фото 1, 2, … = источники ДОПОЛНИТЕЛЬНЫХ деталей. На них смотри только то, чего НЕ ВИДНО на предыдущих фото:
+  • новые цвета, оттенки, материалы, фактура;
+  • серийные номера, ярлыки, бирки, маркировки, надписи;
+  • повреждения, царапины, потёртости, следы ремонта;
+  • детали конструкции со скрытых ракурсов (низ, задник, внутренности, замки, застёжки);
+  • аксессуары/дополнения, которые шли в комплекте.
+— Если на очередном фото ничего нового НЕТ — просто пропусти его, НЕ пиши «это тот же предмет», НЕ пиши «другой ракурс», НЕ добавляй пустых фраз.
+
+НЕ НАДО:
+— Обсуждать, что это один и тот же предмет или разные ракурсы.
+— Писать «на фото 2 виден этот же предмет сбоку».
+— Писать «фото 3 не добавляет информации».
+— Добавлять общие фразы наполнителя.
+
+Категории: costumes, props, art_fill, dummy, auto, furniture, decor, scenery, tech, lighting, sound, camera, makeup, clothing, jewelry, other
+Период (обязательно): "Современное" | "Советское (1970-е)" | "XVIII век" | другая эпоха.
+
+Формат ответа: РОВНО ОДИН JSON-объект без markdown, без комментариев до или после.
+
+{"name": "...", "category": "...", "period": "...", "description": "..."}
+
+— description: 2-4 предложения. Начинай с базового описания (из фото 0): что это, цвет, материал, состояние. Потом добавляй детали, найденные на последующих фото (только те, которые РЕАЛЬНО добавляют информацию). Если ничего не добавилось — оставляй описание коротким.
+
+Пример (3 фото: сумка спереди, ярлык крупно, царапина снизу):
+{"name": "Кожаная сумка", "category": "props", "period": "Современное", "description": "Коричневая кожаная сумка-хобо с длинным плечевым ремнём, состояние хорошее. На внутреннем ярлыке маркировка «MADE IN ITALY, 1978». На нижней части корпуса глубокая вертикальная царапина около 4 см."}
+
+Пример (2 фото: кресло, задник кресла без новых деталей):
+{"name": "Винтажное кресло", "category": "furniture", "period": "Советское (1970-е)", "description": "Деревянное кресло с тканевой обивкой охристого цвета, подлокотники и ножки из лакированного дуба, состояние удовлетворительное."}`,
+    })
+
     const response = await anthropic.messages.create({
       model: 'claude-haiku-4-5',
       max_tokens: 1024,
-      messages: [{
-        role: 'user',
-        content: [
-          {
-            type: 'image',
-            source: { type: 'base64', media_type: mediaType, data: base64 },
-          },
-          {
-            type: 'text',
-            text: `Ты — система распознавания предметов для склада кинопроизводства.
-Проанализируй фото и верни JSON с полями:
-- name: название предмета (кратко, по-русски)
-- category: одна из категорий: costumes, props, art_fill, dummy, auto, furniture, decor, scenery, tech, lighting, sound, camera, makeup, clothing, jewelry, other
-- period: временная эпоха/стиль — ОБЯЗАТЕЛЬНО заполни это поле. Примеры: "Современное", "Советское (1970-е)", "XVIII век", "Средневековье", "1960-е", "Античность". Если предмет современный — напиши "Современное"
-- description: краткое описание (цвет, состояние, материал, особенности)
-
-Все 4 поля обязательны, ни одно не может быть пустым. Отвечай ТОЛЬКО JSON, без markdown, без пояснений.`,
-          },
-        ],
-      }],
+      messages: [{ role: 'user', content }],
     })
 
     const text = response.content.find(b => b.type === 'text')?.text || ''
-    console.log('recognize: Claude response:', text.substring(0, 300))
-    const clean = text.replace(/^```(?:json)?/m, '').replace(/```$/m, '').trim()
-    const result = JSON.parse(clean)
-    res.json(result)
+
+    // Извлекаем первый сбалансированный {...} блок — позволяет модели писать
+    // размышления до JSON без поломки парсера. Раньше JSON.parse(clean) падал.
+    let result
+    try {
+      const jsonMatch = text.match(/\{[\s\S]*\}/)
+      if (!jsonMatch) throw new Error('No JSON in response')
+      result = JSON.parse(jsonMatch[0])
+    } catch {
+      return res.status(500).json({ error: 'AI вернул некорректный ответ, повторите попытку' })
+    }
+
+    // Режим прогрессивного сбора деталей — AI больше не решает «один vs разные
+    // предметы». Возвращаем поля как есть + same_item=true для совместимости
+    // с фронтом (UnitsPage ветвился на outlier_indices; теперь ветка мёртвая).
+    res.json({ ...result, same_item: true, outlier_indices: [] })
   } catch (err) {
-    console.error('Photo recognition error:', err.message, err.status, err.error)
-    res.status(500).json({ error: err.message || 'Recognition failed' })
+    // Логируем ТОЛЬКО безопасные поля. err.error/err.response могут содержать
+    // request config (включая заголовки с авторизацией) — не печатаем их.
+    console.error('Photo recognition error:', {
+      status: err?.status,
+      name: err?.name,
+      message: redact(err?.message),
+    })
+    res.status(500).json({ error: 'Не удалось распознать фото' })
   }
 })
 
-// POST /units — add unit (goes to pending, waits for director approval)
+// POST /units — add unit (auto-accepted, status=on_stock immediately).
+// Утверждение приёма отключено: ревизию и пополнение делают директор/зам склада
+// напрямую, поэтому любая добавленная единица сразу числится на складе.
 router.post('/', verifyJWT, async (req, res) => {
   const { name, category, serial, warehouse_id, cell_id, description, qty, condition, valuation, source, dimensions, period } = req.body
   if (!name || !category) return res.status(400).json({ error: 'Missing required fields' })
-
-  const isDirector = ['warehouse_director', 'warehouse_deputy'].includes(req.user.role)
-  const finalStatus = isDirector ? 'on_stock' : 'pending'
 
   try {
     // Auto-generate inventory number if not provided
@@ -219,26 +354,17 @@ router.post('/', verifyJWT, async (req, res) => {
 
     const { rows } = await db.query(
       `INSERT INTO units (name, category, serial, warehouse_id, cell_id, description, qty, condition, valuation, source, dimensions, status, period)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13) RETURNING *`,
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,'on_stock',$12) RETURNING *`,
       [name, category, inventorySerial, warehouse_id || null, cell_id || null,
        description || null, qty || 1, condition || null, valuation || null,
-       source || null, dimensions || null, finalStatus, period || null]
+       source || null, dimensions || null, period || null]
     )
     const unit = rows[0]
 
-    // Create approval record only for non-directors
-    if (!isDirector) {
-      await db.query(
-        `INSERT INTO approvals (unit_id, proposed_by, action, new_data)
-         VALUES ($1, $2, 'add', $3)`,
-        [unit.id, req.user.id, JSON.stringify(req.body)]
-      )
-    }
-
     // Log
     await db.query(
-      `INSERT INTO unit_history (unit_id, action, user_id) VALUES ($1, $2, $3)`,
-      [unit.id, isDirector ? 'Добавлено' : 'Добавлено (ожидает подписи)', req.user.id]
+      `INSERT INTO unit_history (unit_id, action, user_id) VALUES ($1, 'Добавлено', $2)`,
+      [unit.id, req.user.id]
     )
 
     // Enqueue AI tag generation (async, non-blocking)
@@ -286,22 +412,31 @@ router.get('/approvals', verifyJWT, checkRole('warehouse_director', 'warehouse_d
 router.get('/:id', verifyJWT, async (req, res) => {
   try {
     const { rows } = await db.query(
-      `SELECT u.*, w.name AS warehouse_name, c.code AS cell_code, c.custom_name AS cell_custom
+      `SELECT u.*, w.name AS warehouse_name, w.address AS warehouse_address,
+              c.code AS cell_code, c.custom_name AS cell_custom,
+              sec.id AS section_id, sec.name AS section_name, sec.type AS section_type,
+              pav.name AS pavilion_name
        FROM units u
        LEFT JOIN warehouses w ON w.id = u.warehouse_id
        LEFT JOIN cells c ON c.id = u.cell_id
+       LEFT JOIN warehouse_sections sec ON sec.id = c.section_id
+       LEFT JOIN decorations pav ON pav.id = u.pavilion_id AND pav.type = 'pavilion'
        WHERE u.id = $1`,
       [req.params.id]
     )
     if (!rows.length) return res.status(404).json({ error: 'Unit not found' })
 
     const unit = rows[0]
+    // GET /units/:id отдаём всем — из списков единицы и так отфильтрованы;
+    // прямой доступ нужен для открытия карточки из долгов/списаний, которые
+    // привязаны к проекту пользователя.
     delete unit.search_tags
     delete unit.search_vector
 
-    // Photos
+    // Photos — только исходные (stock). Фото выдачи/возврата показываются
+    // в своих записях истории, а не в галерее карточки.
     const { rows: photos } = await db.query(
-      `SELECT * FROM unit_photos WHERE unit_id = $1 ORDER BY created_at`, [unit.id]
+      `SELECT * FROM unit_photos WHERE unit_id = $1 AND type = 'stock' ORDER BY created_at`, [unit.id]
     )
     unit.photos = photos
 
@@ -324,33 +459,78 @@ router.get('/:id', verifyJWT, async (req, res) => {
   }
 })
 
-// PUT /units/:id — propose edit (goes to pending approval)
+// GET /units/:id/history — записи о движении единицы: добавление, выдачи, возвраты и т.д.
+// Возвращает: user_name, project_name (кто взял/отдал), photos (фото выдачи/возврата).
+router.get('/:id/history', verifyJWT, async (req, res) => {
+  try {
+    const { rows } = await db.query(
+      `SELECT h.id, h.unit_id, h.action, h.notes, h.created_at,
+              h.issuance_id, h.return_id, h.rent_deal_id,
+              u.name AS user_name, u.role AS user_role,
+              COALESCE(p.name, rd.counterparty_name) AS project_name,
+              COALESCE(
+                (SELECT json_agg(json_build_object('id', ph.id, 'url', ph.url, 'type', ph.type) ORDER BY ph.created_at)
+                 FROM unit_photos ph
+                 WHERE ph.unit_id = h.unit_id
+                   AND (
+                     (h.issuance_id IS NOT NULL AND ph.issuance_id = h.issuance_id AND ph.type = 'issue') OR
+                     (h.return_id IS NOT NULL AND ph.return_id = h.return_id AND ph.type = 'return') OR
+                     (h.rent_deal_id IS NOT NULL AND ph.rent_deal_id = h.rent_deal_id)
+                   )
+                ),
+                '[]'::json
+              ) AS photos
+       FROM unit_history h
+       LEFT JOIN users u ON u.id = h.user_id
+       LEFT JOIN projects p ON p.id = h.project_id
+       LEFT JOIN rent_deals rd ON rd.id = h.rent_deal_id
+       WHERE h.unit_id = $1
+       ORDER BY h.created_at DESC`,
+      [req.params.id]
+    )
+    res.json({ history: rows })
+  } catch (err) {
+    console.error(err)
+    res.status(500).json({ error: 'Server error' })
+  }
+})
+
+// PUT /units/:id — edit unit immediately (approvals removed, see units POST comment).
 router.put('/:id', verifyJWT, async (req, res) => {
   try {
     const { rows } = await db.query(`SELECT * FROM units WHERE id = $1`, [req.params.id])
     if (!rows.length) return res.status(404).json({ error: 'Unit not found' })
 
-    // Director can edit directly
-    if (DIRECTOR_ROLES.includes(req.user.role)) {
-      const { name, category, serial, warehouse_id, cell_id, description, qty, condition, valuation, materials, period } = req.body
-      const { rows: updated } = await db.query(
-        `UPDATE units SET name=$1,category=$2,serial=$3,warehouse_id=$4,cell_id=$5,
-         description=$6,qty=$7,condition=$8,valuation=$9,materials=$10,period=$11 WHERE id=$12 RETURNING *`,
-        [name, category, serial, warehouse_id, cell_id, description, qty, condition, valuation, materials || null, period || null, req.params.id]
-      )
-      await db.query(
-        `INSERT INTO unit_history (unit_id, action, user_id) VALUES ($1,'Изменено',$2)`,
-        [req.params.id, req.user.id]
-      )
-      return res.json({ unit: updated[0] })
+    const { name, category, serial, warehouse_id, cell_id, pavilion_id, description, qty, condition, valuation, materials, period } = req.body
+    const current = rows[0]
+
+    // A unit is either on a warehouse cell OR inside a pavilion — never both.
+    const movingToPavilion = pavilion_id !== undefined && pavilion_id !== null && pavilion_id !== ''
+    const effectiveCellId = movingToPavilion ? null : (cell_id || null)
+    const effectivePavilionId = movingToPavilion ? pavilion_id : null
+
+    // Validate cell-move against matrix (only when actually moving to a cell, not to pavilion).
+    if (effectiveCellId && effectiveCellId !== current.cell_id) {
+      const check = await validateCellMove(current, effectiveCellId)
+      if (!check.ok) return res.status(400).json({ error: check.error })
     }
 
-    // Others create approval
-    await db.query(
-      `INSERT INTO approvals (unit_id, proposed_by, action, new_data) VALUES ($1,$2,'edit',$3)`,
-      [req.params.id, req.user.id, JSON.stringify(req.body)]
+    const params = [name, category, serial, warehouse_id, effectiveCellId, effectivePavilionId,
+                    description, qty, condition, valuation, materials || null, period || null, req.params.id]
+    const { rows: updated } = await db.query(
+      `UPDATE units SET name=$1,category=$2,serial=$3,warehouse_id=$4,cell_id=$5,pavilion_id=$6,
+       description=$7,qty=$8,condition=$9,valuation=$10,materials=$11,period=$12
+       WHERE id=$13 RETURNING *`,
+      params
     )
-    res.json({ ok: true, pending: true })
+    const action = movingToPavilion ? 'Перемещено в павильон'
+                 : (current.pavilion_id && !movingToPavilion) ? 'Возвращено из павильона'
+                 : 'Изменено'
+    await db.query(
+      `INSERT INTO unit_history (unit_id, action, user_id) VALUES ($1,$2,$3)`,
+      [req.params.id, action, req.user.id]
+    )
+    res.json({ unit: updated[0] })
   } catch (err) {
     console.error(err)
     res.status(500).json({ error: 'Server error' })
@@ -359,7 +539,7 @@ router.put('/:id', verifyJWT, async (req, res) => {
 
 // POST /units/:id/approve
 router.post('/:id/approve', verifyJWT, checkRole('warehouse_director', 'warehouse_deputy'), async (req, res) => {
-  const { approval_id, valuation } = req.body
+  const { approval_id, valuation, cell_id, warehouse_id } = req.body
   try {
     const { rows } = await db.query(
       `SELECT * FROM approvals WHERE id = $1 AND unit_id = $2 AND status = 'pending'`,
@@ -370,7 +550,22 @@ router.post('/:id/approve', verifyJWT, checkRole('warehouse_director', 'warehous
 
     if (approval.action === 'add') {
       if (valuation == null || valuation === '') return res.status(400).json({ error: 'Укажите стоимость единицы' })
-      await db.query(`UPDATE units SET status = 'on_stock', valuation = $2 WHERE id = $1`, [req.params.id, valuation])
+      if (cell_id) {
+        const { rows: [unitRow] } = await db.query(`SELECT id, cell_id, pavilion_id, category FROM units WHERE id = $1`, [req.params.id])
+        if (unitRow) {
+          const check = await validateCellMove(unitRow, cell_id)
+          if (!check.ok) return res.status(400).json({ error: check.error })
+        }
+      }
+      await db.query(
+        `UPDATE units
+           SET status = 'on_stock',
+               valuation = $2,
+               cell_id = COALESCE($3, cell_id),
+               warehouse_id = COALESCE($4, warehouse_id)
+         WHERE id = $1`,
+        [req.params.id, valuation, cell_id || null, warehouse_id || null]
+      )
       await db.query(
         `INSERT INTO unit_history (unit_id, action, user_id) VALUES ($1,'Принято на склад',$2)`,
         [req.params.id, req.user.id]
@@ -412,6 +607,47 @@ router.post('/:id/reject', verifyJWT, checkRole('warehouse_director', 'warehouse
       [req.params.id, req.user.id]
     )
     res.json({ ok: true })
+  } catch (err) {
+    console.error(err)
+    res.status(500).json({ error: 'Server error' })
+  }
+})
+
+// POST /units/:id/mark-missing — отметить единицу как «нет в наличии» (пересорт).
+// Флаг misplaced=true, статус unit не меняем. При выдаче запросе используется,
+// когда единицы не нашлось на полке. Запись в unit_history для аудита.
+router.post('/:id/mark-missing', verifyJWT, checkRole('warehouse_director', 'warehouse_deputy', 'warehouse_staff'), async (req, res) => {
+  const { reason } = req.body
+  try {
+    const { rows } = await db.query(
+      `UPDATE units SET misplaced=true WHERE id=$1 RETURNING *`,
+      [req.params.id]
+    )
+    if (!rows.length) return res.status(404).json({ error: 'Unit not found' })
+    await db.query(
+      `INSERT INTO unit_history (unit_id, action, user_id, notes) VALUES ($1,'Пересорт — нет в наличии',$2,$3)`,
+      [req.params.id, req.user.id, (reason || '').slice(0, 500) || null]
+    )
+    res.json({ unit: rows[0] })
+  } catch (err) {
+    console.error(err)
+    res.status(500).json({ error: 'Server error' })
+  }
+})
+
+// POST /units/:id/resolve-missing — вернуть единицу из пересорта («нашли»).
+router.post('/:id/resolve-missing', verifyJWT, checkRole('warehouse_director', 'warehouse_deputy', 'warehouse_staff'), async (req, res) => {
+  try {
+    const { rows } = await db.query(
+      `UPDATE units SET misplaced=false WHERE id=$1 RETURNING *`,
+      [req.params.id]
+    )
+    if (!rows.length) return res.status(404).json({ error: 'Unit not found' })
+    await db.query(
+      `INSERT INTO unit_history (unit_id, action, user_id) VALUES ($1,'Пересорт — нашли',$2)`,
+      [req.params.id, req.user.id]
+    )
+    res.json({ unit: rows[0] })
   } catch (err) {
     console.error(err)
     res.status(500).json({ error: 'Server error' })

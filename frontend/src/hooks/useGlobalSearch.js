@@ -29,6 +29,14 @@ export function useGlobalSearch() {
     return () => document.removeEventListener('keydown', handler)
   }, [open])
 
+  // Внешний триггер: window.dispatchEvent(new Event('open-global-search'))
+  // — позволяет любой странице открыть модалку, не прокидывая props.
+  useEffect(() => {
+    const handler = () => setOpen(true)
+    window.addEventListener('open-global-search', handler)
+    return () => window.removeEventListener('open-global-search', handler)
+  }, [])
+
   // Debounced search
   useEffect(() => {
     if (!query.trim()) {

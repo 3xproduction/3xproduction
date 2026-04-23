@@ -23,24 +23,37 @@ router.get('/', verifyJWT, async (req, res) => {
       FROM locations l WHERE 1=1`
     const params = []
     if (type) { params.push(type); q += ` AND l.type = $${params.length}` }
+    let searchApplied = false
     if (search) {
-      const { buildSearchQuery } = require('../services/searchService')
+      const { buildSearchQuery, checkTrgm } = require('../services/searchService')
       const { tsqueryStr, originalQuery } = await buildSearchQuery(search)
-      params.push(tsqueryStr); const tsqIdx = params.length
-      params.push(originalQuery); const rawIdx = params.length
-      q += ` AND (l.search_vector @@ to_tsquery('ru_search', $${tsqIdx})
-             OR similarity(l.name, $${rawIdx}) > 0.2)`
+      if (tsqueryStr) {
+        const useTrgm = await checkTrgm()
+        params.push(tsqueryStr)
+        const tsqIdx = params.length
+        params.push(originalQuery)
+        const rawIdx = params.length
+        if (useTrgm) {
+          q += ` AND (l.search_vector @@ to_tsquery('ru_search', $${tsqIdx})
+                 OR similarity(l.name, $${rawIdx}) > 0.2)`
+        } else {
+          q += ` AND (l.search_vector @@ to_tsquery('ru_search', $${tsqIdx})
+                 OR l.name ILIKE '%' || $${rawIdx} || '%')`
+        }
+        searchApplied = true
+      }
     }
-    if (search) {
-      q += ` ORDER BY ts_rank_cd(l.search_vector, to_tsquery('ru_search', $${params.length - 1})) DESC, l.created_at DESC`
+    if (searchApplied) {
+      const tsqIdx = params.length - 1
+      q += ` ORDER BY ts_rank_cd(l.search_vector, to_tsquery('ru_search', $${tsqIdx})) DESC, l.created_at DESC`
     } else {
       q += ` ORDER BY l.created_at DESC`
     }
     const { rows } = await db.query(q, params)
     res.json(rows)
   } catch (err) {
-    console.error(err)
-    res.status(500).json({ error: 'Server error' })
+    console.error('Locations search error:', err)
+    res.json([])
   }
 })
 
@@ -84,8 +97,8 @@ router.post('/recognize', verifyJWT, upload.single('photo'), async (req, res) =>
     const clean = text.replace(/^```(?:json)?/m, '').replace(/```$/m, '').trim()
     res.json(JSON.parse(clean))
   } catch (err) {
-    console.error('Location recognition error:', err.message)
-    res.status(500).json({ error: err.message || 'Recognition failed' })
+    console.error('Location recognition error:', { status: err?.status, name: err?.name })
+    res.status(500).json({ error: 'Не удалось распознать фото' })
   }
 })
 

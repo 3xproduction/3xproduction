@@ -5,6 +5,7 @@ import {
   Users, Handshake, ClipboardList, Clapperboard, Clock,
   UserCheck,
 } from 'lucide-react'
+import { useBodyLock } from '../../hooks/useBodyLock'
 
 const ENTITY_CONFIG = {
   unit:       { icon: Package,       color: '#3b82f6', label: 'Единицы' },
@@ -14,20 +15,10 @@ const ENTITY_CONFIG = {
   location:   { icon: MapPin,        color: '#22c55e', label: 'Локации' },
   decoration: { icon: Clapperboard,  color: '#a855f7', label: 'Декорации' },
   vehicle:    { icon: Car,           color: '#f97316', label: 'Транспорт' },
-  rent:       { icon: Handshake,     color: '#ef4444', label: 'Аренда' },
+  rent:       { icon: Handshake,     color: 'var(--red)', label: 'Аренда' },
   casting:    { icon: UserCheck,     color: '#ec4899', label: 'Кастинг' },
   user:       { icon: Users,         color: '#14b8a6', label: 'Люди' },
 }
-
-const CATEGORIES = [
-  { key: null, label: 'Все' },
-  { key: 'unit', label: 'Единицы' },
-  { key: 'location', label: 'Локации' },
-  { key: 'scene', label: 'Сцены' },
-  { key: 'document', label: 'Документы' },
-  { key: 'vehicle', label: 'Транспорт' },
-  { key: 'rent', label: 'Аренда' },
-]
 
 function highlightSnippet(text, query) {
   if (!text || !query) return text || ''
@@ -45,12 +36,14 @@ function highlightSnippet(text, query) {
 
 export default function GlobalSearchBar({
   open, close, query, setQuery, results, loading,
-  category, setCategory, getRecent,
+  getRecent,
 }) {
   const inputRef = useRef(null)
   const listRef = useRef(null)
   const [selectedIdx, setSelectedIdx] = useState(-1)
   const navigate = useNavigate()
+
+  useBodyLock(!!open)
 
   useEffect(() => {
     if (open) {
@@ -114,25 +107,6 @@ export default function GlobalSearchBar({
             </button>
           )}
           <kbd style={styles.kbd}>Esc</kbd>
-        </div>
-
-        {/* Category tabs */}
-        <div style={styles.tabs}>
-          {CATEGORIES.map(cat => (
-            <button
-              key={cat.key || 'all'}
-              style={{
-                ...styles.tab,
-                ...(category === cat.key ? styles.tabActive : {}),
-              }}
-              onClick={() => setCategory(cat.key)}
-            >
-              {cat.label}
-              {results?.categories?.[cat.key] != null && (
-                <span style={styles.tabCount}>{results.categories[cat.key]}</span>
-              )}
-            </button>
-          ))}
         </div>
 
         {/* Results */}
@@ -226,14 +200,16 @@ const styles = {
     position: 'fixed', inset: 0, zIndex: 9999,
     background: 'rgba(0,0,0,0.5)', backdropFilter: 'blur(2px)',
     display: 'flex', alignItems: 'flex-start', justifyContent: 'center',
-    paddingTop: '12vh',
+    paddingTop: 'max(6vh, 24px)',
+    padding: 'max(6vh, 24px) 12px 12px',
   },
   modal: {
     width: '100%', maxWidth: 640,
     background: '#fff', borderRadius: 12,
     boxShadow: '0 20px 60px rgba(0,0,0,0.3)',
     overflow: 'hidden',
-    maxHeight: '70vh', display: 'flex', flexDirection: 'column',
+    maxHeight: 'min(80vh, 560px)', display: 'flex', flexDirection: 'column',
+    boxSizing: 'border-box',
   },
   inputRow: {
     display: 'flex', alignItems: 'center', gap: 10,
@@ -246,8 +222,10 @@ const styles = {
   },
   clearBtn: {
     background: 'none', border: 'none', cursor: 'pointer',
-    padding: 4, borderRadius: 4, display: 'flex',
+    padding: 8, borderRadius: 6, display: 'flex',
+    alignItems: 'center', justifyContent: 'center',
     color: '#9ca3af',
+    minWidth: 36, minHeight: 36,
   },
   kbd: {
     fontSize: 11, padding: '2px 6px', borderRadius: 4,
@@ -255,16 +233,19 @@ const styles = {
     fontFamily: 'monospace', lineHeight: '18px',
   },
   tabs: {
-    display: 'flex', gap: 2, padding: '8px 16px',
+    display: 'flex', gap: 6, padding: '8px 12px',
     borderBottom: '1px solid #f3f4f6', overflowX: 'auto',
     flexShrink: 0,
+    WebkitOverflowScrolling: 'touch',
+    scrollbarWidth: 'none',
   },
   tab: {
-    padding: '4px 10px', borderRadius: 6, border: 'none',
+    padding: '6px 12px', borderRadius: 6, border: 'none',
     background: 'transparent', cursor: 'pointer',
     fontSize: 13, color: '#6b7280', whiteSpace: 'nowrap',
     display: 'flex', alignItems: 'center', gap: 4,
     fontFamily: 'inherit',
+    flexShrink: 0,
   },
   tabActive: {
     background: '#f3f4f6', color: '#111827', fontWeight: 500,

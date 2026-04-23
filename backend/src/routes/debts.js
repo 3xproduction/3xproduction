@@ -3,9 +3,10 @@ const db     = require('../db')
 const { verifyJWT, checkRole } = require('../middleware/auth')
 
 const WAREHOUSE_ROLES = ['warehouse_director', 'warehouse_deputy', 'warehouse_staff']
-
-// GET /debts — list debts
-router.get('/', verifyJWT, checkRole(...WAREHOUSE_ROLES), async (req, res) => {
+// GET /debts — видят все авторизованные пользователи.
+// Warehouse-роли + producer — все долги. Площадные роли — только долги своего проекта
+// (чтобы сотрудники одного проекта видели долги коллег, но не чужих).
+router.get('/', verifyJWT, async (req, res) => {
   const { status } = req.query
   try {
     let q = `
@@ -18,6 +19,16 @@ router.get('/', verifyJWT, checkRole(...WAREHOUSE_ROLES), async (req, res) => {
       WHERE 1=1
     `
     const params = []
+    const fullAccess = [...WAREHOUSE_ROLES, 'producer'].includes(req.user.role)
+    if (!fullAccess) {
+      // Площадная роль — видит долги своего проекта: либо d.project_id совпадает,
+      // либо должник (d.user_id) работает в этом проекте.
+      const projectId = req.user.project_id && req.user.project_id !== ''
+        ? req.user.project_id : null
+      if (!projectId) return res.json({ debts: [] })
+      params.push(projectId)
+      q += ` AND (d.project_id = $${params.length} OR u.project_id = $${params.length})`
+    }
     if (status) { params.push(status); q += ` AND d.status = $${params.length}` }
     q += ` ORDER BY d.created_at DESC`
 
@@ -54,7 +65,7 @@ router.post('/', verifyJWT, checkRole(...WAREHOUSE_ROLES), async (req, res) => {
 })
 
 // POST /debts/:id/close — close debt
-router.post('/:id/close', verifyJWT, checkRole('warehouse_director', 'warehouse_deputy'), async (req, res) => {
+router.post('/:id/close', verifyJWT, checkRole('warehouse_director', 'warehouse_deputy', 'producer'), async (req, res) => {
   try {
     const { rows } = await db.query(
       `UPDATE debts SET status='closed', closed_at=NOW(), closed_by=$1
@@ -70,6 +81,42 @@ router.post('/:id/close', verifyJWT, checkRole('warehouse_director', 'warehouse_
       [rows[0].unit_id, req.user.id]
     )
     res.json({ debt: rows[0] })
+  } catch (err) {
+    console.error(err)
+    res.status(500).json({ error: 'Server error' })
+  }
+})
+
+// POST /debts/:id/writeoff — списать единицу из долга
+// Долг закрывается, единица уходит в списания (writeoffs.kind=writeoff),
+// статус единицы → written_off.
+router.post('/:id/writeoff', verifyJWT, checkRole('warehouse_director', 'warehouse_deputy', 'producer'), async (req, res) => {
+  const { reason } = req.body
+  try {
+    const { rows: debtRows } = await db.query(
+      `SELECT * FROM debts WHERE id=$1 AND status='open'`,
+      [req.params.id]
+    )
+    if (!debtRows.length) return res.status(404).json({ error: 'Debt not found or already closed' })
+    const debt = debtRows[0]
+
+    const writeoffReason = (reason || debt.reason || 'Списано из долга').slice(0, 500)
+    await db.query(
+      `INSERT INTO writeoffs (unit_id, source, source_ref, project_id, reason, kind, created_by)
+       VALUES ($1, 'direct', $2, $3, $4, 'writeoff', $5)`,
+      [debt.unit_id, debt.id, debt.project_id || null, writeoffReason, req.user.id]
+    )
+    await db.query(
+      `UPDATE debts SET status='closed', closed_at=NOW(), closed_by=$1 WHERE id=$2`,
+      [req.user.id, debt.id]
+    )
+    await db.query(`UPDATE units SET status='written_off' WHERE id=$1`, [debt.unit_id])
+    await db.query(
+      `INSERT INTO unit_history (unit_id, action, user_id, notes) VALUES ($1,'Списано (из долга)',$2,$3)`,
+      [debt.unit_id, req.user.id, writeoffReason]
+    )
+
+    res.json({ ok: true })
   } catch (err) {
     console.error(err)
     res.status(500).json({ error: 'Server error' })

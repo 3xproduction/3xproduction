@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { useNavigate, useSearchParams } from 'react-router-dom'
+import { Handshake, TrendingUp, AlertTriangle, Package } from 'lucide-react'
 import WarehouseLayout from '../warehouse/WarehouseLayout'
 import ProductionLayout from '../production/ProductionLayout'
 import { useAuth } from '../../hooks/useAuth'
@@ -7,184 +8,373 @@ import { ROLES } from '../../constants/roles'
 import Badge from '../shared/Badge'
 import Button from '../shared/Button'
 import Input from '../shared/Input'
+import ConfirmModal from '../shared/ConfirmModal'
 import SignatureCanvas from '../shared/SignatureCanvas'
 import PhotoUpload from '../shared/PhotoUpload'
+import MultiPhotoPicker from '../shared/MultiPhotoPicker'
+import { useToast } from '../shared/Toast'
 import { categoryLabel, CATEGORIES_FILTER } from '../../constants/categories'
 import { rent as rentApi, units as unitsApi, warehouses as warehousesApi } from '../../services/api'
 
-const DEAL_FILTERS = ['Все', 'Запросы', 'Активные', 'Завершённые', 'Сдали']
+// /rent показывает только партнёрские сделки (rent_deals) — 1-в-1 как
+// проектные заявки, но через workflow_stage. Фильтры зеркалят RequestsPage.
+const DEAL_FILTERS = [
+  { value: 'all',      label: 'Все' },
+  { value: 'new',      label: 'Новые' },
+  { value: 'issued',   label: 'Выданы' },
+  { value: 'returned', label: 'Вернули' },
+]
+
+const STATUS_LABELS = {
+  new:        { label: 'Новый',          color: 'blue' },
+  collecting: { label: 'Собирают',       color: 'amber' },
+  ready:      { label: 'Готов',          color: 'green' },
+  issued:     { label: 'Выдан',          color: 'green' },
+  returning:  { label: 'Готовы вернуть', color: 'amber' },
+  returned:   { label: 'Вернули',        color: 'green' },
+  cancelled:  { label: 'Отменён',        color: 'red' },
+}
+
+// Партнёрская сделка — пришла через внешнюю ссылку (requester_* или workflow_stage).
+function isPartner(d) {
+  return !!(d.requester_name || d.requester_project || d.requester_message || d.workflow_stage)
+}
+
+function formatDate(str) {
+  if (!str) return '—'
+  return new Date(str).toLocaleDateString('ru-RU', { day: 'numeric', month: 'short', year: 'numeric' })
+}
+
+// Какой визуальный статус показывать для сделки — унифицирует status/workflow_stage
+// и возвращает ключ STATUS_LABELS.
+function getDisplayStatus(d) {
+  if (d.status === 'cancelled') return 'cancelled'
+  if (d.status === 'done' || d.status === 'completed' || d.status === 'returned') return 'returned'
+  if ((d.status === 'active' || d.status === 'overdue') && d.return_requested_at) return 'returning'
+  if (d.status === 'active' || d.status === 'overdue') return 'issued'
+  if (d.status === 'pending_review') {
+    if (d.workflow_stage === 'ready') return 'ready'
+    if (d.workflow_stage === 'collecting') return 'collecting'
+    return 'new'
+  }
+  return d.status
+}
+
+const css = `
+.rent-page { padding: 28px 32px; max-width: 960px; }
+.rent-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 20px; }
+.rent-title { font-size: 22px; font-weight: 600; letter-spacing: -0.02em; margin-bottom: 2px; }
+.rent-sub { color: var(--muted); font-size: 13px; }
+.rent-stats { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 12px; margin-bottom: 20px; }
+.rent-filters { display: flex; gap: 6px; margin-bottom: 20px; overflow-x: auto; padding-bottom: 4px; scrollbar-width: none; }
+.rent-filters::-webkit-scrollbar { display: none; }
+.rent-filter {
+  padding: 6px 14px; border-radius: 20px; font-size: 13px; font-weight: 500;
+  border: 1px solid var(--border); background: var(--card); color: var(--text);
+  cursor: pointer; white-space: nowrap; transition: all 0.12s;
+}
+.rent-filter.active { background: var(--accent); color: #fff; border-color: var(--accent); }
+.rent-empty { color: var(--muted); font-size: 14px; padding: 60px 0; text-align: center; }
+.rent-loading { color: var(--muted); font-size: 14px; padding: 60px 0; text-align: center; }
+.rent-list { display: flex; flex-direction: column; gap: 10px; }
+.rent-item {
+  background: var(--card); border: 1px solid var(--border);
+  border-radius: var(--radius-card); padding: 16px 20px;
+  display: flex; align-items: center; gap: 16px;
+  box-shadow: var(--shadow-sm);
+}
+.rent-item-body { flex: 1; min-width: 0; }
+.rent-item-title { font-weight: 600; font-size: 14px; display: flex; align-items: center; gap: 8px; margin-bottom: 6px; flex-wrap: wrap; }
+.rent-item-meta { font-size: 12px; color: var(--muted); display: flex; gap: 14px; flex-wrap: wrap; }
+.rent-item-actions { display: flex; gap: 8px; flex-shrink: 0; }
+@media (max-width: 768px) {
+  .rent-page { padding: 16px; overflow-x: hidden; }
+  .rent-title { font-size: 18px; }
+  .rent-item { flex-direction: column; align-items: flex-start; gap: 12px; padding: 14px 16px; }
+  .rent-item-body { width: 100%; }
+  .rent-item-actions { width: 100%; }
+  .rent-item-actions .btn { flex: 1; }
+}
+`
 
 export default function RentPage() {
   const { user } = useAuth()
+  const navigate = useNavigate()
   const Layout = ROLES[user?.role]?.world === 'production' ? ProductionLayout : WarehouseLayout
-  const [tab, setTab] = useState('list')
-  const [dealFilter, setDealFilter] = useState('Все')
   const [deals, setDeals] = useState([])
   const [loading, setLoading] = useState(true)
+  const [filter, setFilter] = useState('all')
+  const [expanded, setExpanded] = useState(null)
+  const [unitCache, setUnitCache] = useState({})
+  const [loadingUnits, setLoadingUnits] = useState(null)
+  const [updating, setUpdating] = useState(null)
+  const [confirmReturnReq, setConfirmReturnReq] = useState(null)
+  const [searchParams, setSearchParams] = useSearchParams()
+  const toast = useToast()
 
   function loadDeals() {
-    rentApi.list().then(data => setDeals(data.deals || [])).finally(() => setLoading(false))
+    setLoading(true)
+    rentApi.list().then(d => setDeals(d.deals || [])).finally(() => setLoading(false))
   }
-
   useEffect(() => { loadDeals() }, [])
 
-  const filtered = deals.filter(d => {
-    if (dealFilter === 'Все') return true
-    if (dealFilter === 'Запросы') return d.status === 'pending_review'
-    if (dealFilter === 'Активные') return d.status === 'active' || d.status === 'overdue'
-    if (dealFilter === 'Завершённые') return d.status === 'done'
-    if (dealFilter === 'Сдали') return d.type === 'out'
+  // Убираем устаревшие query-параметры (?filter=public, ?review=…) — раньше
+  // /rent умел авто-открывать ReviewModal, теперь обработка через список.
+  useEffect(() => {
+    const dirty = searchParams.get('filter') || searchParams.get('review')
+    if (dirty) {
+      const next = new URLSearchParams(searchParams)
+      next.delete('filter'); next.delete('review')
+      setSearchParams(next, { replace: true })
+    }
+  }, [])
+
+  const partnerDeals = deals.filter(isPartner)
+
+  const activeCount = partnerDeals.filter(d => d.status === 'active').length
+  const monthSum = partnerDeals
+    .filter(d => d.status !== 'cancelled' && d.status !== 'pending_review')
+    .reduce((a, d) => a + (Number(d.price_total) || 0), 0)
+  const overdueCount = partnerDeals.filter(d => d.status === 'overdue').length
+
+  const filtered = partnerDeals.filter(d => {
+    const ds = getDisplayStatus(d)
+    if (filter === 'all')      return true
+    if (filter === 'new')      return ds === 'new' || ds === 'collecting' || ds === 'ready'
+    if (filter === 'issued')   return ds === 'issued' || ds === 'returning'
+    if (filter === 'returned') return ds === 'returned' || ds === 'cancelled'
     return true
   })
 
+  async function toggleExpand(dealId, unitIds) {
+    if (expanded === dealId) { setExpanded(null); return }
+    setExpanded(dealId)
+    const missing = (unitIds || []).filter(id => !unitCache[id])
+    if (!missing.length) return
+    setLoadingUnits(dealId)
+    try {
+      const results = await Promise.all(missing.map(id => unitsApi.get(id).catch(() => null)))
+      const next = { ...unitCache }
+      for (const r of results) { if (r?.unit) next[r.unit.id] = r.unit }
+      setUnitCache(next)
+    } catch {}
+    setLoadingUnits(null)
+  }
+
+  async function changeStage(id, stage) {
+    setUpdating(id)
+    try {
+      await rentApi.workflowStage(id, stage)
+      loadDeals()
+    } catch (e) {
+      toast?.(e.message || 'Ошибка', 'error')
+    } finally {
+      setUpdating(null)
+    }
+  }
+
+  async function cancelDeal(id) {
+    setUpdating(id)
+    try {
+      await rentApi.status(id, 'cancelled')
+      loadDeals()
+    } catch (e) {
+      toast?.(e.message || 'Ошибка', 'error')
+    } finally {
+      setUpdating(null)
+    }
+  }
+
+  async function doRequestReturn() {
+    const d = confirmReturnReq
+    if (!d) return
+    try {
+      await rentApi.requestReturn(d.id)
+      setDeals(prev => prev.map(x =>
+        x.id === d.id ? { ...x, return_requested_at: new Date().toISOString() } : x
+      ))
+      toast?.('Возврат запрошен — партнёр получит уведомление', 'success')
+    } catch (err) {
+      toast?.(err.message || 'Ошибка', 'error')
+    }
+    setConfirmReturnReq(null)
+  }
+
   return (
     <Layout>
-      <div style={{ padding: '24px 32px', maxWidth: 900 }}>
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 24 }}>
-          <h1 style={{ fontSize: 20, fontWeight: 600 }}>Аренда</h1>
+      <style>{css}</style>
+      <div className="rent-page">
+        <div className="rent-header">
+          <div>
+            <h1 className="rent-title">Выручка</h1>
+            <p className="rent-sub">Партнёрские сделки на аренду имущества</p>
+          </div>
         </div>
 
-        <div style={{ display: 'flex', gap: 0, marginBottom: 24, borderBottom: '2px solid var(--border)' }}>
-          {[['list', 'Все сделки'], ['new', 'Новая сделка']].map(([key, label]) => (
-            <button key={key} onClick={() => setTab(key)} style={{
-              padding: '10px 20px', border: 'none', background: 'none',
-              fontWeight: 500, fontSize: 14, cursor: 'pointer',
-              color: tab === key ? 'var(--blue)' : 'var(--muted)',
-              borderBottom: `2px solid ${tab === key ? 'var(--blue)' : 'transparent'}`,
-              marginBottom: -2,
-            }}>{label}</button>
+        <div className="rent-stats">
+          <StatCard icon={Handshake} label="Активных сделок" value={activeCount} accent="gold" />
+          <StatCard icon={TrendingUp} label="Выручка" value={monthSum.toLocaleString('ru-RU') + ' ₽'} accent="green" />
+          {overdueCount > 0 && <StatCard icon={AlertTriangle} label="Просрочено" value={overdueCount} accent="red" />}
+        </div>
+
+        <div className="rent-filters">
+          {DEAL_FILTERS.map(f => (
+            <button key={f.value} className={`rent-filter${filter === f.value ? ' active' : ''}`}
+              onClick={() => setFilter(f.value)}>
+              {f.label}
+            </button>
           ))}
         </div>
 
-        {tab === 'list' && <DealsList deals={filtered} allDeals={deals} filter={dealFilter} setFilter={setDealFilter} loading={loading} onRefresh={loadDeals} />}
-        {tab === 'new' && <NewDeal onDone={() => { setTab('list'); loadDeals() }} />}
-      </div>
-    </Layout>
-  )
-}
-
-function DealsList({ deals, allDeals, filter, setFilter, loading, onRefresh }) {
-  const pendingCount = allDeals.filter(d => d.status === 'pending_review').length
-  const activeCount = allDeals.filter(d => d.status === 'active').length
-  const monthSum = allDeals.filter(d => d.status !== 'cancelled' && d.status !== 'pending_review').reduce((a, d) => a + (Number(d.price_total) || 0), 0)
-  const overdueCount = allDeals.filter(d => d.status === 'overdue').length
-  const [returnDeal, setReturnDeal] = useState(null)
-  const [reviewDeal, setReviewDeal] = useState(null)
-
-  return (
-    <div>
-      <div className="resp-3-col" style={{ marginBottom: 24 }}>
-        {pendingCount > 0 && <StatCard icon="📋" label="Новых запросов" value={pendingCount} color="amber" />}
-        <StatCard icon="🤝" label="Активных сделок" value={activeCount} color="blue" />
-        <StatCard icon="💰" label="Выручка" value={monthSum.toLocaleString('ru-RU') + ' ₽'} color="green" />
-        {overdueCount > 0 && <StatCard icon="⚠️" label="Просрочено" value={overdueCount} color="red" />}
-      </div>
-
-      <div style={{ display: 'flex', gap: 6, marginBottom: 20, flexWrap: 'wrap' }}>
-        {DEAL_FILTERS.map(f => (
-          <button key={f} onClick={() => setFilter(f)} style={{
-            height: 32, padding: '0 14px', borderRadius: 'var(--radius-badge)',
-            border: `1px solid ${filter === f ? 'var(--blue)' : 'var(--border)'}`,
-            background: filter === f ? 'var(--blue-dim)' : 'var(--white)',
-            color: filter === f ? 'var(--blue)' : 'var(--muted)',
-            fontSize: 13, fontWeight: filter === f ? 500 : 400, cursor: 'pointer',
-          }}>{f}</button>
-        ))}
-      </div>
-
-      {loading && <div style={{ color: 'var(--muted)', fontSize: 13, padding: '20px 0' }}>Загрузка...</div>}
-
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-        {deals.map(d => (
-          <div key={d.id} style={{
-            background: 'var(--white)', borderRadius: 'var(--radius-card)',
-            border: '1px solid var(--border)', padding: '16px',
-            display: 'flex', alignItems: 'center', gap: 14, flexWrap: 'wrap',
-            cursor: 'pointer',
-          }}
-            onMouseEnter={e => e.currentTarget.style.boxShadow = '0 2px 8px rgba(0,0,0,0.07)'}
-            onMouseLeave={e => e.currentTarget.style.boxShadow = 'none'}
-          >
-            <div style={{
-              width: 40, height: 40, borderRadius: '50%', flexShrink: 0,
-              background: d.type === 'out' ? 'var(--blue-dim)' : 'var(--green-dim)',
-              display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 18,
-            }}>
-              {d.type === 'out' ? '↗' : '↙'}
-            </div>
-
-            <div style={{ flex: 1, minWidth: 140 }}>
-              <div style={{ fontWeight: 500, fontSize: 14 }}>{d.counterparty_name}</div>
-              <div style={{ fontSize: 12, color: 'var(--muted)', marginTop: 2 }}>
-                {d.status === 'pending_review'
-                  ? `${d.requester_project || 'Внешний запрос'} · ${d.counterparty_contact || ''}`
-                  : `${d.counterparty_type === 'company' ? 'Компания' : 'Физлицо'} · ${d.type === 'out' ? 'Сдаём' : 'Берём'}`
-                }
-              </div>
-              {d.status === 'pending_review' && d.requester_message && (
-                <div style={{ fontSize: 11, color: 'var(--muted)', marginTop: 2, fontStyle: 'italic' }}>
-                  {d.requester_message.length > 80 ? d.requester_message.slice(0, 80) + '...' : d.requester_message}
+        {loading ? (
+          <div className="rent-loading">Загрузка...</div>
+        ) : filtered.length === 0 ? (
+          <div className="rent-empty">Нет сделок</div>
+        ) : (
+          <div className="rent-list">
+            {filtered.map(d => {
+              const ds = getDisplayStatus(d)
+              const st = STATUS_LABELS[ds] || { label: ds, color: 'blue' }
+              const ids = d.unit_ids || []
+              const isOpen = expanded === d.id
+              return (
+                <div key={d.id} style={{ background: 'var(--card)', border: '1px solid var(--border)', borderRadius: 'var(--radius-card)', boxShadow: 'var(--shadow-sm)' }}>
+                  <div className="rent-item" style={{ cursor: 'pointer' }} onClick={() => toggleExpand(d.id, ids)}>
+                    <div className="rent-item-body">
+                      <div className="rent-item-title">
+                        Партнёрская #{String(d.id).slice(0, 8)}
+                        <Badge color={st.color}>{st.label}</Badge>
+                        <Badge color="blue">Партнёрская</Badge>
+                      </div>
+                      <div className="rent-item-meta">
+                        {d.counterparty_name && <span>{d.counterparty_name}</span>}
+                        {d.requester_name && d.requester_name !== d.counterparty_name && <span>· {d.requester_name}</span>}
+                        {d.counterparty_email && <span>{d.counterparty_email}</span>}
+                        <span>{ids.length} ед.</span>
+                        {d.period_end && <span>до {formatDate(d.period_end)}</span>}
+                        <span>{formatDate(d.created_at)}</span>
+                      </div>
+                      {d.requester_message && <div style={{ fontSize: 12, color: 'var(--text)', marginTop: 4 }}>{d.requester_message}</div>}
+                    </div>
+                    <div className="rent-item-actions" onClick={e => e.stopPropagation()}>
+                      {/* pending_review: null → collecting → ready → выдача */}
+                      {d.status === 'pending_review' && !d.workflow_stage && (<>
+                        <Button variant="secondary" style={{ height: 34, fontSize: 13 }} disabled={updating === d.id}
+                          onClick={() => changeStage(d.id, 'collecting')}>
+                          Принять
+                        </Button>
+                        <Button variant="danger" style={{ height: 34, fontSize: 13 }} disabled={updating === d.id}
+                          onClick={() => cancelDeal(d.id)}>
+                          Отменить
+                        </Button>
+                      </>)}
+                      {d.status === 'pending_review' && d.workflow_stage === 'collecting' && (<>
+                        <Button variant="secondary" style={{ height: 34, fontSize: 13 }} disabled={updating === d.id}
+                          onClick={() => changeStage(d.id, 'ready')}>
+                          Готово
+                        </Button>
+                        <Button variant="danger" style={{ height: 34, fontSize: 13 }} disabled={updating === d.id}
+                          onClick={() => cancelDeal(d.id)}>
+                          Отменить
+                        </Button>
+                      </>)}
+                      {d.status === 'pending_review' && d.workflow_stage === 'ready' && (
+                        <Button variant="primary" style={{ height: 34, fontSize: 13 }}
+                          onClick={() => navigate(`/issue/rent/${d.id}`)}>
+                          Выдать →
+                        </Button>
+                      )}
+                      {/* active: запрос возврата → возврат */}
+                      {(d.status === 'active' || d.status === 'overdue') && !d.return_requested_at && (
+                        <Button variant="primary" style={{ height: 34, fontSize: 13 }}
+                          onClick={() => setConfirmReturnReq(d)}>
+                          Запросить возврат
+                        </Button>
+                      )}
+                      {(d.status === 'active' || d.status === 'overdue') && d.return_requested_at && (
+                        <Button variant="primary" style={{ height: 34, fontSize: 13 }}
+                          onClick={() => navigate(`/return/rent/${d.id}`)}>
+                          Принять
+                        </Button>
+                      )}
+                    </div>
+                    <span style={{ color: 'var(--muted)', fontSize: 14, transition: 'transform 0.2s', transform: isOpen ? 'rotate(180deg)' : 'none' }}>▾</span>
+                  </div>
+                  {isOpen && (
+                    <div style={{ borderTop: '1px solid var(--border)', padding: '12px 20px' }}>
+                      {loadingUnits === d.id ? (
+                        <div style={{ fontSize: 13, color: 'var(--muted)' }}>Загрузка единиц...</div>
+                      ) : (
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                          {ids.map(uid => {
+                            const u = unitCache[uid]
+                            if (!u) return <div key={uid} style={{ fontSize: 12, color: 'var(--muted)' }}>Единица не найдена</div>
+                            const photos = u.photos || []
+                            return (
+                              <div key={uid} style={{
+                                display: 'flex', alignItems: 'center', gap: 10, padding: '8px 10px',
+                                borderRadius: 8, background: 'var(--bg)', border: '1px solid var(--border)',
+                                cursor: 'pointer',
+                              }} onClick={() => navigate(`/units/${uid}`)}>
+                                {photos[0]?.url ? (
+                                  <img src={photos[0].url} alt="" style={{ width: 44, height: 44, borderRadius: 6, objectFit: 'contain', flexShrink: 0 }} />
+                                ) : (
+                                  <div style={{ width: 44, height: 44, borderRadius: 6, background: 'var(--paper)', border: '1px solid var(--border)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+                                    <Package size={18} color="var(--subtle)" strokeWidth={1.4} />
+                                  </div>
+                                )}
+                                <div style={{ flex: 1 }}>
+                                  <div style={{ fontWeight: 500, fontSize: 13 }}>{u.name}</div>
+                                  <div style={{ fontSize: 11, color: 'var(--muted)', marginTop: 1 }}>
+                                    {u.serial && `${u.serial} · `}{u.category ? categoryLabel(u.category) : ''}
+                                  </div>
+                                </div>
+                                <Badge color={u.status === 'on_stock' ? 'green' : u.status === 'issued' ? 'amber' : 'muted'}>
+                                  {u.status === 'on_stock' ? 'На складе' : u.status === 'issued' ? 'Выдано' : u.status}
+                                </Badge>
+                              </div>
+                            )
+                          })}
+                          {d.requester_message && (
+                            <div style={{
+                              fontSize: 12, color: 'var(--muted)', marginTop: 4,
+                              padding: '10px 12px', background: 'var(--card)',
+                              borderLeft: '3px solid var(--gold-500)', borderRadius: 6, lineHeight: 1.5,
+                            }}>
+                              {d.requester_message}
+                            </div>
+                          )}
+                          {d.price_total && (
+                            <div style={{
+                              fontSize: 14, fontWeight: 600, marginTop: 4,
+                              display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+                              padding: '10px 12px', background: 'var(--card)', borderRadius: 6,
+                            }}>
+                              <span style={{ color: 'var(--muted)', fontSize: 11, textTransform: 'uppercase', letterSpacing: '0.06em', fontWeight: 600 }}>Сумма</span>
+                              <span>{Number(d.price_total).toLocaleString('ru-RU')} ₽</span>
+                            </div>
+                          )}
+                        </div>
+                      )}
+                    </div>
+                  )}
                 </div>
-              )}
-            </div>
-
-            <div style={{ fontSize: 12, color: 'var(--muted)', flexShrink: 0 }}>
-              {d.period_start && d.period_end
-                ? `${new Date(d.period_start).toLocaleDateString('ru-RU')} — ${new Date(d.period_end).toLocaleDateString('ru-RU')}`
-                : d.status === 'pending_review' ? `${(d.unit_ids || []).length} ед.` : '—'
-              }
-            </div>
-
-            {d.price_total && (
-              <div style={{ fontWeight: 600, fontSize: 14, flexShrink: 0 }}>
-                {Number(d.price_total).toLocaleString('ru-RU')} ₽
-              </div>
-            )}
-
-            <Badge color={d.status === 'pending_review' ? 'amber' : d.status === 'active' ? 'blue' : d.status === 'done' ? 'green' : 'red'}>
-              {d.status === 'pending_review' ? 'Ожидает' : d.status === 'active' ? 'Активна' : d.status === 'done' ? 'Завершена' : d.status === 'overdue' ? 'Просрочено' : 'Отменена'}
-            </Badge>
-            {d.sign_token && (
-              <Badge color={d.sign_status === 'signed' ? 'green' : 'amber'}>
-                {d.sign_status === 'signed' ? '✓ Подписано' : 'Ожидает подписи'}
-              </Badge>
-            )}
-            {d.status === 'pending_review' && (
-              <button
-                onClick={(e) => { e.stopPropagation(); setReviewDeal(d) }}
-                style={{
-                  padding: '5px 12px', fontSize: 12, fontWeight: 500,
-                  color: 'var(--blue)', background: 'var(--blue-dim)',
-                  border: '1px solid var(--blue)', borderRadius: 6, cursor: 'pointer',
-                }}>
-                Обработать
-              </button>
-            )}
-            {(d.status === 'active' || d.status === 'overdue') && (
-              <button
-                onClick={(e) => { e.stopPropagation(); setReturnDeal(d) }}
-                style={{
-                  padding: '5px 12px', fontSize: 12, fontWeight: 500,
-                  color: 'var(--green)', background: 'var(--green-dim)',
-                  border: '1px solid var(--green)', borderRadius: 6, cursor: 'pointer',
-                }}>
-                Возврат
-              </button>
-            )}
+              )
+            })}
           </div>
-        ))}
-        {!loading && deals.length === 0 && (
-          <div style={{ textAlign: 'center', padding: '60px 0', color: 'var(--muted)', fontSize: 14 }}>Нет сделок</div>
         )}
       </div>
 
-      {returnDeal && (
-        <RentReturnModal deal={returnDeal} onClose={() => setReturnDeal(null)} onDone={() => { setReturnDeal(null); onRefresh() }} />
-      )}
-      {reviewDeal && (
-        <ReviewModal deal={reviewDeal} onClose={() => setReviewDeal(null)} onDone={() => { setReviewDeal(null); onRefresh() }} />
-      )}
-    </div>
+      <ConfirmModal
+        open={!!confirmReturnReq}
+        title="Запросить возврат имущества"
+        message="Партнёр получит уведомление и подтвердит готовность вернуть. Затем вы оформите возврат."
+        confirmLabel="Запросить"
+        cancelLabel="Отмена"
+        onConfirm={doRequestReturn}
+        onCancel={() => setConfirmReturnReq(null)}
+      />
+    </Layout>
   )
 }
 
@@ -254,7 +444,7 @@ function RentReturnModal({ deal, onClose, onDone }) {
         onClick={e => e.stopPropagation()}>
 
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 20 }}>
-          <div style={{ fontWeight: 600, fontSize: 16 }}>Возврат по аренде</div>
+          <div style={{ fontWeight: 600, fontSize: 16 }}>Возврат от партнёров</div>
           <button onClick={onClose} style={{ border: 'none', background: 'none', cursor: 'pointer', color: 'var(--muted)', fontSize: 18 }}>✕</button>
         </div>
 
@@ -331,10 +521,9 @@ function RentReturnModal({ deal, onClose, onDone }) {
             {units.map(u => (
               <div key={u.id} style={{ border: '1px solid var(--border)', borderRadius: 10, padding: 14, marginBottom: 14 }}>
                 <div style={{ fontWeight: 500, fontSize: 13, marginBottom: 10 }}>{u.name}</div>
-                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10, marginBottom: 12 }}>
-                  {[0, 1].map(i => (
-                    <PhotoUpload key={i} label={`Фото ${i + 1}`} onChange={f => setPhoto(u.id, i, f)} />
-                  ))}
+                <div style={{ marginBottom: 12 }}>
+                  <MultiPhotoPicker files={Array.isArray(photos[u.id]) ? photos[u.id] : []} min={2}
+                    onChange={files => setPhotos(p => ({ ...p, [u.id]: files }))} />
                 </div>
                 <div style={{ display: 'flex', gap: 6, marginBottom: 8 }}>
                   {CONDITIONS.map(c => (
@@ -479,7 +668,7 @@ function ReviewModal({ deal, onClose, onDone }) {
         onClick={e => e.stopPropagation()}>
 
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 20 }}>
-          <div style={{ fontWeight: 600, fontSize: 16 }}>Обработка заявки</div>
+          <div style={{ fontWeight: 600, fontSize: 16 }}>Выдача имущества</div>
           <button onClick={onClose} style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--muted)' }}>✕</button>
         </div>
 
@@ -527,8 +716,8 @@ function ReviewModal({ deal, onClose, onDone }) {
         {error && <div style={{ color: 'var(--red)', fontSize: 13, marginBottom: 12 }}>{error}</div>}
 
         <div style={{ display: 'flex', gap: 8, marginTop: 8 }}>
-          <Button variant="danger" fullWidth onClick={handleReject} loading={saving}>Отклонить</Button>
-          <Button fullWidth onClick={handleApprove} loading={saving}>Подтвердить</Button>
+          <Button variant="danger" fullWidth onClick={handleReject} loading={saving}>Отменить</Button>
+          <Button fullWidth onClick={handleApprove} loading={saving}>Выдать</Button>
         </div>
       </div>
     </div>
@@ -552,7 +741,7 @@ function NewDeal({ onDone }) {
   const [whFilter, setWhFilter] = useState('')
   const [unitSearch, setUnitSearch] = useState('')
   const [unitCat, setUnitCat] = useState('all')
-  const [dealPhotos, setDealPhotos] = useState([null, null])
+  const [dealPhotos, setDealPhotos] = useState([])
   const [renterSig, setRenterSig] = useState(null)
   const [issuerStamped, setIssuerStamped] = useState(false)
   const [showDeposit, setShowDeposit] = useState(false)
@@ -786,14 +975,12 @@ function NewDeal({ onDone }) {
         <div>
           <div style={{ fontWeight: 600, marginBottom: 4 }}>Фото к сделке</div>
           <div style={{ fontSize: 13, color: 'var(--muted)', marginBottom: 20 }}>Минимум 2 фото — состояние имущества при передаче</div>
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: 12, marginBottom: 24 }}>
-            {[0, 1].map(i => (
-              <PhotoUpload key={i} label={`Фото ${i + 1}`} onChange={f => setDealPhoto(i, f)} />
-            ))}
+          <div style={{ marginBottom: 20 }}>
+            <MultiPhotoPicker files={dealPhotos} min={2} onChange={setDealPhotos} />
           </div>
           <div style={{ display: 'flex', gap: 8 }}>
             <Button variant="secondary" onClick={() => setStep(2)}>Назад</Button>
-            <Button fullWidth onClick={() => setStep(4)}>Далее — Подпись</Button>
+            <Button fullWidth disabled={dealPhotos.length < 2} onClick={() => setStep(4)}>Далее — Подпись</Button>
           </div>
         </div>
       )}
@@ -846,14 +1033,33 @@ function NewDeal({ onDone }) {
   )
 }
 
-function StatCard({ icon, label, value, color }) {
-  const bg = { blue: 'var(--blue-dim)', green: 'var(--green-dim)', red: 'var(--red-dim)' }
-  const clr = { blue: 'var(--blue)', green: 'var(--green)', red: 'var(--red)' }
+function StatCard({ icon: Icon, label, value, accent = 'gold' }) {
+  const palette = {
+    gold:  { bg: 'var(--gold-100)', fg: 'var(--gold-600)' },
+    green: { bg: 'var(--green-dim)', fg: 'var(--green)' },
+    red:   { bg: 'var(--red-dim)',   fg: 'var(--red)' },
+  }[accent]
   return (
-    <div style={{ background: 'var(--white)', border: '1px solid var(--border)', borderRadius: 'var(--radius-card)', padding: 16 }}>
-      <div style={{ width: 36, height: 36, borderRadius: 8, background: bg[color], display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 16, marginBottom: 10 }}>{icon}</div>
-      <div style={{ fontSize: 20, fontWeight: 700, color: clr[color] }}>{value}</div>
-      <div style={{ fontSize: 12, color: 'var(--muted)', marginTop: 2 }}>{label}</div>
+    <div style={{
+      background: 'var(--card)',
+      border: '1px solid var(--border)',
+      borderRadius: 'var(--radius-card)',
+      padding: '16px 18px',
+    }}>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10 }}>
+        <div style={{ fontSize: 12, color: 'var(--muted)', fontWeight: 500 }}>{label}</div>
+        <div style={{
+          width: 28, height: 28, borderRadius: 8,
+          background: palette.bg, color: palette.fg,
+          display: 'flex', alignItems: 'center', justifyContent: 'center',
+        }}>
+          {Icon && <Icon size={15} strokeWidth={1.8} />}
+        </div>
+      </div>
+      <div style={{
+        fontSize: 24, fontWeight: 600,
+        color: 'var(--text)', letterSpacing: '-0.03em', lineHeight: 1.1,
+      }}>{value}</div>
     </div>
   )
 }

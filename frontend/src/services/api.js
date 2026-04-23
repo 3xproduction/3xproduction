@@ -4,6 +4,11 @@ function getToken() {
   return localStorage.getItem('token')
 }
 
+// Эндпоинты, для которых 401 не должен инициировать принудительный logout.
+// Ключ-признак — это /public/* (публичный кабинет) и /auth/login (логин сам
+// обрабатывает 401 в форме).
+const SKIP_AUTO_LOGOUT = [/^\/public\//, /^\/auth\/login$/]
+
 async function request(method, path, body, opts = {}) {
   const headers = { 'Content-Type': 'application/json' }
   const token = getToken()
@@ -18,8 +23,11 @@ async function request(method, path, body, opts = {}) {
   if (body && !(body instanceof FormData)) {
     config.body = JSON.stringify(body)
   } else if (body instanceof FormData) {
-    delete config.headers['Content-Type'] // browser sets multipart boundary
-    config.headers = { 'X-Auth-Token': token }
+    // Для FormData нельзя ставить Content-Type — браузер сам добавит boundary.
+    // Сохраняем только X-Auth-Token, если он есть.
+    const fdHeaders = {}
+    if (token) fdHeaders['X-Auth-Token'] = token
+    config.headers = fdHeaders
     config.body = body
   }
 
@@ -27,6 +35,22 @@ async function request(method, path, body, opts = {}) {
   const data = await res.json().catch(() => ({}))
 
   if (!res.ok) {
+    // 401 с валидной ранее авторизацией → токен протух/невалиден. Чистим
+    // сессию и даём дружелюбное сообщение. Исключения — публичные эндпоинты.
+    const isSkipAutoLogout = SKIP_AUTO_LOGOUT.some(rx => rx.test(path))
+    if (res.status === 401 && !isSkipAutoLogout && token) {
+      localStorage.removeItem('token')
+      localStorage.removeItem('user')
+      const err = new Error('Сессия истекла — войдите заново')
+      err.status = 401
+      err.data = data
+      // Мягкий редирект на логин, чтобы пользователь не застревал
+      setTimeout(() => {
+        if (!location.pathname.startsWith('/login')) location.href = '/login'
+      }, 800)
+      throw err
+    }
+
     const err = new Error(data.error || `HTTP ${res.status}`)
     err.status = res.status
     err.data = data
@@ -69,14 +93,88 @@ export const units = {
   delete:   (id)       => request('DELETE', `/units/${id}`),
   bulkDelete: (ids)    => request('POST', '/units/bulk-delete', { ids }),
   approvals: ()    => request('GET',  '/units/approvals'),
-  approve:  (id, approval_id, valuation) => request('POST', `/units/${id}/approve`, { approval_id, valuation }),
+  approve:  (id, approval_id, valuation, extra) => request('POST', `/units/${id}/approve`, { approval_id, valuation, ...(extra || {}) }),
   reject:   (id, approval_id, reason) => request('POST', `/units/${id}/reject`, { approval_id, reason }),
   writeoff: (id, reason) => request('POST', `/units/${id}/writeoff`, { reason }),
   requestWriteoff: (id, reason) => request('POST', `/units/${id}/request-writeoff`, { reason }),
+  markMissing:     (id, reason) => request('POST', `/units/${id}/mark-missing`, { reason }),
+  resolveMissing:  (id)         => request('POST', `/units/${id}/resolve-missing`),
   uploadPhoto: (id, formData) => request('POST', `/units/${id}/photos`, formData),
   recognize:   (formData) => request('POST', '/units/recognize', formData),
   deletePhoto: (id, photoId) => request('DELETE', `/units/${id}/photos/${photoId}`),
   history:  (id)   => request('GET', `/units/${id}/history`),
+}
+
+// ─── Writeoffs — списания единиц (выбыли при возврате или помечены долгом) ──
+export const writeoffs = {
+  list:   ()     => request('GET',  '/writeoffs'),
+  create: (body) => request('POST', '/writeoffs', body),
+  convertToWriteoff: (id) => request('POST', `/writeoffs/${id}/convert-to-writeoff`),
+}
+
+// ─── Colleagues' project warehouses (cross-project visibility + loan requests) ──
+export const colleagues = {
+  projects:     ()    => request('GET', '/colleagues/projects'),
+  projectUnits: (id)  => request('GET', `/colleagues/projects/${id}/units`),
+  responders:   (projectId, category) =>
+    request('GET', `/colleagues/responders?project_id=${encodeURIComponent(projectId)}&category=${encodeURIComponent(category || '')}`),
+
+  // Loan requests between projects
+  createRequest: (body) => request('POST',  '/colleagues/requests', body),
+  listRequests:  (direction = 'incoming', status) => {
+    const q = new URLSearchParams({ direction, ...(status ? { status } : {}) }).toString()
+    return request('GET', `/colleagues/requests?${q}`)
+  },
+  acceptRequest: (id, comment) => request('POST', `/colleagues/requests/${id}/accept`, { comment }),
+  rejectRequest: (id, comment) => request('POST', `/colleagues/requests/${id}/reject`, { comment }),
+  cancelRequest: (id)          => request('POST', `/colleagues/requests/${id}/cancel`),
+  returnRequest: (id)          => request('POST', `/colleagues/requests/${id}/return`),
+  extendRequest: (id, new_deadline) => request('POST', `/colleagues/requests/${id}/extend`, { new_deadline }),
+  approveExtension: (id)       => request('POST', `/colleagues/requests/${id}/approve-extension`),
+}
+
+// ─── Handovers — inventory handover between employees of a project ──────────
+export const handovers = {
+  list: (params = {}) => {
+    const q = new URLSearchParams(params).toString()
+    return request('GET', `/handovers${q ? '?' + q : ''}`)
+  },
+  get:    (id)          => request('GET',    `/handovers/${id}`),
+  create: (body)        => request('POST',   '/handovers', body),
+  check:  (id, itemId, body) => request('PUT', `/handovers/${id}/items/${itemId}`, body),
+  sign:   (id)          => request('POST',   `/handovers/${id}/sign`),
+  delete: (id)          => request('DELETE', `/handovers/${id}`),
+}
+
+// ─── Project-kept units (stored only in a project inventory) ────────────────
+export const projectUnits = {
+  list: (params = {}) => {
+    const q = new URLSearchParams(params).toString()
+    return request('GET', `/project-units${q ? '?' + q : ''}`)
+  },
+  create:            (body) => request('POST',   '/project-units', body),
+  update:        (id, body) => request('PUT',    `/project-units/${id}`, body),
+  delete:        (id, reason) => request('DELETE', `/project-units/${id}`, reason ? { reason } : undefined),
+  uploadReceipt:  (formData) => request('POST',   '/project-units/upload-receipt', formData),
+  transfer:      (id, comment) => request('POST', `/project-units/${id}/transfer-to-warehouse`, { comment }),
+  pendingTransfers: ()      => request('GET',   '/project-units/pending-transfers'),
+  acceptTransfer: (id, warehouse_id, cell_id) =>
+    request('POST', `/project-units/${id}/accept-transfer`, { warehouse_id, cell_id }),
+  rejectTransfer: (id, reason) =>
+    request('POST', `/project-units/${id}/reject-transfer`, { reason }),
+
+  // Двухэтапный возврат: warehouse/producer создаёт запрос → проект имеет 3 дня →
+  // warehouse/producer подтверждает фактический возврат.
+  requestReturn: (unitId, comment) =>
+    request('POST', `/project-units/${unitId}/request-return`, { comment }),
+  listReturnRequests: (direction = 'outgoing', status) => {
+    const q = new URLSearchParams({ direction, ...(status ? { status } : {}) }).toString()
+    return request('GET', `/project-units/return-requests?${q}`)
+  },
+  confirmReturn: (requestId) =>
+    request('POST', `/project-units/return-requests/${requestId}/confirm`),
+  cancelReturn:  (requestId) =>
+    request('POST', `/project-units/return-requests/${requestId}/cancel`),
 }
 
 // ─── Warehouses / Cells ──────────────────────────────────────────────────────
@@ -85,10 +183,15 @@ export const warehouses = {
   create:        (body)         => request('POST', '/warehouses', body),
   cells:         (warehouseId) => request('GET',  `/warehouses/${warehouseId}/cells`),
   createSection: (body) => request('POST', '/warehouses/sections', body),
+  updateSection: (id, patch) => request('PUT', `/warehouses/sections/${id}`, patch),
+  addCell:       (sectionId)     => request('POST', `/warehouses/sections/${sectionId}/cells`),
   renameCell:    (cellId, name) => request('PUT', `/warehouses/cells/${cellId}`, { custom_name: name }),
   deleteCell:    (cellId)      => request('DELETE', `/warehouses/cells/${cellId}`),
+  deleteSection: (id)          => request('DELETE', `/warehouses/sections/${id}`),
   deleteWarehouse: (id)        => request('DELETE', `/warehouses/${id}`),
   reorderSections: (section_ids) => request('PUT', '/warehouses/sections/reorder', { section_ids }),
+  updateSectionLayout: (id, layout) => request('PUT', `/warehouses/sections/${id}/layout`, layout),
+  bulkLayout:    (layouts)      => request('PUT', '/warehouses/sections/layout/bulk', { layouts }),
   requestVisibility: ()         => request('GET', '/warehouses/request-visibility'),
   setRequestVisibility: (user_id, can_see_requests) =>
     request('PUT', '/warehouses/request-visibility', { user_id, can_see_requests }),
@@ -153,6 +256,10 @@ export const rent = {
   return: (id, body)    => request('POST', `/rent/${id}/return`, body),
   generateLink: ()      => request('POST', '/rent/public/generate-link'),
   review: (id, body)    => request('PUT',  `/rent/${id}/review`, body),
+  workflowStage: (id, stage) => request('PUT', `/rent/${id}/workflow-stage`, { stage }),
+  issuePublic: (id, formData) => request('POST', `/rent/${id}/issue-public`, formData),
+  requestReturn: (id) => request('POST', `/rent/${id}/request-return`),
+  finalizeReturn: (id, formData) => request('POST', `/rent/${id}/finalize-return`, formData),
 }
 
 // ─── Public (no auth) ────────────────────────────────────────────────────────
@@ -161,6 +268,8 @@ export const publicApi = {
   sendRequest: (token, body) => request('POST', `/public/warehouse/${token}/request`, body),
   submitCart:   (token, body) => request('POST', `/public/warehouse/${token}/cart-request`, body),
   myDeals:      (token, phone) => request('GET', `/public/warehouse/${token}/my-deals?phone=${encodeURIComponent(phone)}`),
+  requestReturn: (token, dealId, phone) =>
+    request('POST', `/public/warehouse/${token}/deals/${dealId}/request-return`, { phone }),
 }
 
 // ─── Projects ────────────────────────────────────────────────────────────────
@@ -227,10 +336,11 @@ export const admin = {
 
 // ─── Debts ──────────────────────────────────────────────────────────────────
 export const debts = {
-  list:   (status) => request('GET', `/debts${status ? '?status=' + status : ''}`),
-  create: (body)   => request('POST', '/debts', body),
-  close:  (id)     => request('POST', `/debts/${id}/close`),
-  stats:  ()       => request('GET', '/debts/stats'),
+  list:     (status) => request('GET', `/debts${status ? '?status=' + status : ''}`),
+  create:   (body)   => request('POST', '/debts', body),
+  close:    (id)     => request('POST', `/debts/${id}/close`),
+  writeoff: (id, reason) => request('POST', `/debts/${id}/writeoff`, { reason }),
+  stats:    ()       => request('GET', '/debts/stats'),
 }
 
 // ─── Locations ──────────────────────────────────────────────────────────────
@@ -261,6 +371,7 @@ export const decorations = {
   linkUnits:   (id, unit_ids) => request('POST',  `/decorations/${id}/units`, { unit_ids }),
   unlinkUnit:  (id, unitId)   => request('DELETE', `/decorations/${id}/units/${unitId}`),
   recognize:   (formData)     => request('POST',  '/decorations/recognize', formData),
+  pavilions:   ()              => request('GET',    '/decorations/pavilions'),
 }
 
 // ─── Vehicles ───────────────────────────────────────────────────────────────

@@ -26,24 +26,37 @@ router.get('/', verifyJWT, checkRole(...ALLOWED_ROLES), async (req, res) => {
     const params = []
     if (status) { params.push(status); q += ` AND c.status = $${params.length}` }
     if (gender) { params.push(gender); q += ` AND c.gender = $${params.length}` }
+    let searchApplied = false
     if (search) {
-      const { buildSearchQuery } = require('../services/searchService')
+      const { buildSearchQuery, checkTrgm } = require('../services/searchService')
       const { tsqueryStr, originalQuery } = await buildSearchQuery(search)
-      params.push(tsqueryStr); const tsqIdx = params.length
-      params.push(originalQuery); const rawIdx = params.length
-      q += ` AND (c.search_vector @@ to_tsquery('ru_search', $${tsqIdx})
-             OR similarity(c.name, $${rawIdx}) > 0.2)`
+      if (tsqueryStr) {
+        const useTrgm = await checkTrgm()
+        params.push(tsqueryStr)
+        const tsqIdx = params.length
+        params.push(originalQuery)
+        const rawIdx = params.length
+        if (useTrgm) {
+          q += ` AND (c.search_vector @@ to_tsquery('ru_search', $${tsqIdx})
+                 OR similarity(c.name, $${rawIdx}) > 0.2)`
+        } else {
+          q += ` AND (c.search_vector @@ to_tsquery('ru_search', $${tsqIdx})
+                 OR c.name ILIKE '%' || $${rawIdx} || '%')`
+        }
+        searchApplied = true
+      }
     }
-    if (search) {
-      q += ` ORDER BY ts_rank_cd(c.search_vector, to_tsquery('ru_search', $${params.length - 1})) DESC, c.created_at DESC`
+    if (searchApplied) {
+      const tsqIdx = params.length - 1
+      q += ` ORDER BY ts_rank_cd(c.search_vector, to_tsquery('ru_search', $${tsqIdx})) DESC, c.created_at DESC`
     } else {
       q += ` ORDER BY c.created_at DESC`
     }
     const { rows } = await db.query(q, params)
     res.json(rows)
   } catch (err) {
-    console.error(err)
-    res.status(500).json({ error: 'Server error' })
+    console.error('Casting search error:', err)
+    res.json([])
   }
 })
 

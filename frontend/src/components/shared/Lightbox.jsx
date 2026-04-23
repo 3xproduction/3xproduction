@@ -1,5 +1,6 @@
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useRef } from 'react'
 import { X, ChevronLeft, ChevronRight } from 'lucide-react'
+import { useBodyLock } from '../../hooks/useBodyLock'
 
 const css = `
 .lb-overlay {
@@ -77,6 +78,7 @@ function isVideoUrl(url) {
 
 export default function Lightbox({ photos = [], startIndex = 0, onClose }) {
   const [idx, setIdx] = useState(startIndex)
+  useBodyLock(true)
 
   const go = useCallback((dir) => {
     setIdx(i => (i + dir + photos.length) % photos.length)
@@ -96,6 +98,26 @@ export default function Lightbox({ photos = [], startIndex = 0, onClose }) {
     }
   }, [onClose, go])
 
+  // Touch-swipe (mobile). Горизонтальный свайп по изображению листает
+  // фото влево-вправо. Порог 50px — ниже считаем случайным тапом/скроллом.
+  // Вертикальная составляющая доминирует → не листаем (pinch-zoom и т.п.).
+  const touchRef = useRef({ x: 0, y: 0, active: false })
+  const onTouchStart = (e) => {
+    if (e.touches.length !== 1) { touchRef.current.active = false; return }
+    touchRef.current = { x: e.touches[0].clientX, y: e.touches[0].clientY, active: true }
+  }
+  const onTouchEnd = (e) => {
+    if (!touchRef.current.active) return
+    touchRef.current.active = false
+    const t = (e.changedTouches && e.changedTouches[0]) || null
+    if (!t) return
+    const dx = t.clientX - touchRef.current.x
+    const dy = t.clientY - touchRef.current.y
+    if (Math.abs(dx) < 50 || Math.abs(dx) < Math.abs(dy)) return
+    if (photos.length <= 1) return
+    go(dx > 0 ? -1 : 1)
+  }
+
   if (!photos.length) return null
 
   const src = typeof photos[idx] === 'string' ? photos[idx] : photos[idx]?.url
@@ -103,7 +125,12 @@ export default function Lightbox({ photos = [], startIndex = 0, onClose }) {
   return (
     <>
       <style>{css}</style>
-      <div className="lb-overlay" onClick={e => { e.stopPropagation(); onClose() }}>
+      <div
+        className="lb-overlay"
+        onClick={e => { e.stopPropagation(); onClose() }}
+        onTouchStart={onTouchStart}
+        onTouchEnd={onTouchEnd}
+      >
         <div onClick={e => e.stopPropagation()}>
           {isVideoUrl(src) ? (
             <video className="lb-img" src={src} controls autoPlay style={{ outline: 'none' }} />

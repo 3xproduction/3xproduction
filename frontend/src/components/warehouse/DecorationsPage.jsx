@@ -170,15 +170,25 @@ export default function DecorationsPage() {
 
   return (
     <Layout>
+      <style>{`
+        /* На мобильной убираем верхнюю кнопку «+ Добавить» и фильтр типа —
+           создание идёт через FAB, поиск по тексту остаётся. */
+        @media (max-width: 768px) {
+          .dec-top-add { display: none !important; }
+          .dec-filter-type { display: none !important; }
+        }
+      `}</style>
       <div style={{ padding: '24px 32px', maxWidth: 960 }}>
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 20 }}>
           <div>
             <h1 style={{ fontSize: 20, fontWeight: 600, marginBottom: 4 }}>Декорации</h1>
             <p style={{ color: 'var(--muted)', fontSize: 13, margin: 0 }}>Каталог декораций и павильонов</p>
           </div>
-          <Button onClick={() => { setForm(EMPTY_FORM); setPhotos([]); setAddError(''); setShowAdd(true) }}>
-            <Plus size={15} /> Добавить
-          </Button>
+          <div className="dec-top-add">
+            <Button onClick={() => { setForm(EMPTY_FORM); setPhotos([]); setAddError(''); setShowAdd(true) }}>
+              <Plus size={15} /> Добавить
+            </Button>
+          </div>
         </div>
 
         {/* Filters */}
@@ -197,6 +207,7 @@ export default function DecorationsPage() {
             />
           </div>
           <select
+            className="dec-filter-type"
             value={typeFilter}
             onChange={e => setTypeFilter(e.target.value)}
             style={{
@@ -210,6 +221,7 @@ export default function DecorationsPage() {
             <option value="pavilion">Павильон</option>
           </select>
           <select
+            className="dec-filter-type"
             value={statusFilter}
             onChange={e => setStatusFilter(e.target.value)}
             style={{
@@ -590,6 +602,43 @@ export default function DecorationsPage() {
                     </div>
                   )}
                 </div>
+
+                {/* Units physically moved to this pavilion right now (only for type=pavilion). */}
+                {detail.type === 'pavilion' && detail.units_in_pavilion && detail.units_in_pavilion.length > 0 && (
+                  <div style={{ marginBottom: 20 }}>
+                    <h3 style={{ fontSize: 14, fontWeight: 600, marginBottom: 10 }}>
+                      🎬 Сейчас в павильоне <span style={{ color: 'var(--muted)', fontWeight: 400 }}>· {detail.units_in_pavilion.length}</span>
+                    </h3>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                      {detail.units_in_pavilion.map(unit => (
+                        <div
+                          key={unit.id}
+                          style={{
+                            display: 'flex', alignItems: 'center', gap: 10,
+                            padding: '8px 10px', border: '1px solid var(--border)',
+                            borderRadius: 'var(--radius-btn)', fontSize: 13,
+                            background: 'rgba(124,58,237,0.05)',
+                          }}
+                        >
+                          {unit.photo_url ? (
+                            <img src={unit.photo_url} alt="" style={{ width: 36, height: 36, objectFit: 'cover', borderRadius: 6, flexShrink: 0 }} />
+                          ) : (
+                            <div style={{
+                              width: 36, height: 36, borderRadius: 6, background: 'var(--bg)',
+                              display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0,
+                            }}>
+                              <Clapperboard size={14} style={{ color: 'var(--muted)' }} />
+                            </div>
+                          )}
+                          <div style={{ flex: 1, minWidth: 0 }}>
+                            <div style={{ fontWeight: 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{unit.name}</div>
+                            {unit.serial && <div style={{ fontSize: 11, color: 'var(--muted)' }}>{unit.serial}</div>}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
 
                 {/* Linked units */}
                 {detail.units && detail.units.length > 0 && (

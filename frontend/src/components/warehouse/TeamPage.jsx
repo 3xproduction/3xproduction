@@ -339,7 +339,7 @@ export default function TeamPage() {
             )}
 
             {inviteError && (
-              <div style={{ color: 'var(--red)', fontSize: 13, marginBottom: 12, padding: '8px 12px', background: 'var(--red-dim, #fee2e2)', borderRadius: 8 }}>
+              <div style={{ color: 'var(--red)', fontSize: 13, marginBottom: 12, padding: '8px 12px', background: 'var(--red-dim)', borderRadius: 8 }}>
                 {inviteError}
               </div>
             )}

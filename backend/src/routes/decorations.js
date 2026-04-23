@@ -27,24 +27,50 @@ router.get('/', verifyJWT, async (req, res) => {
     const params = []
     if (type) { params.push(type); q += ` AND d.type = $${params.length}` }
     if (status) { params.push(status); q += ` AND d.status = $${params.length}` }
+    let searchApplied = false
     if (search) {
-      const { buildSearchQuery } = require('../services/searchService')
+      const { buildSearchQuery, checkTrgm } = require('../services/searchService')
       const { tsqueryStr, originalQuery } = await buildSearchQuery(search)
-      params.push(tsqueryStr); const tsqIdx = params.length
-      params.push(originalQuery); const rawIdx = params.length
-      q += ` AND (d.search_vector @@ to_tsquery('ru_search', $${tsqIdx})
-             OR similarity(d.name, $${rawIdx}) > 0.2)`
+      if (tsqueryStr) {
+        const useTrgm = await checkTrgm()
+        params.push(tsqueryStr)
+        const tsqIdx = params.length
+        params.push(originalQuery)
+        const rawIdx = params.length
+        if (useTrgm) {
+          q += ` AND (d.search_vector @@ to_tsquery('ru_search', $${tsqIdx})
+                 OR similarity(d.name, $${rawIdx}) > 0.2)`
+        } else {
+          q += ` AND (d.search_vector @@ to_tsquery('ru_search', $${tsqIdx})
+                 OR d.name ILIKE '%' || $${rawIdx} || '%')`
+        }
+        searchApplied = true
+      }
     }
-    if (search) {
-      q += ` ORDER BY ts_rank_cd(d.search_vector, to_tsquery('ru_search', $${params.length - 1})) DESC, d.created_at DESC`
+    if (searchApplied) {
+      const tsqIdx = params.length - 1
+      q += ` ORDER BY ts_rank_cd(d.search_vector, to_tsquery('ru_search', $${tsqIdx})) DESC, d.created_at DESC`
     } else {
       q += ` ORDER BY d.created_at DESC`
     }
     const { rows } = await db.query(q, params)
     res.json(rows)
   } catch (err) {
+    console.error('Decorations search error:', err)
+    res.json([])
+  }
+})
+
+// GET /decorations/pavilions — short list of pavilions for move picker
+router.get('/pavilions', verifyJWT, async (req, res) => {
+  try {
+    const { rows } = await db.query(
+      `SELECT id, name, status FROM decorations WHERE type = 'pavilion' ORDER BY name`
+    )
+    res.json({ pavilions: rows })
+  } catch (err) {
     console.error(err)
-    res.status(500).json({ error: 'Server error' })
+    res.json({ pavilions: [] })
   }
 })
 
@@ -63,7 +89,19 @@ router.get('/:id', verifyJWT, async (req, res) => {
        FROM decoration_units du JOIN units u ON u.id = du.unit_id WHERE du.decoration_id = $1`,
       [req.params.id]
     )
-    res.json({ ...decoration, photos, units })
+    // Units currently physically moved to this pavilion (via units.pavilion_id).
+    // Only meaningful when decoration.type = 'pavilion'.
+    let unitsInPavilion = []
+    if (decoration.type === 'pavilion') {
+      const { rows } = await db.query(
+        `SELECT u.id, u.name, u.category, u.status, u.serial, u.valuation,
+          (SELECT url FROM unit_photos up WHERE up.unit_id = u.id LIMIT 1) AS photo_url
+         FROM units u WHERE u.pavilion_id = $1 ORDER BY u.name`,
+        [req.params.id]
+      )
+      unitsInPavilion = rows
+    }
+    res.json({ ...decoration, photos, units, units_in_pavilion: unitsInPavilion })
   } catch (err) {
     console.error(err)
     res.status(500).json({ error: 'Server error' })
@@ -96,8 +134,8 @@ router.post('/recognize', verifyJWT, upload.single('photo'), async (req, res) =>
     const clean = text.replace(/^```(?:json)?/m, '').replace(/```$/m, '').trim()
     res.json(JSON.parse(clean))
   } catch (err) {
-    console.error('Decoration recognition error:', err.message)
-    res.status(500).json({ error: err.message || 'Recognition failed' })
+    console.error('Decoration recognition error:', { status: err?.status, name: err?.name })
+    res.status(500).json({ error: 'Не удалось распознать фото' })
   }
 })
 

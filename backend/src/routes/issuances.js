@@ -18,12 +18,17 @@ const upload = multer({
 const WAREHOUSE_ROLES = ['warehouse_director', 'warehouse_deputy', 'warehouse_staff']
 
 // POST /issuances — issue units with signature
-router.post('/', verifyJWT, checkRole(...WAREHOUSE_ROLES), upload.fields([
-  { name: 'photos', maxCount: 30 },
-  { name: 'signature', maxCount: 1 },
-]), async (req, res) => {
+// multer.any() позволяет принимать фото по каждой единице отдельно:
+// поле `photos_<unit_id>` → фото привязывается именно к этой единице.
+// Для обратной совместимости поле `photos` (без суффикса) цепляется к первой единице.
+router.post('/', verifyJWT, checkRole(...WAREHOUSE_ROLES), upload.any(), async (req, res) => {
   const { request_id, received_by, deadline } = req.body
   if (!received_by || !deadline) return res.status(400).json({ error: 'Missing fields' })
+
+  const filesByField = {}
+  for (const f of (req.files || [])) {
+    (filesByField[f.fieldname] ||= []).push(f)
+  }
 
   const client = await db.getClient()
   try {
@@ -31,15 +36,22 @@ router.post('/', verifyJWT, checkRole(...WAREHOUSE_ROLES), upload.fields([
 
     // Upload signature
     let signature_url = null
-    if (req.files?.signature?.[0]) {
-      signature_url = await uploadFile(req.files.signature[0].buffer, 'signature.png', 'signatures')
+    if (filesByField.signature?.[0]) {
+      signature_url = await uploadFile(filesByField.signature[0].buffer, 'signature.png', 'signatures')
     }
 
-    // Get request + units
+    // Get request + units (без пересорта — misplaced=true выдавать нельзя).
     let unit_ids = []
     if (request_id) {
       const { rows } = await client.query(`SELECT unit_ids FROM requests WHERE id=$1`, [request_id])
       if (rows.length) unit_ids = rows[0].unit_ids
+      if (unit_ids.length) {
+        const { rows: filtered } = await client.query(
+          `SELECT id FROM units WHERE id = ANY($1) AND COALESCE(misplaced, false) = false`,
+          [unit_ids]
+        )
+        unit_ids = filtered.map(r => r.id)
+      }
     }
 
     // Get unit + user details for PDF
@@ -88,23 +100,32 @@ router.post('/', verifyJWT, checkRole(...WAREHOUSE_ROLES), upload.fields([
     for (const unit_id of unit_ids) {
       await client.query(`UPDATE units SET status='issued' WHERE id=$1`, [unit_id])
       await client.query(
-        `INSERT INTO unit_history (unit_id, action, user_id, project_id)
-         VALUES ($1,'Выдано',$2,(SELECT project_id FROM users WHERE id=$3))`,
-        [unit_id, req.user.id, received_by]
+        `INSERT INTO unit_history (unit_id, action, user_id, project_id, issuance_id)
+         VALUES ($1,'Выдано',$2,(SELECT project_id FROM users WHERE id=$3),$4)`,
+        [unit_id, req.user.id, received_by, issuance.id]
       )
     }
 
-    // Upload photos
-    if (req.files?.photos) {
-      for (const file of req.files.photos) {
+    // Фото выдачи — поле `photos_<unit_id>` привязывает к конкретной единице.
+    // Легаси-поле `photos` цепляется к первой единице (бэк-компат).
+    for (const fieldName of Object.keys(filesByField)) {
+      let targetUnitId = null
+      if (fieldName === 'photos') {
+        targetUnitId = unit_ids[0] || null
+      } else if (fieldName.startsWith('photos_')) {
+        const candidate = fieldName.slice('photos_'.length)
+        if (unit_ids.includes(candidate)) targetUnitId = candidate
+      } else {
+        continue
+      }
+      if (!targetUnitId) continue
+      for (const file of filesByField[fieldName]) {
         const url = await uploadFile(file.buffer, file.originalname, 'units')
-        // Attach to first unit for now; in real app unit_id comes from form fields
-        if (unit_ids[0]) {
-          await client.query(
-            `INSERT INTO unit_photos (unit_id, url, type) VALUES ($1,$2,'issue')`,
-            [unit_ids[0], url]
-          )
-        }
+        await client.query(
+          `INSERT INTO unit_photos (unit_id, url, type, issuance_id)
+           VALUES ($1,$2,'issue',$3)`,
+          [targetUnitId, url, issuance.id]
+        )
       }
     }
 
@@ -125,12 +146,14 @@ router.post('/', verifyJWT, checkRole(...WAREHOUSE_ROLES), upload.fields([
 })
 
 // POST /returns
-router.post('/returns', verifyJWT, checkRole(...WAREHOUSE_ROLES), upload.fields([
-  { name: 'photos', maxCount: 30 },
-  { name: 'signature', maxCount: 1 },
-]), async (req, res) => {
+router.post('/returns', verifyJWT, checkRole(...WAREHOUSE_ROLES), upload.any(), async (req, res) => {
   const { issuance_id, condition_notes, items_condition, signature_data } = req.body
   if (!issuance_id) return res.status(400).json({ error: 'Missing issuance_id' })
+
+  const filesByField = {}
+  for (const f of (req.files || [])) {
+    (filesByField[f.fieldname] ||= []).push(f)
+  }
 
   const client = await db.getClient()
   try {
@@ -177,15 +200,16 @@ router.post('/returns', verifyJWT, checkRole(...WAREHOUSE_ROLES), upload.fields(
     const act_pdf_url = await uploadFile(Buffer.from(pdfBytes), 'act_return.pdf', 'acts')
 
     let sig_url = null
-    if (req.files?.signature?.[0]) {
-      sig_url = await uploadFile(req.files.signature[0].buffer, 'sig.png', 'signatures')
+    if (filesByField.signature?.[0]) {
+      sig_url = await uploadFile(filesByField.signature[0].buffer, 'sig.png', 'signatures')
     }
 
-    await client.query(
+    const { rows: returnRows } = await client.query(
       `INSERT INTO returns (issuance_id, returned_by, accepted_by, condition_notes, signature_url, act_pdf_url)
-       VALUES ($1,$2,$3,$4,$5,$6)`,
+       VALUES ($1,$2,$3,$4,$5,$6) RETURNING id`,
       [issuance_id, issuance.received_by, req.user.id, condition_notes || null, sig_url, act_pdf_url]
     )
+    const returnId = returnRows[0].id
 
     // Update unit statuses + history
     for (const unit of units) {
@@ -193,8 +217,9 @@ router.post('/returns', verifyJWT, checkRole(...WAREHOUSE_ROLES), upload.fields(
       const newStatus = 'on_stock'
       await client.query(`UPDATE units SET status=$1 WHERE id=$2`, [newStatus, unit.id])
       await client.query(
-        `INSERT INTO unit_history (unit_id, action, user_id, notes) VALUES ($1,'Возврат',$2,$3)`,
-        [unit.id, req.user.id, cond === 'damaged' ? `Повреждено: ${condition_notes}` : null]
+        `INSERT INTO unit_history (unit_id, action, user_id, notes, project_id, return_id, issuance_id)
+         VALUES ($1,'Возврат',$2,$3,(SELECT project_id FROM users WHERE id=$4),$5,$6)`,
+        [unit.id, req.user.id, cond === 'damaged' ? `Повреждено: ${condition_notes}` : null, issuance.received_by, returnId, issuance_id]
       )
 
       // Notify if damaged
@@ -205,6 +230,29 @@ router.post('/returns', verifyJWT, checkRole(...WAREHOUSE_ROLES), upload.fields(
           entity_id: unit.id,
           entity_type: 'unit',
         })
+      }
+    }
+
+    // Фото возврата — поле `photos_<unit_id>` привязывает к конкретной единице.
+    // Легаси-поле `photos` цепляется к первой единице.
+    for (const fieldName of Object.keys(filesByField)) {
+      let targetUnitId = null
+      if (fieldName === 'photos') {
+        targetUnitId = unitIds[0] || null
+      } else if (fieldName.startsWith('photos_')) {
+        const candidate = fieldName.slice('photos_'.length)
+        if (unitIds.includes(candidate)) targetUnitId = candidate
+      } else {
+        continue
+      }
+      if (!targetUnitId) continue
+      for (const file of filesByField[fieldName]) {
+        const url = await uploadFile(file.buffer, file.originalname, 'units')
+        await client.query(
+          `INSERT INTO unit_photos (unit_id, url, type, return_id)
+           VALUES ($1,$2,'return',$3)`,
+          [targetUnitId, url, returnId]
+        )
       }
     }
 
@@ -343,8 +391,12 @@ router.get('/active', verifyJWT, checkRole('warehouse_director', 'warehouse_depu
   }
 })
 
-// POST /issuances/:id/request-return — project director requests return
+// POST /issuances/:id/request-return — запрос возврата имущества.
+// Инициируют: получатель (received_by), автор заявки, пользователь проекта-
+// получателя либо warehouse-роль (директор/зам/сотрудник склада).
 router.post('/:id/request-return', verifyJWT, async (req, res) => {
+  const projectId = req.user.project_id && req.user.project_id !== '' ? req.user.project_id : null
+  const isWarehouse = ['warehouse_director', 'warehouse_deputy', 'warehouse_staff'].includes(req.user.role)
   try {
     const { rows } = await db.query(
       `SELECT i.id, i.received_by, u.name AS receiver_name, r.unit_ids,
@@ -352,9 +404,12 @@ router.post('/:id/request-return', verifyJWT, async (req, res) => {
        FROM issuances i
        JOIN users u ON u.id = i.received_by
        LEFT JOIN requests r ON r.id = i.request_id
-       WHERE i.id = $1
-         AND (i.received_by = $2 OR r.requester_id = $2 OR r.project_id = $3)`,
-      [req.params.id, req.user.id, req.user.project_id || null]
+       WHERE i.id = $1::uuid
+         AND ($4 = true
+              OR i.received_by = $2::uuid
+              OR r.requester_id = $2::uuid
+              OR ($3::uuid IS NOT NULL AND r.project_id = $3::uuid))`,
+      [req.params.id, req.user.id, projectId, isWarehouse]
     )
     if (!rows.length) return res.status(404).json({ error: 'Issuance not found' })
     if (rows[0].already_returned) return res.status(400).json({ error: 'Already returned' })
@@ -365,12 +420,14 @@ router.post('/:id/request-return', verifyJWT, async (req, res) => {
     )
 
     const unitCount = (rows[0].unit_ids || []).length
-    await notifyWarehouse({
-      type: 'return_request',
+    // Значения для enum'ов notification_type / entity_type ограничены —
+    // ошибку ловим и не фейлим запрос, т.к. сам возврат уже закрепили выше.
+    notifyWarehouse({
+      type: 'status_change',
       text: `${rows[0].receiver_name} запросил возврат (${unitCount} ед.)`,
       entity_id: rows[0].id,
-      entity_type: 'issuance',
-    })
+      entity_type: 'request',
+    }).catch(e => console.error('notifyWarehouse request-return:', e.message))
 
     res.json({ ok: true })
   } catch (err) {

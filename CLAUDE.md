@@ -51,10 +51,10 @@ docker push cr.yandex/<registry-id>/<image>:<tag>
 ├── backend/src/
 │   ├── index.js          # точка входа, монтирует роуты, запускает миграции
 │   ├── middleware/auth.js # JWT + role guard + impersonation
-│   ├── db/               # pg pool, migrate.js, 22 SQL-миграции
+│   ├── db/               # pg pool, migrate.js, 38 SQL-миграций
 │   ├── routes/           # auth, units, warehouses, requests, issuances,
-│   │                     # documents, rent, analytics, team, lists, debts
-│   └── services/         # r2 (S3), groq (Claude AI), resend (email), push, pdf, docParser
+│   │                     # documents, rent, analytics, team, lists, debts, search
+│   └── services/         # r2 (S3), groq (Claude AI), resend (email), push, pdf, docParser, searchService
 ├── frontend/src/
 │   ├── App.jsx           # React Router: PrivateRoute / WarehouseRoute / ProductionRoute
 │   ├── components/       # warehouse/, production/, auth/, movement/, rent/, shared/
@@ -89,6 +89,93 @@ docker push cr.yandex/<registry-id>/<image>:<tag>
 | `cd frontend && npm run lint` | ESLint проверка frontend |
 | `docker build -t cr.yandex/...` | Собрать Docker-образ для YC |
 | `docker push cr.yandex/...` | Запушить образ в Yandex Container Registry |
+
+## Search System
+
+Трёхуровневый полнотекстовый поиск на PostgreSQL `tsvector/tsquery` с русской морфологией (`ru_search` конфиг).
+
+### Архитектура
+```
+Пользователь вводит запрос
+        ↓
+  searchService.buildSearchQuery()
+    1. expandWithSynonyms(term) → { close, category, all }
+       - close:    прямые синонимы (нож → кинжал, стилет)
+       - category: siblings из той же категории (нож → пистолет, автомат)
+    2. Строит tsquery: ('нож':* | 'кинжал' | 'стилет' | 'пистолет' | ...)
+       - Введённое слово → prefix :* (для частичного ввода)
+       - Синонимы → exact match (без :*, чтобы "нож" не ловил "ножки")
+        ↓
+  PostgreSQL FTS
+    - search_vector @@ to_tsquery + ts_rank_cd > 0.5 (порог отсечения)
+    - OR u.name ILIKE '%query%' (fallback для прямого совпадения по имени)
+        ↓
+  Три уровня результатов (_match field):
+    - 'direct'  → название содержит введённое слово
+    - 'similar' → название содержит close-синоним
+    - 'related' → всё остальное (из той же категории)
+        ↓
+  Frontend: 3 секции с разделителями "Похожее" / "Из категории"
+```
+
+### search_vector (веса)
+| Вес | Поля | Score |
+|-----|-------|-------|
+| A (высший) | name | ~1-5 |
+| B | serial, category | ~0.5-1 |
+| C | description, condition | ~0.1-0.5 |
+| D (низший) | search_tags (AI), period, dimensions, source | ~0.01-0.1 |
+
+AI-теги намеренно на весе D — они содержат 100+ слов на единицу и создают ложные совпадения на весе B.
+
+### Синонимы
+- Таблица `search_synonyms`: ~1000 групп, ~6-60 синонимов на группу
+- Категории: furniture, clothing_main/outer, tableware, weapons_melee/ranged, electronics, tools, medical, lighting, decor, textile, и др.
+- Мета-категория `meta`: зонтичные термины (одежда, мебель, посуда) — работают только при прямом поиске, не при обратном lookup
+- Перекрёстные ссылки: чашка ↔ стакан ↔ кружка, нож ↔ кинжал, куртка ↔ пальто
+
+### Ключевые файлы
+| Файл | Роль |
+|------|------|
+| `backend/src/services/searchService.js` | expandWithSynonyms, buildSearchQuery, searchAll, checkTrgm |
+| `backend/src/routes/search.js` | GET /search (глобальный) + GET /search/debug (диагностика) |
+| `backend/src/routes/units.js` | GET /units?search= (складской поиск, 3-tier marking) |
+| `backend/src/routes/publicRent.js` | GET /public/warehouse/:token?search= (публичный) |
+| `frontend/src/hooks/useGlobalSearch.js` | Ctrl+K модальный поиск |
+| `frontend/src/components/shared/GlobalSearchBar.jsx` | UI глобального поиска |
+| `frontend/src/components/warehouse/UnitsPage.jsx` | Поиск на складе (3 секции) |
+| `frontend/src/components/production/WarehouseViewPage.jsx` | Поиск у продюсера (3 секции) |
+
+### Миграции поиска
+| # | Файл | Что делает |
+|---|------|-----------|
+| 034 | search_tags_and_mega_synonyms | search_tags колонка, 1000 synonym groups, ru_search конфиг |
+| 035 | search_umbrella_synonyms | Мета-термины: одежда, мебель, посуда и др. |
+| 036 | fix_search_infrastructure | Фикс 032: search_vector на все таблицы, триггеры, бэкфилл |
+| 037 | search_lower_tag_weight | AI-теги с веса B → D, ре-бэкфилл |
+| 038 | expanded_synonyms | Расширенные синонимы x10 + перекрёстные ссылки |
+
+### Важно при изменениях
+- **pg_trgm и unaccent НЕ установлены** на Yandex Managed PostgreSQL (нет прав суперпользователя). `similarity()` не работает, используется ILIKE fallback.
+- **Порог 0.5** в `ts_rank_cd` — отсекает совпадения только по AI-тегам. При изменении тегов или весов проверять через `/search/debug?q=...`.
+- **Миграция 032 НЕ применена** (rollback из-за CREATE EXTENSION). Вся инфраструктура поиска создана через 034+036.
+- Новые SQL-миграции оборачивать в `DO $$ ... EXCEPTION ... END $$` для совместимости с Yandex Managed PostgreSQL.
+
+## Deployment (Yandex Cloud)
+```bash
+# Полный цикл деплоя:
+docker build -t cr.yandex/crp71f1brhdu87cfbr2i/3xproduction:latest .
+docker push cr.yandex/crp71f1brhdu87cfbr2i/3xproduction:latest
+yc serverless container revision deploy \
+  --container-name xproduction \
+  --image cr.yandex/crp71f1brhdu87cfbr2i/3xproduction:latest \
+  --cores 1 --core-fraction 100 --memory 1GB \
+  --concurrency 4 --execution-timeout 300s \
+  --service-account-id ajedo095fa8423ft92om \
+  --network-id enpib623e5laqanui28p \
+  --environment "..." # env vars из текущей ревизии
+```
+**Важно:** `docker push` НЕ обновляет контейнер автоматически. Нужен `yc serverless container revision deploy` для создания новой ревизии.
 
 ## When Stuck
 - Остановись и спроси перед: удалением файлов или таблиц БД, изменением схемы миграций, рефакторингом > 3 файлов одновременно.

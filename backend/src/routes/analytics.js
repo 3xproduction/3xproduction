@@ -2,8 +2,10 @@ const router = require('express').Router()
 const db     = require('../db')
 const { verifyJWT, checkRole } = require('../middleware/auth')
 
-// GET /analytics/warehouse — for warehouse_director
-router.get('/warehouse', verifyJWT, checkRole('warehouse_director', 'warehouse_deputy', 'warehouse_staff'), async (req, res) => {
+// GET /analytics/warehouse — общая статистика склада.
+// Продюсер тоже читает этот endpoint для блоков «Топ категории» и
+// «Популярно на складе» на /analytics/producer.
+router.get('/warehouse', verifyJWT, checkRole('warehouse_director', 'warehouse_deputy', 'warehouse_staff', 'producer'), async (req, res) => {
   try {
     // Units by category
     const { rows: byCategory } = await db.query(`
@@ -234,10 +236,10 @@ router.get('/producer', verifyJWT, checkRole('producer'), async (req, res) => {
     // Asset valuation
     const { rows: assetValuation } = await db.query(`
       SELECT
-        COALESCE(SUM(valuation * qty) FILTER (WHERE status IN ('on_stock','issued')), 0) AS total_assets_value,
-        COALESCE(SUM(valuation * qty) FILTER (WHERE status = 'issued'), 0) AS issued_assets_value
+        COALESCE(SUM(valuation * qty) FILTER (WHERE status IN ('on_stock','issued') AND valuation IS NOT NULL), 0) AS total_assets_value,
+        COALESCE(SUM(valuation * qty) FILTER (WHERE status = 'issued' AND valuation IS NOT NULL), 0) AS issued_assets_value,
+        COUNT(*) FILTER (WHERE status = 'issued') AS issued_count
       FROM units
-      WHERE valuation IS NOT NULL
     `)
 
     res.json({

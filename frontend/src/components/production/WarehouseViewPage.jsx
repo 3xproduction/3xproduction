@@ -1,7 +1,9 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
+import { ShoppingCart, X, Package, Plus, Minus } from 'lucide-react'
 import ProductionLayout from './ProductionLayout'
 import Badge from '../shared/Badge'
 import Button from '../shared/Button'
+import ConfirmModal from '../shared/ConfirmModal'
 import UnitCardModal from '../shared/UnitCardModal'
 import { STATUS_LABEL, STATUS_COLOR } from '../../constants/statuses'
 import { ALL_CATEGORIES, CATEGORIES_FILTER, categoryLabel } from '../../constants/categories'
@@ -20,26 +22,49 @@ const REQUEST_STATUSES = {
 
 export default function WarehouseViewPage() {
   const [search, setSearch] = useState('')
+  const [debouncedSearch, setDebouncedSearch] = useState('')
+  const searchTimer = useRef(null)
   const [category, setCategory] = useState('all')
   const [requestedUnits, setRequestedUnits] = useState({})
   const [expanded, setExpanded] = useState(null)
   const [units, setUnits] = useState([])
   const [loading, setLoading] = useState(true)
+  const [searching, setSearching] = useState(false)
   const [cardId, setCardId] = useState(null)
   const [whList, setWhList] = useState([])
   const [selectedWh, setSelectedWh] = useState('all')
   const [cart, setCart] = useState([])
   const [showCart, setShowCart] = useState(false)
+  const [cartDateStart, setCartDateStart] = useState('')
+  const [cartDateEnd, setCartDateEnd] = useState('')
   const [cartSending, setCartSending] = useState(false)
   const [successPopup, setSuccessPopup] = useState(false)
+  const [confirmCart, setConfirmCart] = useState(false)
   const [viewMode, setViewMode] = useState(() => localStorage.getItem('unitsViewMode') || 'grid')
   const [publicLink, setPublicLink] = useState('')
   const [linkCopied, setLinkCopied] = useState(false)
   const { user } = useAuth()
 
+  // Debounce search input — same as warehouse UnitsPage
+  useEffect(() => {
+    clearTimeout(searchTimer.current)
+    searchTimer.current = setTimeout(() => setDebouncedSearch(search), 300)
+    return () => clearTimeout(searchTimer.current)
+  }, [search])
+
+  // Server-side search — calls GET /units?search=... (same API as warehouse)
+  useEffect(() => {
+    const params = {}
+    if (debouncedSearch.trim()) params.search = debouncedSearch.trim()
+    setSearching(true)
+    unitsApi.list(params)
+      .then(d => setUnits(d.units || []))
+      .catch(() => {})
+      .finally(() => { setSearching(false); setLoading(false) })
+  }, [debouncedSearch])
+
   useEffect(() => {
     warehousesApi.list().then(d => setWhList(d.warehouses || [])).catch(() => {})
-    unitsApi.list().then(d => setUnits(d.units || [])).catch(() => {}).finally(() => setLoading(false))
     if (user?.id) {
       const params = user.project_id ? { project_id: user.project_id } : { requester_id: user.id }
       requestsApi.list(params).then(d => {
@@ -65,13 +90,22 @@ export default function WarehouseViewPage() {
 
   async function submitCart() {
     if (!cart.length) return
+    if (!cartDateStart || !cartDateEnd) return
     setCartSending(true)
     try {
-      await requestsApi.create({ unit_ids: cart, project_id: user?.project_id || null })
+      const periodNote = `Период аренды: ${new Date(cartDateStart).toLocaleDateString('ru-RU')} — ${new Date(cartDateEnd).toLocaleDateString('ru-RU')}`
+      await requestsApi.create({
+        unit_ids: cart,
+        project_id: user?.project_id || null,
+        deadline: cartDateEnd,
+        notes: periodNote,
+      })
       const map = { ...requestedUnits }
       for (const id of cart) map[id] = 'pending'
       setRequestedUnits(map)
       setCart([])
+      setCartDateStart('')
+      setCartDateEnd('')
       setShowCart(false)
       setSuccessPopup(true)
       setTimeout(() => setSuccessPopup(false), 2500)
@@ -80,11 +114,16 @@ export default function WarehouseViewPage() {
   }
 
   const filtered = units.filter(u => {
-    const matchSearch = !search || u.name.toLowerCase().includes(search.toLowerCase()) || (u.serial || '').toLowerCase().includes(search.toLowerCase())
     const matchCat = category === 'all' || u.category === category
     const matchWh = selectedWh === 'all' || u.warehouse_id === selectedWh
-    return matchSearch && matchCat && matchWh
+    return matchCat && matchWh
   })
+
+  // Split into 3 tiers: direct → similar (close synonyms) → related (category siblings)
+  const directUnits = filtered.filter(u => !u._match || u._match === 'direct')
+  const similarUnits = filtered.filter(u => u._match === 'similar')
+  const relatedUnits = filtered.filter(u => u._match === 'related')
+  const isSearching = debouncedSearch.trim().length > 0
 
   return (
     <ProductionLayout>
@@ -111,7 +150,7 @@ export default function WarehouseViewPage() {
                   const url = data.url || data.link
                   if (url) setPublicLink(`${window.location.origin}${url}`)
                 } catch { /* silent */ }
-              }}>Публичная ссылка</Button>
+              }}>Партнёрская ссылка</Button>
               <Button onClick={() => window.location.href = '/production/units?add=1'}>+ Новая единица</Button>
             </div>
           )}
@@ -168,31 +207,39 @@ export default function WarehouseViewPage() {
 
         {/* Grid */}
         {viewMode === 'grid' && (
+          <div>
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(170px, 1fr))', gap: 12 }}>
-            {filtered.map(u => {
+            {(isSearching ? directUnits : filtered).map(u => {
               const reqStatus = requestedUnits[u.id]
+              const isWrittenOff = u.status === 'written_off' || u.misplaced
               return (
                 <div key={u.id} onClick={() => setCardId(u.id)} style={{
-                  background: 'var(--card)', borderRadius: 'var(--radius-card)',
+                  background: isWrittenOff ? 'var(--bg-secondary)' : 'var(--card)',
+                  borderRadius: 'var(--radius-card)',
                   border: '1px solid var(--border)', cursor: 'pointer', overflow: 'hidden',
+                  filter: isWrittenOff ? 'grayscale(1)' : 'none', opacity: isWrittenOff ? 0.6 : 1,
                 }}>
                   <div style={{
                     aspectRatio: '1', background: 'var(--bg)', display: 'flex',
                     alignItems: 'center', justifyContent: 'center', fontSize: 40, overflow: 'hidden',
                   }}>
                     {u.photo_url
-                      ? <img src={u.photo_url} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+                      ? <img src={u.photo_url} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover', filter: isWrittenOff ? 'blur(6px)' : 'none' }} />
                       : <span>📦</span>}
                   </div>
                   <div style={{ padding: '10px 12px' }}>
-                    <div style={{ fontWeight: 500, fontSize: 13, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{u.name}</div>
+                    <div style={{ fontWeight: 500, fontSize: 13, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', textDecoration: isWrittenOff ? 'line-through' : 'none', color: isWrittenOff ? 'var(--muted)' : 'var(--text)' }}>{u.name}</div>
                     <div style={{ fontSize: 11, color: 'var(--muted)', marginTop: 2 }}>{categoryLabel(u.category)}</div>
                     <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 6 }}>
                       <Badge color={STATUS_COLOR[u.status]}>{STATUS_LABEL[u.status]}</Badge>
                       {!reqStatus && u.status === 'on_stock' && (
-                        <button onClick={e => { e.stopPropagation(); cart.includes(u.id) ? removeFromCart(u.id) : addToCart(u.id) }}
-                          style={{ fontSize: 11, padding: '2px 8px', borderRadius: 6, border: '1px solid var(--border)', background: cart.includes(u.id) ? 'var(--red)' : 'var(--accent)', color: '#fff', cursor: 'pointer' }}>
-                          {cart.includes(u.id) ? '−' : '+'}
+                        <button onClick={e => { e.stopPropagation(); cart.includes(u.id) ? removeFromCart(u.id) : addToCart(u.id) }} style={{
+                          display: 'inline-flex', alignItems: 'center', gap: 4,
+                          fontSize: 12, fontWeight: 500,
+                          color: cart.includes(u.id) ? 'var(--red)' : 'var(--accent)',
+                          background: 'none', border: 'none', padding: 0, cursor: 'pointer',
+                        }}>
+                          {cart.includes(u.id) ? <><Minus size={14} /> Убрать</> : <><Plus size={14} /> В корзину</>}
                         </button>
                       )}
                       {reqStatus && REQUEST_STATUSES[reqStatus] && <Badge color={REQUEST_STATUSES[reqStatus].color}>{REQUEST_STATUSES[reqStatus].label}</Badge>}
@@ -202,6 +249,48 @@ export default function WarehouseViewPage() {
               )
             })}
           </div>
+          {isSearching && [
+            { items: similarUnits, label: 'Похожее', opacity: 0.85 },
+            { items: relatedUnits, label: 'Из категории', opacity: 0.65 },
+          ].map(({ items, label, opacity }) => items.length > 0 && (
+            <div key={label}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 10, margin: '20px 0 12px', color: 'var(--muted)' }}>
+                <div style={{ flex: 1, height: 1, background: 'var(--border)' }} />
+                <span style={{ fontSize: 13, fontWeight: 500, whiteSpace: 'nowrap' }}>{label}</span>
+                <div style={{ flex: 1, height: 1, background: 'var(--border)' }} />
+              </div>
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(170px, 1fr))', gap: 12 }}>
+                {items.map(u => {
+                  const reqStatus = requestedUnits[u.id]
+                  return (
+                    <div key={u.id} onClick={() => setCardId(u.id)} style={{
+                      background: 'var(--card)', borderRadius: 'var(--radius-card)',
+                      border: '1px solid var(--border)', cursor: 'pointer', overflow: 'hidden', opacity,
+                    }}>
+                      <div style={{ aspectRatio: '1', background: 'var(--bg)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 40, overflow: 'hidden' }}>
+                        {u.photo_url ? <img src={u.photo_url} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover' }} /> : <span>📦</span>}
+                      </div>
+                      <div style={{ padding: '10px 12px' }}>
+                        <div style={{ fontWeight: 500, fontSize: 13, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{u.name}</div>
+                        <div style={{ fontSize: 11, color: 'var(--muted)', marginTop: 2 }}>{categoryLabel(u.category)}</div>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 6 }}>
+                          <Badge color={STATUS_COLOR[u.status]}>{STATUS_LABEL[u.status]}</Badge>
+                          {!reqStatus && u.status === 'on_stock' && (
+                            <button onClick={e => { e.stopPropagation(); cart.includes(u.id) ? removeFromCart(u.id) : addToCart(u.id) }}
+                              style={{ fontSize: 11, padding: '2px 8px', borderRadius: 6, border: '1px solid var(--border)', background: cart.includes(u.id) ? 'var(--red)' : 'var(--accent)', color: '#fff', cursor: 'pointer' }}>
+                              {cart.includes(u.id) ? '−' : '+'}
+                            </button>
+                          )}
+                          {reqStatus && REQUEST_STATUSES[reqStatus] && <Badge color={REQUEST_STATUSES[reqStatus].color}>{REQUEST_STATUSES[reqStatus].label}</Badge>}
+                        </div>
+                      </div>
+                    </div>
+                  )
+                })}
+              </div>
+            </div>
+          ))}
+          </div>
         )}
 
         {/* Rows */}
@@ -210,10 +299,12 @@ export default function WarehouseViewPage() {
             {filtered.map(u => {
               const reqStatus = requestedUnits[u.id]
               const isOpen = expanded === u.id
+              const isWrittenOff = u.status === 'written_off' || u.misplaced
               return (
                 <div key={u.id} style={{
-                  background: 'var(--white)', borderRadius: 'var(--radius-card)',
+                  background: isWrittenOff ? 'var(--bg-secondary)' : 'var(--white)', borderRadius: 'var(--radius-card)',
                   border: '1px solid var(--border)', overflow: 'hidden',
+                  filter: isWrittenOff ? 'grayscale(1)' : 'none', opacity: isWrittenOff ? 0.6 : 1,
                 }}>
                   <div className="wv-row" style={{ display: 'flex', alignItems: 'center', gap: 14, padding: '14px 16px', cursor: 'pointer' }}
                     onClick={() => setExpanded(isOpen ? null : u.id)}>
@@ -224,11 +315,11 @@ export default function WarehouseViewPage() {
                       overflow: 'hidden',
                     }}>
                       {u.photo_url
-                        ? <img src={u.photo_url} alt="" style={{ width: '100%', height: '100%', objectFit: 'contain' }} />
+                        ? <img src={u.photo_url} alt="" style={{ width: '100%', height: '100%', objectFit: 'contain', filter: isWrittenOff ? 'blur(4px)' : 'none' }} />
                         : '📦'}
                     </div>
                     <div className="wv-info" style={{ flex: 1, minWidth: 0 }}>
-                      <div style={{ fontWeight: 500, fontSize: 14, cursor: 'pointer', color: 'var(--accent)' }}
+                      <div style={{ fontWeight: 500, fontSize: 14, cursor: 'pointer', color: isWrittenOff ? 'var(--muted)' : 'var(--accent)', textDecoration: isWrittenOff ? 'line-through' : 'none' }}
                         onClick={e => { e.stopPropagation(); setCardId(u.id) }}>{u.name}</div>
                       <div style={{ fontSize: 12, color: 'var(--muted)', marginTop: 2 }}>
                         {u.serial ? `${u.serial} · ` : ''}{categoryLabel(u.category)}{(u.cell_custom || u.cell_code) ? ` · Полка ${u.cell_custom || u.cell_code}` : ''}
@@ -271,20 +362,26 @@ export default function WarehouseViewPage() {
           <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
             {filtered.map(u => {
               const reqStatus = requestedUnits[u.id]
+              const isWrittenOff = u.status === 'written_off' || u.misplaced
               return (
                 <div key={u.id} onClick={() => setCardId(u.id)} style={{
                   display: 'flex', alignItems: 'center', gap: 12, padding: '8px 12px',
-                  background: 'var(--card)', borderRadius: 'var(--radius-btn)', cursor: 'pointer',
+                  background: isWrittenOff ? 'var(--bg-secondary)' : 'var(--card)', borderRadius: 'var(--radius-btn)', cursor: 'pointer',
+                  filter: isWrittenOff ? 'grayscale(1)' : 'none', opacity: isWrittenOff ? 0.6 : 1,
                 }}>
-                  <div style={{ flex: 1, minWidth: 0, fontSize: 13, fontWeight: 500, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{u.name}</div>
+                  <div style={{ flex: 1, minWidth: 0, fontSize: 13, fontWeight: 500, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', textDecoration: isWrittenOff ? 'line-through' : 'none', color: isWrittenOff ? 'var(--muted)' : 'var(--text)' }}>{u.name}</div>
                   {u.serial && <span style={{ fontSize: 12, color: 'var(--muted)', flexShrink: 0 }}>{u.serial}</span>}
                   <span style={{ fontSize: 12, color: 'var(--muted)', flexShrink: 0 }}>{categoryLabel(u.category)}</span>
                   <Badge color={STATUS_COLOR[u.status]}>{STATUS_LABEL[u.status]}</Badge>
                   <div onClick={e => e.stopPropagation()}>
                     {!reqStatus && u.status === 'on_stock' && (
-                      <button onClick={() => cart.includes(u.id) ? removeFromCart(u.id) : addToCart(u.id)}
-                        style={{ fontSize: 11, padding: '2px 8px', borderRadius: 6, border: '1px solid var(--border)', background: cart.includes(u.id) ? 'var(--red)' : 'var(--accent)', color: '#fff', cursor: 'pointer' }}>
-                        {cart.includes(u.id) ? '−' : '+'}
+                      <button onClick={() => cart.includes(u.id) ? removeFromCart(u.id) : addToCart(u.id)} style={{
+                        display: 'inline-flex', alignItems: 'center', gap: 4,
+                        fontSize: 12, fontWeight: 500,
+                        color: cart.includes(u.id) ? 'var(--red)' : 'var(--accent)',
+                        background: 'none', border: 'none', padding: 0, cursor: 'pointer',
+                      }}>
+                        {cart.includes(u.id) ? <><Minus size={14} /> Убрать</> : <><Plus size={14} /> В корзину</>}
                       </button>
                     )}
                     {reqStatus && REQUEST_STATUSES[reqStatus] && <Badge color={REQUEST_STATUSES[reqStatus].color}>{REQUEST_STATUSES[reqStatus].label}</Badge>}
@@ -297,66 +394,109 @@ export default function WarehouseViewPage() {
       </div>
       {cardId && <UnitCardModal unitId={cardId} onClose={() => setCardId(null)} />}
 
-      {/* Floating cart button */}
+      {/* Floating cart — бренд-стиль партнёрского кабинета (gold FAB на ink-900) */}
       {cart.length > 0 && !showCart && (
         <button onClick={() => setShowCart(true)} style={{
-          position: 'fixed', bottom: 24, right: 24, zIndex: 300,
-          height: 52, padding: '0 24px', borderRadius: 26,
-          background: 'var(--blue)', color: '#fff', border: 'none',
-          fontSize: 14, fontWeight: 600, cursor: 'pointer',
-          boxShadow: '0 4px 16px rgba(0,0,0,0.18)',
-          display: 'flex', alignItems: 'center', gap: 8,
-        }}>
-          🛒 Корзина ({cart.length})
+          position: 'fixed', bottom: 26, right: 26, zIndex: 300,
+          width: 58, height: 58, borderRadius: '50%',
+          background: 'var(--ink-900)', border: '2px solid var(--gold-500)',
+          color: 'var(--gold-400)', cursor: 'pointer',
+          display: 'flex', alignItems: 'center', justifyContent: 'center',
+          boxShadow: '0 8px 24px rgba(0,0,0,0.25), 0 2px 6px rgba(184,147,90,0.2)',
+          transition: 'transform 0.12s',
+        }}
+          onMouseEnter={e => e.currentTarget.style.transform = 'scale(1.06)'}
+          onMouseLeave={e => e.currentTarget.style.transform = 'scale(1)'}
+        >
+          <ShoppingCart size={22} strokeWidth={1.8} />
+          <span style={{
+            position: 'absolute', top: -4, right: -4,
+            background: 'var(--gold-500)', color: 'var(--ink-900)',
+            borderRadius: '50%', width: 22, height: 22,
+            fontSize: 11, fontWeight: 700,
+            display: 'flex', alignItems: 'center', justifyContent: 'center',
+            fontVariantNumeric: 'tabular-nums',
+            boxShadow: '0 2px 6px rgba(0,0,0,0.2)',
+          }}>{cart.length}</span>
         </button>
       )}
 
-      {/* Cart modal */}
+      {/* Cart modal — бренд-стиль партнёрского кабинета */}
       {showCart && (
-        <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.45)', zIndex: 400, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16 }}
+        <div style={{ position: 'fixed', inset: 0, background: 'rgba(10,10,10,0.55)', backdropFilter: 'blur(3px)', zIndex: 400, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16 }}
           onClick={() => setShowCart(false)}>
-          <div style={{ background: 'var(--white)', borderRadius: 'var(--radius-card)', padding: 24, maxWidth: 500, width: '100%', maxHeight: '80vh', overflowY: 'auto' }}
+          <div style={{ background: 'var(--white)', borderRadius: 14, padding: 24, maxWidth: 500, width: '100%', maxHeight: '85vh', overflowY: 'auto', boxShadow: '0 16px 48px rgba(0,0,0,0.25)' }}
             onClick={e => e.stopPropagation()}>
-            <div style={{ fontWeight: 600, fontSize: 16, marginBottom: 16 }}>Корзина ({cart.length})</div>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 20 }}>
+              <div style={{ fontWeight: 600, fontSize: 16 }}>Корзина ({cart.length})</div>
+              <button onClick={() => setShowCart(false)} style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--muted)', padding: 4 }}><X size={18} /></button>
+            </div>
             {cart.length === 0 ? (
               <div style={{ color: 'var(--muted)', fontSize: 13, padding: '20px 0', textAlign: 'center' }}>Корзина пуста</div>
             ) : (
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginBottom: 16 }}>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginBottom: 20 }}>
                 {cart.map(uid => {
                   const u = units.find(x => x.id === uid)
                   if (!u) return null
                   return (
                     <div key={uid} style={{
                       display: 'flex', alignItems: 'center', gap: 10, padding: '10px 12px',
-                      borderRadius: 8, background: 'var(--bg)', border: '1px solid var(--border)',
+                      border: '1px solid var(--border)', borderRadius: 'var(--radius-btn)',
                     }}>
                       <div style={{
                         width: 40, height: 40, borderRadius: 6, flexShrink: 0,
-                        background: 'var(--border)', display: 'flex', alignItems: 'center', justifyContent: 'center',
-                        fontSize: 16, overflow: 'hidden',
+                        background: 'var(--bg)',
+                        display: 'flex', alignItems: 'center', justifyContent: 'center',
+                        overflow: 'hidden',
                       }}>
                         {u.photo_url
-                          ? <img src={u.photo_url} alt="" style={{ width: '100%', height: '100%', objectFit: 'contain' }} />
-                          : '📦'}
+                          ? <img src={u.photo_url} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+                          : <Package size={16} style={{ color: 'var(--muted)' }} />}
                       </div>
-                      <div style={{ flex: 1 }}>
-                        <div style={{ fontWeight: 500, fontSize: 13 }}>{u.name}</div>
-                        <div style={{ fontSize: 11, color: 'var(--muted)' }}>{u.serial || ''}</div>
+                      <div style={{ flex: 1, minWidth: 0 }}>
+                        <div style={{ fontSize: 13, fontWeight: 500, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{u.name}</div>
+                        <div style={{ fontSize: 11, color: 'var(--muted)' }}>{categoryLabel(u.category)}</div>
                       </div>
                       <button onClick={() => removeFromCart(uid)} style={{
-                        fontSize: 18, color: 'var(--muted)', background: 'none', border: 'none', cursor: 'pointer', padding: '0 4px',
-                      }}>×</button>
+                        background: 'none', border: 'none', cursor: 'pointer', color: 'var(--red)', padding: 4,
+                      }}><X size={16} /></button>
                     </div>
                   )
                 })}
               </div>
             )}
+            {/* Период аренды — обязательно, как в публичной ссылке */}
+            {cart.length > 0 && (
+              <div style={{ marginBottom: 14 }}>
+                <div style={{ fontSize: 12, fontWeight: 500, marginBottom: 6, color: 'var(--text)' }}>Период использования *</div>
+                <div style={{ display: 'flex', gap: 8 }}>
+                  <div style={{ flex: 1 }}>
+                    <div style={{ fontSize: 10, color: 'var(--muted)', marginBottom: 4 }}>С</div>
+                    <input type="date" value={cartDateStart} onChange={e => setCartDateStart(e.target.value)}
+                      min={new Date().toISOString().slice(0, 10)}
+                      style={{ width: '100%', height: 36, padding: '0 10px', border: '1px solid var(--border)', borderRadius: 8, fontSize: 13, boxSizing: 'border-box' }} />
+                  </div>
+                  <div style={{ flex: 1 }}>
+                    <div style={{ fontSize: 10, color: 'var(--muted)', marginBottom: 4 }}>По</div>
+                    <input type="date" value={cartDateEnd} onChange={e => setCartDateEnd(e.target.value)}
+                      min={cartDateStart || new Date().toISOString().slice(0, 10)}
+                      style={{ width: '100%', height: 36, padding: '0 10px', border: '1px solid var(--border)', borderRadius: 8, fontSize: 13, boxSizing: 'border-box' }} />
+                  </div>
+                </div>
+              </div>
+            )}
+
             <div style={{ display: 'flex', gap: 8 }}>
               <Button variant="secondary" fullWidth onClick={() => setShowCart(false)}>Закрыть</Button>
-              <Button fullWidth disabled={cart.length === 0 || cartSending} onClick={submitCart}>
+              <Button fullWidth disabled={cart.length === 0 || cartSending || !cartDateStart || !cartDateEnd} onClick={() => setConfirmCart(true)}>
                 {cartSending ? 'Отправка...' : `Оформить заявку (${cart.length})`}
               </Button>
             </div>
+            {cart.length > 0 && (!cartDateStart || !cartDateEnd) && (
+              <div style={{ fontSize: 11, color: 'var(--muted)', marginTop: 8, textAlign: 'center' }}>
+                Укажите даты начала и окончания использования
+              </div>
+            )}
           </div>
         </div>
       )}
@@ -369,12 +509,23 @@ export default function WarehouseViewPage() {
           Заявка успешно оформлена
         </div>
       )}
+      <ConfirmModal
+        open={confirmCart}
+        title="Подтвердить заявку"
+        message={cart.length > 0 && cartDateStart && cartDateEnd
+          ? `Отправить заявку на ${cart.length} ед. на период ${new Date(cartDateStart).toLocaleDateString('ru-RU')} — ${new Date(cartDateEnd).toLocaleDateString('ru-RU')}?`
+          : ''}
+        confirmLabel="Подтвердить"
+        cancelLabel="Отмена"
+        onConfirm={() => { setConfirmCart(false); submitCart() }}
+        onCancel={() => setConfirmCart(false)}
+      />
       {publicLink && (
         <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.45)', zIndex: 500, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16 }}
           onClick={() => { setPublicLink(''); setLinkCopied(false) }}>
           <div style={{ background: 'var(--white)', borderRadius: 'var(--radius-card)', padding: 24, maxWidth: 440, width: '100%' }}
             onClick={e => e.stopPropagation()}>
-            <div style={{ fontWeight: 600, fontSize: 16, marginBottom: 8 }}>Публичная ссылка на склад</div>
+            <div style={{ fontWeight: 600, fontSize: 16, marginBottom: 8 }}>Партнёрская ссылка на склад</div>
             <div style={{ fontSize: 13, color: 'var(--muted)', marginBottom: 16 }}>Отправьте эту ссылку для просмотра склада и подачи заявки на аренду</div>
             <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 16 }}>
               <input readOnly value={publicLink} style={{ flex: 1, height: 38, padding: '0 10px', border: '1px solid var(--border)', borderRadius: 'var(--radius-btn)', fontSize: 12, background: 'var(--bg)', fontFamily: 'monospace' }} />

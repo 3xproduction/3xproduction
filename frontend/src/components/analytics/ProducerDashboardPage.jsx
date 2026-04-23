@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react'
 import ProductionLayout from '../production/ProductionLayout'
 import { categoryLabel } from '../../constants/categories'
-import { analytics, projects as projectsApi, rent as rentApi } from '../../services/api'
+import { analytics, projects as projectsApi, rent as rentApi, debts as debtsApi, writeoffs as writeoffsApi } from '../../services/api'
 
 export default function ProducerDashboardPage() {
   const [data, setData] = useState(null)
@@ -10,11 +10,25 @@ export default function ProducerDashboardPage() {
   const [projectList, setProjectList] = useState([])
   const [selectedProject, setSelectedProject] = useState('')
   const [rentDeals, setRentDeals] = useState([])
+  const [notReturned, setNotReturned] = useState({ total: 0, debts: 0, writeoffs: 0 })
 
   useEffect(() => {
     projectsApi.list().then(d => setProjectList(d.projects || [])).catch(() => {})
     rentApi.list().then(d => setRentDeals(d.deals || [])).catch(() => {})
     analytics.warehouse().then(setWarehouseData).catch(() => {})
+    Promise.all([
+      debtsApi.list('open').then(d => (d.debts || []).length).catch(() => 0),
+      writeoffsApi.list().then(d => {
+        const ws = d.writeoffs || []
+        return {
+          writeoffs: ws.filter(w => w.kind === 'writeoff').length,
+          legacyDebts: ws.filter(w => w.kind === 'debt').length,
+        }
+      }).catch(() => ({ writeoffs: 0, legacyDebts: 0 })),
+    ]).then(([debts, w]) => {
+      const totalDebts = debts + w.legacyDebts
+      setNotReturned({ debts: totalDebts, writeoffs: w.writeoffs, total: totalDebts + w.writeoffs })
+    })
   }, [])
 
   useEffect(() => {
@@ -66,14 +80,22 @@ export default function ProducerDashboardPage() {
         <div className="resp-3-col" style={{ marginBottom: 20 }}>
           <StatCard label="Потрачено" value={totalBudget.toLocaleString('ru-RU') + ' ₽'} color="var(--blue)" />
           <StatCard label="Хранится" value={Number(assetVal.total_assets_value || 0).toLocaleString('ru-RU') + ' ₽'} color="var(--green)" />
-          <StatCard label="Выдано" value={Number(assetVal.issued_assets_value || 0).toLocaleString('ru-RU') + ' ₽'} color="var(--amber)" />
+          <StatCard label="Выдано"
+            value={`${assetVal.issued_count || 0} ед.`}
+            color="var(--amber)"
+            tooltip={`Сумма: ${Number(assetVal.issued_assets_value || 0).toLocaleString('ru-RU')} ₽`} />
         </div>
 
         {/* Аренда */}
         <div className="resp-3-col" style={{ marginBottom: 28 }}>
           <StatCard label="Активные сделки" value={activeDeals} color="var(--blue)" />
           <StatCard label="Выручка с аренды" value={rentRevenue.toLocaleString('ru-RU') + ' ₽'} color="var(--green)" />
-          <StatCard label="Просрочено" value={overdueDeals} color="var(--red)" />
+          <StatCard
+            label="Просрочено"
+            value={overdueDeals + notReturned.total}
+            color="var(--red)"
+            tooltip={`Аренда — ${overdueDeals} · Долги — ${notReturned.debts} · Списания — ${notReturned.writeoffs}`}
+          />
         </div>
 
         <div className="resp-2-col" style={{ marginBottom: 20 }}>
@@ -164,11 +186,35 @@ export default function ProducerDashboardPage() {
   )
 }
 
-function StatCard({ label, value, color }) {
+function StatCard({ label, value, color, tooltip }) {
   return (
-    <div style={{ background: 'var(--white)', border: '1px solid var(--border)', borderRadius: 'var(--radius-card)', padding: '18px' }}>
+    <div style={{
+      background: 'var(--white)', border: '1px solid var(--border)',
+      borderRadius: 'var(--radius-card)', padding: '18px',
+      position: 'relative',
+    }}
+    onMouseEnter={e => {
+      if (!tooltip) return
+      const tip = e.currentTarget.querySelector('.pd-stat-tip')
+      if (tip) tip.style.opacity = '1'
+    }}
+    onMouseLeave={e => {
+      if (!tooltip) return
+      const tip = e.currentTarget.querySelector('.pd-stat-tip')
+      if (tip) tip.style.opacity = '0'
+    }}>
       <div style={{ fontSize: 22, fontWeight: 700, color }}>{value}</div>
       <div style={{ fontSize: 12, color: 'var(--muted)', marginTop: 4 }}>{label}</div>
+      {tooltip && (
+        <div className="pd-stat-tip" style={{
+          position: 'absolute', bottom: 'calc(100% + 6px)', left: '50%', transform: 'translateX(-50%)',
+          background: '#1a1a1a', color: '#fff', fontSize: 12, padding: '8px 12px', borderRadius: 8,
+          whiteSpace: 'nowrap', opacity: 0, transition: 'opacity 0.15s', pointerEvents: 'none',
+          boxShadow: '0 4px 12px rgba(0,0,0,0.15)', zIndex: 20, fontWeight: 500,
+        }}>
+          {tooltip}
+        </div>
+      )}
     </div>
   )
 }
