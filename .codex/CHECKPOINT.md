@@ -7,14 +7,14 @@ Current task:
 - Warehouse roles can also replenish stock.
 - Site director can also replenish stock.
 - Receipt attachment is allowed but not required for now.
-- Result must be deployed to staging/test.
+- Result was deployed to staging/test and then prod after explicit user approval.
 
 Working notes:
 - Project root: `C:\Users\Editor08\Desktop\3xproduction`.
 - Worktree is already heavily dirty and `master` is ahead of `origin/master` by 2 commits.
 - Do not revert existing user/WIP changes.
 - Before staging deploy, run local checks and the Claude/Codex review gate required by `CODEX.md`.
-- Prod deploy is out of scope unless the user explicitly approves it.
+- Prod deploy was explicitly approved by the user and completed as `v2.76`.
 
 Changes in this continuation:
 - Fixed `frontend/src/components/shared/AddUnitModal.jsx` so warehouse directors/deputies are not blocked by the regular warehouse valuation requirement when adding units in `mode="admin"`.
@@ -27,4 +27,7 @@ Verification/deploy:
 - Full frontend lint remains red from pre-existing repo-wide issues; not fixed in this task.
 - Claude fast review: PASS. Gate: PASS with `-SkipFrontend`.
 - Deployed to staging `test-v2.87`, revision `bbav878tgpbr1lp0ag17`, digest `sha256:c67f3aa1964f2318f702247d793ae4e09c6f9f91692195e3547e31db4fbd732b`.
-- Staging smoke: `/health=200`, `/manifest.webmanifest=200`; API smoke with `X-Auth-Token`: `warehouse_staff` create/list/delete admin-stock OK, `project_director` create/list/delete admin-stock OK, `producer` `/admin-units` returns 403.
+- Staging smoke: `/health=200`, `/manifest.webmanifest=200`; `/units/ai-test` OK through `ANTHROPIC_BASE_URL=https://anthropic-proxy.pavelbelov590.workers.dev`; API smoke with `X-Auth-Token`: `warehouse_staff` create/list/delete admin-stock OK, `project_director` create/list/delete admin-stock OK, `producer` `/admin-units` returns 403.
+- Deployed to prod `v2.76`, revision `bbakbbc38oq4rfj7a5to`, digest `sha256:88d79f3640b5a1027a1dfaef1ac554ab77e78af39842f5717891b9f745a8404a`.
+- Prod backup before deploy: `c9q6s8unjudiha3iqeo6:mdbp13msh82s1jg2pgt1`, status `DONE`, created_at `2026-05-13T08:06:19Z`.
+- Prod smoke after deploy: `/health=200`, `/manifest.webmanifest=200`, `/=200`; title/meta title present.

@@ -21,10 +21,12 @@ prev 622c1f5 2026-04-23 16:24:15 +0300 feat: PWA + pino logger + prod-mode harde
 
 ```text
 staging xproduction-test: test-v2.87, revision bbav878tgpbr1lp0ag17, digest sha256:c67f3aa1964f2318f702247d793ae4e09c6f9f91692195e3547e31db4fbd732b
-prod    xproduction:      v2.75,      revision bba8qc7vbpde4utpp5r9, digest sha256:936ec2f3a6c4e4f7b50cdaf0c1926c86775d9ab4fadcc63f3a4a8f17ae1c7cee
-backup before prod: c9q6s8unjudiha3iqeo6:mdbes31cf62ovtkd5dkj, status DONE, created_at 2026-05-12T11:10:00Z
-previous prod: v2.74, revision bba6se1qs8q6nnouor4r
+prod    xproduction:      v2.76,      revision bbakbbc38oq4rfj7a5to, digest sha256:88d79f3640b5a1027a1dfaef1ac554ab77e78af39842f5717891b9f745a8404a
+backup before prod: c9q6s8unjudiha3iqeo6:mdbp13msh82s1jg2pgt1, status DONE, created_at 2026-05-13T08:06:19Z
+previous prod: v2.75, revision bba8qc7vbpde4utpp5r9
 ```
+
+Prod `v2.76` includes the Anthropic proxy deploy default (`ANTHROPIC_BASE_URL=https://anthropic-proxy.pavelbelov590.workers.dev`) used to restore AI photo recognition. Prod smoke after deploy: `/health=200`, `/manifest.webmanifest=200`, `/=200`.
 
 Shipped scope этого релиза: Админка/admin-stock в `AddUnitModal mode="admin"` — убран старый блок «Размещение» со стоимостью единицы, складом и полкой; цена покупки стала необязательной; второе «Временное понятие» заменено на «Адрес хранения» с выбором существующего склада или ручным вводом; верхняя кнопка «Назад» добавлена на длинных шагах визарда. Backend `/admin-units` принимает купленные админские позиции без `purchase_price`.
 
