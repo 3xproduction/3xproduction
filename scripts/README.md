@@ -67,8 +67,8 @@ bash scripts/with-prod-pg-access.sh "
 | Команда | Назначение |
 |---|---|
 | `npm.cmd run review` | Создать `.codex/reviews/REVIEW_PACKET.md` для Claude. |
-| `npm.cmd run review:fast -- -Task "..." -Focus "file1,file2"` | Быстрое ревью маленькой задачи: компактный prompt, Claude CLI без инструментов, timeout 3 минуты. |
-| `npm.cmd run review:claude` | Попробовать headless Claude CLI и сохранить `.codex/reviews/CLAUDE_REVIEW.md`. Если CLI недоступен — создаст manual prompt. |
+| `npm.cmd run review:fast -- -Task "..." -Focus "file1,file2"` | Быстрое ревью маленькой задачи: компактный prompt, stdin-запуск Claude CLI, timeout 10 минут. |
+| `npm.cmd run review:auto` / `npm.cmd run review:claude` | Headless Claude CLI через общий runner, stdin, async stdout/stderr и timeout 30 минут; сохраняет `.codex/reviews/CLAUDE_REVIEW.md`. |
 | `npm.cmd run gate` | Frontend lint/build + проверка свежего `Verdict: PASS` от Claude. |
 | `npm.cmd run deploy:staging:guarded -- 2.66` | Gate, затем staging deploy версии `:test-v2.66`. |
 

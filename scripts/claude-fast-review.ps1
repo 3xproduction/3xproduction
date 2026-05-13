@@ -1,15 +1,17 @@
 param(
   [string]$Task = "",
   [string[]]$Focus = @(),
-  [int]$TimeoutSec = 180,
+  [int]$TimeoutSec = 600,
   [int]$MaxDiffChars = 50000,
-  [int]$MaxFileLines = 220,
+  [int]$MaxFileLines = 320,
+  [string]$BaseRef = "",
   [switch]$NoClaude
 )
 
 $ErrorActionPreference = "Stop"
 $Root = Resolve-Path (Join-Path $PSScriptRoot "..")
 Set-Location $Root
+. (Join-Path $PSScriptRoot "claude-cli.ps1")
 
 $ReviewDir = Join-Path $Root ".codex\reviews"
 New-Item -ItemType Directory -Force -Path $ReviewDir | Out-Null
@@ -18,11 +20,6 @@ $PromptFile = Join-Path $ReviewDir "FAST_REVIEW_PROMPT.md"
 $PacketFile = Join-Path $ReviewDir "REVIEW_PACKET.md"
 $TaskFile = Join-Path $ReviewDir "CLAUDE_REVIEW_TASK.md"
 $ReviewFile = Join-Path $ReviewDir "CLAUDE_REVIEW.md"
-
-function Write-Utf8NoBom {
-  param([string]$Path, [string]$Text)
-  [System.IO.File]::WriteAllText($Path, $Text, (New-Object System.Text.UTF8Encoding($false)))
-}
 
 function Add-Line {
   param([System.Text.StringBuilder]$Sb, [string]$Text = "")
@@ -69,6 +66,10 @@ Add-Line $sb ""
 Add-Line $sb "Focus files:"
 foreach ($f in $Focus) { Add-Line $sb "- $f" }
 Add-Line $sb ""
+$ResolvedBaseRef = Resolve-ReviewBaseRef $BaseRef
+Add-Line $sb "Resolved base ref for branch diff:"
+Add-Line $sb $(if ([string]::IsNullOrWhiteSpace($ResolvedBaseRef)) { "(none)" } else { $ResolvedBaseRef })
+Add-Line $sb ""
 Add-Line $sb "Required output format:"
 Add-Line $sb ""
 Add-Line $sb "# Claude Review"
@@ -89,18 +90,32 @@ Add-Line $sb ""
 
 Add-Line $sb "## Focused Diff"
 Add-Line $sb ""
-Add-Line $sb '```diff'
+Add-Line $sb '~~~~diff'
+$diffParts = New-Object System.Collections.Generic.List[string]
 $diffArgs = @("-c", "core.quotepath=false", "diff", "--") + $Focus
-$oldPreference = $ErrorActionPreference
-$ErrorActionPreference = "Continue"
-$diff = & git @diffArgs 2>&1
-$ErrorActionPreference = $oldPreference
-$diffText = (($diff | Out-String).TrimEnd())
+$dirtyDiff = Invoke-GitText $diffArgs
+if (-not [string]::IsNullOrWhiteSpace($dirtyDiff)) {
+  $diffParts.Add("### Working tree diff`n$dirtyDiff") | Out-Null
+}
+
+if (-not [string]::IsNullOrWhiteSpace($ResolvedBaseRef)) {
+  $range = "$ResolvedBaseRef...HEAD"
+  $branchArgs = @("-c", "core.quotepath=false", "diff", $range, "--") + $Focus
+  $branchDiff = Invoke-GitText $branchArgs
+  if (-not [string]::IsNullOrWhiteSpace($branchDiff)) {
+    $diffParts.Add("### Branch diff ($range)`n$branchDiff") | Out-Null
+  }
+}
+
+$diffText = ($diffParts -join "`n`n")
+if ([string]::IsNullOrWhiteSpace($diffText)) {
+  $diffText = "No focused diff found in working tree or branch range."
+}
 if ($diffText.Length -gt $MaxDiffChars) {
   $diffText = $diffText.Substring(0, $MaxDiffChars) + "`n... diff truncated for fast review; use full review for wider context ..."
 }
 Add-Line $sb $diffText
-Add-Line $sb '```'
+Add-Line $sb '~~~~'
 Add-Line $sb ""
 
 Add-Line $sb "## Focus File Excerpts"
@@ -118,14 +133,14 @@ foreach ($rel in $Focus) {
   $max = [Math]::Min($lines.Length, $MaxFileLines)
   Add-Line $sb ""
   Add-Line $sb "### $rel"
-  Add-Line $sb '```text'
+  Add-Line $sb '~~~~text'
   for ($i = 1; $i -le $max; $i++) {
     Add-Line $sb ("{0,4}: {1}" -f $i, $lines[$i - 1])
   }
   if ($lines.Length -gt $max) {
     Add-Line $sb ("... truncated at {0} of {1} lines ..." -f $max, $lines.Length)
   }
-  Add-Line $sb '```'
+  Add-Line $sb '~~~~'
 }
 
 $prompt = $sb.ToString()
@@ -143,6 +158,9 @@ $Task
 ## Mode
 Fast review. Claude must review only .codex/reviews/FAST_REVIEW_PROMPT.md.
 Do not re-read CLAUDE.md, CODEX.md, wiki, or unrelated files for this packet.
+
+## Base Ref
+$ResolvedBaseRef
 
 ## Focus
 $($Focus -join "`n")
@@ -166,32 +184,16 @@ if ($NoClaude) {
   exit 0
 }
 
-$psi = New-Object System.Diagnostics.ProcessStartInfo
-$psi.FileName = "claude.cmd"
-$psi.WorkingDirectory = $Root
-$psi.UseShellExecute = $false
-$psi.RedirectStandardInput = $true
-$psi.RedirectStandardOutput = $true
-$psi.RedirectStandardError = $true
-$psi.CreateNoWindow = $true
-$psi.Arguments = '-p --output-format text --tools "" --no-session-persistence --effort low'
-
-$proc = New-Object System.Diagnostics.Process
-$proc.StartInfo = $psi
-[void]$proc.Start()
-$proc.StandardInput.Write($prompt)
-$proc.StandardInput.Close()
-
-if (-not $proc.WaitForExit($TimeoutSec * 1000)) {
-  try { $proc.Kill() } catch {}
+$result = Invoke-ClaudeCli -Prompt $prompt -WorkingDirectory $Root -TimeoutSec $TimeoutSec -ExtraArgs @("--no-session-persistence", "--effort", "low")
+if ($result.TimedOut) {
+  if ($result.Stderr) { Write-Host $result.Stderr }
   throw "Claude fast review timed out after $TimeoutSec seconds"
 }
 
-$out = $proc.StandardOutput.ReadToEnd().Trim()
-$err = $proc.StandardError.ReadToEnd().Trim()
-if ($proc.ExitCode -ne 0 -or [string]::IsNullOrWhiteSpace($out)) {
-  if ($err) { Write-Host $err }
-  throw "Claude fast review failed with exit code $($proc.ExitCode)"
+$out = $result.Stdout.Trim()
+if ($result.ExitCode -ne 0 -or [string]::IsNullOrWhiteSpace($out)) {
+  if ($result.Stderr) { Write-Host $result.Stderr }
+  throw "Claude fast review failed with exit code $($result.ExitCode)"
 }
 
 Write-Utf8NoBom $ReviewFile $out
