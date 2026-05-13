@@ -4,16 +4,15 @@
 
 ## Committed Baseline
 
-Документ обновлён 2026-05-12 по committed git-истории, а не по dirty worktree.
-
-Важное уточнение: `git log --since="2026-05-12 00:00"` в локальном репозитории ничего не нашёл. Последний committed baseline:
+Документ обновлён 2026-05-13 после staging/prod-релиза. Актуальная ветка: `wip/admin-stock-2026-05-12-split`.
 
 ```text
-HEAD 0589f53 2026-04-23 16:27:50 +0300 chore: sync git with running production code
-prev 622c1f5 2026-04-23 16:24:15 +0300 feat: PWA + pino logger + prod-mode hardening
+repo docs checkpoint: a3664dc 2026-05-13 11:17:11 +0300 docs: record prod v2.76 deploy
+prod app code at deploy: 12e74f9 2026-05-13 11:01:04 +0300 docs: record staging test-v2.87
+anthropic proxy fix: 99da8da 2026-05-13 10:57:07 +0300 fix: default deploys to anthropic proxy
 ```
 
-В рабочем дереве могут лежать более свежие незакоммиченные WIP-файлы. Не считать их shipped/committed контекстом и не переносить их в документацию, пока пользователь явно не попросит или пока изменения не будут закоммичены. Для проверки committed-состояния используй `git show HEAD:<path>` и `git log`, а не обычное чтение dirty-файлов.
+Prod `v2.76` был собран из чистого committed-состояния после `12e74f9`; более поздние docs-коммиты только фиксируют результат деплоя. Для проверки committed-состояния используй `git log`, `git show HEAD:<path>` и committed diff.
 
 ## Active Deployment Snapshot
 
@@ -30,7 +29,8 @@ Prod `v2.76` includes the Anthropic proxy deploy default (`ANTHROPIC_BASE_URL=ht
 
 Shipped scope этого релиза: Админка/admin-stock в `AddUnitModal mode="admin"` — убран старый блок «Размещение» со стоимостью единицы, складом и полкой; цена покупки стала необязательной; второе «Временное понятие» заменено на «Адрес хранения» с выбором существующего склада или ручным вводом; верхняя кнопка «Назад» добавлена на длинных шагах визарда. Backend `/admin-units` принимает купленные админские позиции без `purchase_price`.
 
-Это именно deployed dirty/WIP snapshot, а не committed baseline. Для committed-документации по-прежнему использовать `git show HEAD:<path>`.
+Prod `v2.76` был собран из чистого committed-состояния после `12e74f9`; текущие более поздние docs-коммиты только документируют релиз.
+
 ## Project
 
 3XMedia Production — full-stack SPA для управления складом реквизита кинопроизводства и production-процессами.
