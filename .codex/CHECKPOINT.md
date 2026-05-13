@@ -26,5 +26,5 @@ Verification/deploy:
 - Focus checks passed: `node --check backend/src/routes/adminUnits.js`, `node --check backend/src/routes/units.js`, `npx.cmd eslint src\components\shared\AddUnitModal.jsx`, `npm.cmd run build`.
 - Full frontend lint remains red from pre-existing repo-wide issues; not fixed in this task.
 - Claude fast review: PASS. Gate: PASS with `-SkipFrontend`.
-- Deployed to staging `test-v2.86`, revision `bbackcngjtmkpiq3p91d`, digest `sha256:a261282364c74e389901d418a3594f7ef5de556496a292201b7c79b078d1a769`.
+- Deployed to staging `test-v2.87`, revision `bbav878tgpbr1lp0ag17`, digest `sha256:c67f3aa1964f2318f702247d793ae4e09c6f9f91692195e3547e31db4fbd732b`.
 - Staging smoke: `/health=200`, `/manifest.webmanifest=200`; API smoke with `X-Auth-Token`: `warehouse_staff` create/list/delete admin-stock OK, `project_director` create/list/delete admin-stock OK, `producer` `/admin-units` returns 403.

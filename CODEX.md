@@ -20,7 +20,7 @@ prev 622c1f5 2026-04-23 16:24:15 +0300 feat: PWA + pino logger + prod-mode harde
 Последний пользовательски подтверждённый cloud-релиз: 2026-05-13.
 
 ```text
-staging xproduction-test: test-v2.86, revision bbackcngjtmkpiq3p91d, digest sha256:a261282364c74e389901d418a3594f7ef5de556496a292201b7c79b078d1a769
+staging xproduction-test: test-v2.87, revision bbav878tgpbr1lp0ag17, digest sha256:c67f3aa1964f2318f702247d793ae4e09c6f9f91692195e3547e31db4fbd732b
 prod    xproduction:      v2.75,      revision bba8qc7vbpde4utpp5r9, digest sha256:936ec2f3a6c4e4f7b50cdaf0c1926c86775d9ab4fadcc63f3a4a8f17ae1c7cee
 backup before prod: c9q6s8unjudiha3iqeo6:mdbes31cf62ovtkd5dkj, status DONE, created_at 2026-05-12T11:10:00Z
 previous prod: v2.74, revision bba6se1qs8q6nnouor4r
