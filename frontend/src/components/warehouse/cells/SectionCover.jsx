@@ -3,6 +3,7 @@
 // Если фото нет — градиент с иконкой типа секции.
 
 import { Package, Shirt, Truck } from 'lucide-react'
+import { sumOnStockCellQty } from '../../../utils/unitQty'
 
 const ICON_BY_TYPE = {
   shelf: Package,
@@ -17,7 +18,7 @@ export default function SectionCover({ section }) {
     .filter(u => u && !/\.(mp4|webm|mov)$/i.test(u))
     .slice(0, 4)
 
-  const occupied = cells.filter(c => c.unit_id && c.unit_status === 'on_stock').length
+  const occupied = sumOnStockCellQty(cells)
   // Места безлимитные — бейдж всегда нейтрально-белый с текстом количества.
   const badgeBg = 'rgba(255,255,255,0.88)'
   const badgeColor = 'var(--text)'

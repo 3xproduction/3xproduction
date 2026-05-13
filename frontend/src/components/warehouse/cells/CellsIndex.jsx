@@ -9,10 +9,11 @@
 import { useEffect, useMemo, useState } from 'react'
 import { useLocation, useNavigate, useParams } from 'react-router-dom'
 import {
-  Package, Shirt, Truck, Plus, Store, Trash2,
+  Package, Shirt, Truck, Plus, Store, Trash2, Pencil,
   X, ChevronDown, Check,
 } from 'lucide-react'
 import WarehouseLayout from '../WarehouseLayout'
+import ProductionLayout from '../../production/ProductionLayout'
 import Button from '../../shared/Button'
 import ConfirmModal from '../../shared/ConfirmModal'
 import UnitCardModal from '../../shared/UnitCardModal'
@@ -23,6 +24,7 @@ import { useBodyLock } from '../../../hooks/useBodyLock'
 import useWarehouseData from './useWarehouseData'
 import NoPlaceList from './NoPlaceList'
 import CreateSectionModal from './CreateSectionModal'
+import { sumOnStockCellQty, sumUnitQty } from '../../../utils/unitQty'
 
 const EDITOR_ROLES = ['warehouse_director', 'warehouse_deputy']
 
@@ -32,13 +34,17 @@ const TILES = [
   { type: 'place',  label: 'Места',    hint: 'Крупные предметы',     Icon: Truck,   gradient: 'linear-gradient(135deg, #e7f3ed 0%, #bfe0cd 100%)' },
 ]
 
-export default function CellsIndex() {
+export default function CellsIndex({ world = 'warehouse' } = {}) {
   const navigate = useNavigate()
   const location = useLocation()
   const { warehouseId } = useParams()
   const { user } = useAuth()
   const toast = useToast()
-  const canEdit = EDITOR_ROLES.includes(user?.role)
+  // В producer-режиме редактирование выключено всегда — продюсер только смотрит.
+  const canEdit = world === 'warehouse' && EDITOR_ROLES.includes(user?.role)
+  // Префикс URL: для producer — /production/cells/..., для warehouse — /cells/...
+  const cellsBase = world === 'production' ? '/production/cells' : '/cells'
+  const Layout = world === 'production' ? ProductionLayout : WarehouseLayout
 
   const {
     warehouses, warehousesLoading, warehouse, sections, loading, reload,
@@ -52,7 +58,7 @@ export default function CellsIndex() {
     if (warehouseId && warehouses.some(w => String(w.id) === String(warehouseId))) return
     const preferredName = localStorage.getItem('warehouse')
     const target = warehouses.find(w => w.name === preferredName) || warehouses[0]
-    navigate(`/cells/${target.id}`, { replace: true })
+    navigate(`${cellsBase}/${target.id}`, { replace: true })
   }, [warehouseId, warehouses, warehousesLoading, navigate])
 
   // Мобильный bottom-sheet со списком складов — chips слишком громоздкие
@@ -95,11 +101,41 @@ export default function CellsIndex() {
   const [createSectionOpen, setCreateSectionOpen] = useState(false)
   // Удаление зала — подтверждение.
   const [confirmDelHall, setConfirmDelHall] = useState(null)
+  // Переименование зала — модалка с инпутом (объект { id, name } или null).
+  const [renameHall, setRenameHall] = useState(null)
+  const [renameValue, setRenameValue] = useState('')
+  const [renaming, setRenaming] = useState(false)
+  // Режим просмотра залов: 'grid' (плитки) или 'list' (компактные строки).
+  const [viewMode, setViewMode] = useState(() => {
+    try { return localStorage.getItem('cellsViewMode') || 'grid' } catch { return 'grid' }
+  })
+  function setViewModePersist(m) {
+    setViewMode(m)
+    try { localStorage.setItem('cellsViewMode', m) } catch { /* quota */ }
+  }
   // Body-lock для всех оверлеев на этой странице.
   useBodyLock(
     showAddWh || noPlaceOpen || createSectionOpen || confirmDelWh ||
-    whSheetOpen || !!cardId || !!confirmDelHall
+    whSheetOpen || !!cardId || !!confirmDelHall || !!renameHall
   )
+
+  async function handleRenameHall() {
+    if (!renameHall) return
+    const next = renameValue.trim()
+    if (!next) { toast?.('Имя не может быть пустым', 'error'); return }
+    if (next === renameHall.name) { setRenameHall(null); return }
+    setRenaming(true)
+    try {
+      await warehousesApi.updateSection(renameHall.id, { name: next })
+      setRenameHall(null)
+      reload()
+      toast?.('Имя зала обновлено', 'success')
+    } catch (e) {
+      toast?.(e.message || 'Ошибка', 'error')
+    } finally {
+      setRenaming(false)
+    }
+  }
 
   async function handleDeleteHall(id) {
     try {
@@ -121,10 +157,8 @@ export default function CellsIndex() {
       const t = s.type || 'shelf'
       if (!map[t]) continue
       map[t].sections += 1
-      for (const c of (s.cells || [])) {
-        map[t].total += 1
-        if (c.unit_id && c.unit_status === 'on_stock') map[t].occ += 1
-      }
+      map[t].total += (s.cells || []).length
+      map[t].occ += sumOnStockCellQty(s.cells)
     }
     return map
   }, [sections])
@@ -150,7 +184,7 @@ export default function CellsIndex() {
       setNewWhName('')
       setNewWhAddress('')
       try { localStorage.setItem('warehouse', wh.name) } catch { /* ignore */ }
-      navigate(`/cells/${wh.id}`, { replace: true })
+      navigate(`${cellsBase}/${wh.id}`, { replace: true })
     } catch (e) {
       toast?.(e.message || 'Ошибка создания склада', 'error')
     } finally {
@@ -170,8 +204,8 @@ export default function CellsIndex() {
       } catch { /* ignore */ }
       toast?.('Склад удалён', 'success')
       const rest = warehouses.filter(w => String(w.id) !== String(warehouseId))
-      if (rest.length) navigate(`/cells/${rest[0].id}`, { replace: true })
-      else navigate('/cells', { replace: true })
+      if (rest.length) navigate(`${cellsBase}/${rest[0].id}`, { replace: true })
+      else navigate(cellsBase, { replace: true })
     } catch (e) {
       toast?.(e.message || 'Ошибка', 'error')
     }
@@ -180,7 +214,7 @@ export default function CellsIndex() {
   const totalSections = sections.length
 
   return (
-    <WarehouseLayout>
+    <Layout>
       <Styles />
 
       <div className="ci-page catalog-enter">
@@ -227,7 +261,7 @@ export default function CellsIndex() {
                         className={`wh-chip ${String(w.id) === String(warehouseId) ? 'active' : ''}`}
                         onClick={() => {
                           try { localStorage.setItem('warehouse', w.name) } catch { /* ignore */ }
-                          navigate(`/cells/${w.id}`)
+                          navigate(`${cellsBase}/${w.id}`)
                         }}>
                         <Store size={12} strokeWidth={1.8} />
                         {w.name}
@@ -262,6 +296,21 @@ export default function CellsIndex() {
                 />
               ) : (
                 <>
+                  {/* Тумблер режима просмотра залов: плитки или компактный список. */}
+                  {halls.length > 0 && (
+                    <div className="ci-view-toggle">
+                      {[
+                        { mode: 'grid', icon: '▦', title: 'Плитки' },
+                        { mode: 'list', icon: '☰', title: 'Список' },
+                      ].map(v => (
+                        <button key={v.mode}
+                          title={v.title}
+                          onClick={() => setViewModePersist(v.mode)}
+                          className={`ci-view-btn${viewMode === v.mode ? ' active' : ''}`}
+                        >{v.icon}</button>
+                      ))}
+                    </div>
+                  )}
                   <div className="ci-tiles">
                     {TILES.map(t => {
                       const st = stats[t.type]
@@ -271,7 +320,7 @@ export default function CellsIndex() {
                       return (
                         <button key={t.type}
                           className="ci-tile"
-                          onClick={() => navigate(`/cells/${warehouseId}/type/${t.type}`)}
+                          onClick={() => navigate(`${cellsBase}/${warehouseId}/type/${t.type}`)}
                         >
                           <div className="ci-tile-thumb" style={{ background: t.gradient }}>
                             <t.Icon size={44} strokeWidth={1.2} color="var(--gold-600)" />
@@ -289,17 +338,13 @@ export default function CellsIndex() {
                       )
                     })}
 
-                    {/* Пользовательские залы (type='hall') — отдельные плитки,
-                        не сливаются в Полки/Вешалки/Места. Клик → в вью зала
-                        (список его дочерних полок/вешалок/мест). */}
-                    {halls.map(h => {
+                    {/* Залы в grid-режиме рендерим прямо здесь как плитки. */}
+                    {viewMode === 'grid' && halls.map(h => {
                       const childSections = sections.filter(
                         s => String(s.parent_section_id) === String(h.id)
                       )
                       const occ = childSections.reduce(
-                        (sum, c) => sum + (c.cells || []).filter(
-                          x => x.unit_id && x.unit_status === 'on_stock'
-                        ).length, 0,
+                        (sum, c) => sum + sumOnStockCellQty(c.cells), 0,
                       )
                       // Детализация по типам: «2 полки · 1 вешалка · 3 места».
                       // Показываем только ненулевые; если всё ноль — «Пусто».
@@ -313,17 +358,26 @@ export default function CellsIndex() {
                       return (
                         <div key={h.id} className="ci-tile-wrap">
                           {canEdit && (
-                            <button
-                              className="ci-tile-del"
-                              title="Удалить зал"
-                              onClick={(e) => { e.stopPropagation(); setConfirmDelHall(h) }}
-                            >
-                              <Trash2 size={14} strokeWidth={1.8} />
-                            </button>
+                            <>
+                              <button
+                                className="ci-tile-edit"
+                                title="Переименовать зал"
+                                onClick={(e) => { e.stopPropagation(); setRenameValue(h.name); setRenameHall(h) }}
+                              >
+                                <Pencil size={14} strokeWidth={1.8} />
+                              </button>
+                              <button
+                                className="ci-tile-del"
+                                title="Удалить зал"
+                                onClick={(e) => { e.stopPropagation(); setConfirmDelHall(h) }}
+                              >
+                                <Trash2 size={14} strokeWidth={1.8} />
+                              </button>
+                            </>
                           )}
                           <button
                             className="ci-tile"
-                            onClick={() => navigate(`/cells/${warehouseId}/hall/${h.id}`)}
+                            onClick={() => navigate(`${cellsBase}/${warehouseId}/hall/${h.id}`)}
                           >
                             <div className="ci-tile-thumb" style={{
                               background: 'linear-gradient(135deg, #f5efe4 0%, #e8d9c0 100%)',
@@ -340,7 +394,7 @@ export default function CellsIndex() {
                       )
                     })}
 
-                    {canEdit && (
+                    {(viewMode === 'grid' || halls.length === 0) && canEdit && (
                       <button
                         className="ci-tile phantom"
                         onClick={() => setCreateSectionOpen(true)}
@@ -354,6 +408,71 @@ export default function CellsIndex() {
                       </button>
                     )}
                   </div>
+
+                  {/* Список-режим залов: компактные строки. На мобилке удобнее
+                      чем плитки — больше залов на экране, плюс кнопки изменить/
+                      удалить inline. */}
+                  {viewMode === 'list' && halls.length > 0 && (
+                    <div className="ci-list">
+                      {halls.map(h => {
+                        const childSections = sections.filter(
+                          s => String(s.parent_section_id) === String(h.id)
+                        )
+                        const occ = childSections.reduce(
+                        (sum, c) => sum + sumOnStockCellQty(c.cells), 0,
+                      )
+                        const counts = { shelf: 0, hanger: 0, place: 0 }
+                        for (const s of childSections) counts[s.type] = (counts[s.type] || 0) + 1
+                        const parts = []
+                        if (counts.shelf)  parts.push(`${counts.shelf} ${pluralShelf(counts.shelf)}`)
+                        if (counts.hanger) parts.push(`${counts.hanger} ${pluralHanger(counts.hanger)}`)
+                        if (counts.place)  parts.push(`${counts.place} ${pluralPlace(counts.place)}`)
+                        const hintText = parts.length ? parts.join(' · ') : 'Пусто'
+                        return (
+                          <div key={h.id} className="ci-list-row"
+                            onClick={() => navigate(`${cellsBase}/${warehouseId}/hall/${h.id}`)}
+                          >
+                            <div className="ci-list-icon">
+                              <Store size={20} strokeWidth={1.6} color="var(--gold-600)" />
+                            </div>
+                            <div className="ci-list-main">
+                              <div className="ci-list-name">{h.name}</div>
+                              <div className="ci-list-hint">{hintText}{occ > 0 ? ` · ${occ} ед.` : ''}</div>
+                            </div>
+                            {canEdit && (
+                              <div className="ci-list-actions" onClick={e => e.stopPropagation()}>
+                                <button
+                                  className="ci-list-act"
+                                  title="Переименовать зал"
+                                  onClick={() => { setRenameValue(h.name); setRenameHall(h) }}
+                                >
+                                  <Pencil size={16} strokeWidth={1.8} />
+                                </button>
+                                <button
+                                  className="ci-list-act ci-list-act-del"
+                                  title="Удалить зал"
+                                  onClick={() => setConfirmDelHall(h)}
+                                >
+                                  <Trash2 size={16} strokeWidth={1.8} />
+                                </button>
+                              </div>
+                            )}
+                          </div>
+                        )
+                      })}
+                      {canEdit && (
+                        <button
+                          className="ci-list-row ci-list-add"
+                          onClick={() => setCreateSectionOpen(true)}
+                        >
+                          <div className="ci-list-icon"><Plus size={20} strokeWidth={1.6} /></div>
+                          <div className="ci-list-main">
+                            <div className="ci-list-name">Создать зал</div>
+                          </div>
+                        </button>
+                      )}
+                    </div>
+                  )}
 
                   {canEdit && (
                     <div className="ci-footer-actions">
@@ -410,7 +529,7 @@ export default function CellsIndex() {
                       onClick={() => {
                         try { localStorage.setItem('warehouse', w.name) } catch { /* ignore */ }
                         setWhSheetOpen(false)
-                        navigate(`/cells/${w.id}`)
+                        navigate(`${cellsBase}/${w.id}`)
                       }}
                     >
                       <div className="ci-wh-sheet-ico"><Store size={18} strokeWidth={1.8} /></div>
@@ -439,7 +558,7 @@ export default function CellsIndex() {
         {noPlaceOpen && (
           <ModalCard
             title="Без места"
-            subtitle={noPlaceLoading ? 'Загрузка…' : `${noPlaceUnits.length} единиц на складе`}
+            subtitle={noPlaceLoading ? 'Загрузка…' : `${sumUnitQty(noPlaceUnits)} единиц на складе`}
             onClose={() => setNoPlaceOpen(false)}
           >
             <NoPlaceList
@@ -486,6 +605,39 @@ export default function CellsIndex() {
           onCancel={() => setConfirmDelHall(null)}
         />
 
+        {renameHall && (
+          <div
+            className="ci-rename-overlay"
+            onClick={() => !renaming && setRenameHall(null)}
+          >
+            <div className="ci-rename-modal" onClick={e => e.stopPropagation()}>
+              <div className="ci-rename-title">Переименовать зал</div>
+              <input
+                className="ci-rename-input"
+                value={renameValue}
+                onChange={e => setRenameValue(e.target.value)}
+                onKeyDown={e => {
+                  if (e.key === 'Enter') handleRenameHall()
+                  if (e.key === 'Escape' && !renaming) setRenameHall(null)
+                }}
+                autoFocus
+                placeholder="Имя зала"
+                disabled={renaming}
+              />
+              <div className="ci-rename-actions">
+                <Button
+                  variant="secondary"
+                  onClick={() => setRenameHall(null)}
+                  disabled={renaming}
+                >Отмена</Button>
+                <Button onClick={handleRenameHall} disabled={renaming || !renameValue.trim()}>
+                  {renaming ? 'Сохраняю…' : 'Сохранить'}
+                </Button>
+              </div>
+            </div>
+          </div>
+        )}
+
         {cardId && (
           <UnitCardModal
             unitId={cardId}
@@ -493,7 +645,7 @@ export default function CellsIndex() {
           />
         )}
       </div>
-    </WarehouseLayout>
+    </Layout>
   )
 }
 
@@ -562,7 +714,7 @@ function Styles() {
         min-height: calc(100dvh - 60px);
       }
       .ci-header {
-        position: sticky; top: 0; z-index: 15;
+        position: sticky; top: var(--page-sticky-top, 56px); z-index: 15;
         background: rgba(255,255,255,0.85);
         backdrop-filter: saturate(180%) blur(18px);
         -webkit-backdrop-filter: saturate(180%) blur(18px);
@@ -626,28 +778,36 @@ function Styles() {
       }
       .ci-tile-wrap { position: relative; }
       .ci-tile-wrap .ci-tile { width: 100%; }
-      .ci-tile-del {
+      .ci-tile-del,
+      .ci-tile-edit {
         position: absolute;
-        top: 10px; left: 10px;
+        top: 10px;
         width: 30px; height: 30px;
         border-radius: 9px;
         border: 1px solid var(--border);
         background: rgba(255,255,255,0.94);
-        color: var(--red);
         display: inline-flex; align-items: center; justify-content: center;
         cursor: pointer;
         opacity: 0;
-        transition: opacity 0.15s, background 0.12s, border-color 0.12s, transform 0.12s;
+        transition: opacity 0.15s, background 0.12s, border-color 0.12s, transform 0.12s, color 0.12s;
         backdrop-filter: blur(6px); -webkit-backdrop-filter: blur(6px);
         z-index: 3;
       }
-      .ci-tile-wrap:hover .ci-tile-del { opacity: 1; }
+      .ci-tile-del  { left: 10px; color: var(--red); }
+      .ci-tile-edit { left: 46px; color: var(--muted); }
+      .ci-tile-wrap:hover .ci-tile-del,
+      .ci-tile-wrap:hover .ci-tile-edit { opacity: 1; }
       .ci-tile-del:hover {
         background: var(--red); color: #fff; border-color: var(--red);
         transform: scale(1.05);
       }
+      .ci-tile-edit:hover {
+        background: var(--gold-500); color: #fff; border-color: var(--gold-500);
+        transform: scale(1.05);
+      }
       @media (max-width: 768px) {
-        .ci-tile-del { opacity: 1; }
+        .ci-tile-del,
+        .ci-tile-edit { opacity: 1; }
       }
       .ci-tile {
         display: flex; flex-direction: column;
@@ -937,6 +1097,89 @@ function Styles() {
            селектор-кнопку, открывающий bottom-sheet. */
         .ci-chips { display: none; }
         .ci-wh-mobile-btn { display: flex; }
+      }
+
+      /* Тумблер режима просмотра (плитки / список). */
+      .ci-view-toggle {
+        display: flex; gap: 4px; margin-bottom: 14px; justify-content: flex-end;
+      }
+      .ci-view-btn {
+        width: 32px; height: 32px;
+        border: 1px solid var(--border); border-radius: var(--radius-btn);
+        background: var(--white, #fff); color: var(--muted);
+        font-size: 16px; cursor: pointer; font-family: inherit;
+        display: flex; align-items: center; justify-content: center;
+        transition: background 0.12s, color 0.12s, border-color 0.12s;
+      }
+      .ci-view-btn:hover { color: var(--text); }
+      .ci-view-btn.active {
+        background: var(--accent); color: #fff; border-color: var(--accent);
+      }
+
+      /* List-режим залов. */
+      .ci-list { display: flex; flex-direction: column; gap: 8px; }
+      .ci-list-row {
+        display: flex; align-items: center; gap: 14px;
+        padding: 12px 14px;
+        background: var(--white, #fff);
+        border: 1px solid var(--border); border-radius: 12px;
+        cursor: pointer; box-sizing: border-box; width: 100%;
+        text-align: left; font-family: inherit;
+        transition: border-color 0.12s, background 0.12s;
+      }
+      .ci-list-row:hover { border-color: var(--gold-500); }
+      .ci-list-icon {
+        flex-shrink: 0; width: 38px; height: 38px;
+        border-radius: 10px; background: var(--bg-secondary);
+        display: flex; align-items: center; justify-content: center;
+      }
+      .ci-list-main { flex: 1; min-width: 0; }
+      .ci-list-name {
+        font-size: 14px; font-weight: 600; color: var(--text);
+        overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+      }
+      .ci-list-hint { font-size: 12px; color: var(--muted); margin-top: 2px; }
+      .ci-list-actions { display: flex; gap: 4px; flex-shrink: 0; }
+      .ci-list-act {
+        width: 34px; height: 34px;
+        border: 1px solid var(--border); border-radius: 8px;
+        background: var(--white, #fff); color: var(--muted);
+        cursor: pointer;
+        display: flex; align-items: center; justify-content: center;
+        transition: background 0.12s, color 0.12s, border-color 0.12s;
+      }
+      .ci-list-act:hover { color: var(--gold-600); border-color: var(--gold-500); }
+      .ci-list-act-del:hover { color: var(--red); border-color: var(--red); }
+      .ci-list-add {
+        background: var(--bg-secondary);
+        border-style: dashed; color: var(--muted);
+        justify-content: flex-start;
+      }
+      .ci-list-add:hover { color: var(--gold-600); }
+
+      /* Модалка переименования зала. */
+      .ci-rename-overlay {
+        position: fixed; inset: 0; background: rgba(0,0,0,0.4);
+        z-index: 500; display: flex; align-items: center; justify-content: center;
+        padding: 20px;
+      }
+      .ci-rename-modal {
+        background: var(--white, #fff);
+        border-radius: var(--radius-card);
+        padding: 24px; width: 100%; max-width: 420px;
+        box-shadow: 0 12px 40px rgba(0,0,0,0.18);
+      }
+      .ci-rename-title { font-size: 16px; font-weight: 600; margin-bottom: 16px; }
+      .ci-rename-input {
+        width: 100%; height: 42px; padding: 0 14px;
+        border: 1px solid var(--border); border-radius: var(--radius-input);
+        background: var(--white, #fff); color: var(--text);
+        font-size: 14px; font-family: inherit; box-sizing: border-box;
+        transition: border-color 0.12s;
+      }
+      .ci-rename-input:focus { outline: none; border-color: var(--accent); }
+      .ci-rename-actions {
+        display: flex; gap: 10px; justify-content: flex-end; margin-top: 18px;
       }
     `}</style>
   )

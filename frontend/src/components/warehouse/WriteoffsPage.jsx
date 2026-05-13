@@ -3,6 +3,8 @@
 // production layout — выбирается по роли.
 
 import { useState, useEffect } from 'react'
+import { useNavigate } from 'react-router-dom'
+import { ChevronLeft } from 'lucide-react'
 import WarehouseLayout from './WarehouseLayout'
 import ProductionLayout from '../production/ProductionLayout'
 import Badge from '../shared/Badge'
@@ -23,6 +25,7 @@ function formatDate(s) {
 
 export default function WriteoffsPage() {
   const { user } = useAuth()
+  const navigate = useNavigate()
   const Layout = ROLES[user?.role]?.world === 'production' ? ProductionLayout : WarehouseLayout
   const [items, setItems] = useState([])
   const [loading, setLoading] = useState(true)
@@ -38,11 +41,31 @@ export default function WriteoffsPage() {
 
   return (
     <Layout>
-      <div style={{ padding: '28px 32px', maxWidth: 900 }}>
-        <h1 style={{ fontSize: 22, fontWeight: 600, marginBottom: 2 }}>Списания</h1>
-        <p style={{ color: 'var(--muted)', fontSize: 13, marginBottom: 18 }}>
-          {loading ? '...' : `Всего записей: ${items.length}`}
-        </p>
+      <style>{`
+        @media (max-width: 768px) {
+          .writeoffs-page { padding: 16px !important; }
+          .writeoffs-sticky {
+            position: sticky; top: var(--page-sticky-top, 52px); z-index: 12;
+            background: var(--paper);
+            margin: -16px -16px 14px;
+            padding: 12px 16px;
+          }
+        }
+      `}</style>
+      <div className="writeoffs-page" style={{ padding: '28px 32px', maxWidth: 900 }}>
+        <div className="writeoffs-sticky">
+          <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+            <button className="page-back" onClick={() => navigate(-1)} aria-label="Назад">
+              <ChevronLeft size={20} />
+            </button>
+            <div>
+              <h1 style={{ fontSize: 22, fontWeight: 600, marginBottom: 2 }}>Списания</h1>
+              <p style={{ color: 'var(--muted)', fontSize: 13, margin: 0 }}>
+                {loading ? '...' : `Всего записей: ${items.length}`}
+              </p>
+            </div>
+          </div>
+        </div>
 
         {loading ? (
           <div style={{ padding: 40, textAlign: 'center', color: 'var(--muted)' }}>Загрузка...</div>

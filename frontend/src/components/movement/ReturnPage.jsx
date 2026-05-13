@@ -190,7 +190,9 @@ export default function ReturnPage() {
       }
 
       setSuccess(true)
-      setTimeout(() => navigate('/dashboard'), 2000)
+      // PDF акта автоматически уходит в /acts. Возвращаем юзера в раздел
+      // «Выдано» — там он видит итог операции в общем списке.
+      setTimeout(() => navigate('/issued'), 2000)
     } catch (err) {
       alert(err.message || 'Ошибка возврата')
     } finally {

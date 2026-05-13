@@ -3,10 +3,10 @@
 // нет кнопок «Подписать»/«Отклонить»/«Цена» — только просмотр карточек.
 
 import { useState, useEffect } from 'react'
-import { useNavigate } from 'react-router-dom'
 import { Package } from 'lucide-react'
 import WarehouseLayout from './WarehouseLayout'
 import Button from '../shared/Button'
+import UnitCardModal from '../shared/UnitCardModal'
 import { units as unitsApi } from '../../services/api'
 import { categoryLabel } from '../../constants/categories'
 
@@ -41,15 +41,17 @@ function formatDate(str) {
 }
 
 export default function ApprovalsPage() {
-  const navigate = useNavigate()
   const [units, setUnits] = useState([])
   const [loading, setLoading] = useState(true)
+  const [cardId, setCardId] = useState(null)
+
+  function reload() {
+    return unitsApi.list({}).then(d => setUnits((d.units || []).slice(0, 50)))
+  }
 
   useEffect(() => {
     setLoading(true)
-    unitsApi.list({})
-      .then(d => setUnits((d.units || []).slice(0, 50)))
-      .finally(() => setLoading(false))
+    reload().finally(() => setLoading(false))
   }, [])
 
   return (
@@ -88,7 +90,7 @@ export default function ApprovalsPage() {
                 <Button
                   variant="secondary"
                   style={{ height: 34, fontSize: 13 }}
-                  onClick={() => navigate(`/units/${u.id}`)}
+                  onClick={() => setCardId(u.id)}
                 >
                   Карточка
                 </Button>
@@ -97,6 +99,7 @@ export default function ApprovalsPage() {
           </div>
         )}
       </div>
+      {cardId && <UnitCardModal unitId={cardId} onClose={() => setCardId(null)} onChanged={reload} />}
     </WarehouseLayout>
   )
 }

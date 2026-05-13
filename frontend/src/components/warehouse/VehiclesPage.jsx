@@ -495,8 +495,8 @@ export default function VehiclesPage() {
                   )}
                 </div>
                 <input ref={fileRef} type="file" accept="image/*,video/mp4,video/webm,video/quicktime" multiple style={{ display: 'none' }} onChange={onFiles} />
-                <input ref={camRef} type="file" accept="image/*,video/mp4,video/webm,video/quicktime" capture style={{ display: 'none' }} onChange={onFiles} />
-                <input ref={videoRef} type="file" accept="video/mp4,video/webm,video/quicktime" style={{ display: 'none' }} onChange={onFiles} />
+                <input ref={camRef} type="file" accept="image/*" capture="environment" style={{ display: 'none' }} onChange={onFiles} />
+                <input ref={videoRef} type="file" accept="video/*" capture="environment" style={{ display: 'none' }} onChange={onFiles} />
               </div>
 
               <div style={{ display: 'flex', gap: 10, justifyContent: 'flex-end' }}>

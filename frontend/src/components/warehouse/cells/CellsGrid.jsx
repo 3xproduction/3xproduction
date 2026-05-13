@@ -13,7 +13,7 @@ import { Package, Plus } from 'lucide-react'
 import Badge from '../../shared/Badge'
 import { STATUS_LABEL, STATUS_COLOR } from '../../../constants/statuses'
 
-export default function CellsGrid({ cells, onOpenUnit, onAddNew, canAdd }) {
+export default function CellsGrid({ cells, onOpenUnit, onAddNew, canAdd, viewMode = 'grid' }) {
   // Показываем только занятые ячейки. Пустые «остатки» (от старого конструктора
   // или после удаления единицы) скрываем — их создаёт phantom-кнопка.
   const occupiedCells = (cells || []).filter(c => c.unit_id && c.unit_status !== 'written_off')
@@ -129,47 +129,122 @@ export default function CellsGrid({ cells, onOpenUnit, onAddNew, canAdd }) {
           .cg-body { padding: 8px 10px 10px; min-height: 64px; }
           .cg-name { font-size: 13px; }
         }
+
+        /* List-режим */
+        .cg-list { display: flex; flex-direction: column; gap: 8px; }
+        .cg-list-row {
+          display: flex; align-items: center; gap: 12px;
+          padding: 10px 12px;
+          background: var(--white, #fff);
+          border: 1px solid var(--border); border-radius: 12px;
+          cursor: pointer; box-sizing: border-box; width: 100%;
+          text-align: left; font-family: inherit;
+          transition: border-color 0.12s, background 0.12s;
+        }
+        .cg-list-row:hover { border-color: var(--gold-500); }
+        .cg-list-thumb {
+          flex-shrink: 0; width: 44px; height: 44px;
+          border-radius: 8px; background: var(--bg-secondary);
+          display: flex; align-items: center; justify-content: center;
+          overflow: hidden;
+        }
+        .cg-list-thumb img { width: 100%; height: 100%; object-fit: cover; }
+        .cg-list-main { flex: 1; min-width: 0; }
+        .cg-list-name {
+          font-size: 14px; font-weight: 500; color: var(--text);
+          overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+        }
+        .cg-list-row.phantom {
+          background: var(--paper);
+          border-style: dashed;
+          border-color: var(--gold-500);
+        }
+        .cg-list-row.phantom:hover { background: var(--gold-100); }
+        .cg-list-row.phantom .cg-list-thumb {
+          background: transparent; color: var(--gold-500);
+        }
+        .cg-list-row.phantom .cg-list-name {
+          color: var(--gold-600); font-weight: 600;
+        }
       `}</style>
 
-      <div className="cg-grid">
-        {occupiedCells.map(cell => (
-          <button
-            key={cell.id}
-            className="cg-card"
-            onClick={() => onOpenUnit?.(cell.unit_id)}
-          >
-            <div className="cg-img-wrap">
-              {cell.photo_url && !/\.(mp4|webm|mov)$/i.test(cell.photo_url) ? (
-                <img src={cell.photo_url} alt="" />
-              ) : (
-                <Package size={36} strokeWidth={1.3} className="cg-img-placeholder" />
-              )}
-            </div>
-            <div className="cg-body">
-              <div className="cg-name">{cell.unit_name || '—'}</div>
+      {viewMode === 'list' ? (
+        <div className="cg-list">
+          {occupiedCells.map(cell => (
+            <div
+              key={cell.id}
+              className="cg-list-row"
+              onClick={() => onOpenUnit?.(cell.unit_id)}
+            >
+              <div className="cg-list-thumb">
+                {cell.photo_url && !/\.(mp4|webm|mov)$/i.test(cell.photo_url) ? (
+                  <img src={cell.photo_url} alt="" />
+                ) : (
+                  <Package size={20} strokeWidth={1.4} color="var(--gold-600)" />
+                )}
+              </div>
+              <div className="cg-list-main">
+                <div className="cg-list-name">{cell.unit_name || '—'}</div>
+              </div>
               <Badge color={STATUS_COLOR[cell.unit_status] || 'muted'}>
                 {STATUS_LABEL[cell.unit_status] || cell.unit_status || 'Не указан'}
               </Badge>
             </div>
-          </button>
-        ))}
+          ))}
+          {canAdd && (
+            <div className="cg-list-row phantom"
+              onClick={() => onAddNew?.()}
+            >
+              <div className="cg-list-thumb">
+                <Plus size={22} strokeWidth={1.8} />
+              </div>
+              <div className="cg-list-main">
+                <div className="cg-list-name">+ Пополнить</div>
+              </div>
+            </div>
+          )}
+        </div>
+      ) : (
+        <div className="cg-grid">
+          {occupiedCells.map(cell => (
+            <button
+              key={cell.id}
+              className="cg-card"
+              onClick={() => onOpenUnit?.(cell.unit_id)}
+            >
+              <div className="cg-img-wrap">
+                {cell.photo_url && !/\.(mp4|webm|mov)$/i.test(cell.photo_url) ? (
+                  <img src={cell.photo_url} alt="" />
+                ) : (
+                  <Package size={36} strokeWidth={1.3} className="cg-img-placeholder" />
+                )}
+              </div>
+              <div className="cg-body">
+                <div className="cg-name">{cell.unit_name || '—'}</div>
+                <Badge color={STATUS_COLOR[cell.unit_status] || 'muted'}>
+                  {STATUS_LABEL[cell.unit_status] || cell.unit_status || 'Не указан'}
+                </Badge>
+              </div>
+            </button>
+          ))}
 
-        {canAdd && (
-          <button
-            key="__phantom"
-            className="cg-card phantom"
-            onClick={() => onAddNew?.()}
-          >
-            <div className="cg-img-wrap">
-              <Plus size={42} strokeWidth={1.6} style={{ color: 'var(--gold-500)' }} />
-            </div>
-            <div className="cg-phantom-body">
-              <div className="cg-phantom-label">+ Пополнить</div>
-              <div className="cg-phantom-hint">Сфотографируй или Выбери из каталога</div>
-            </div>
-          </button>
-        )}
-      </div>
+          {canAdd && (
+            <button
+              key="__phantom"
+              className="cg-card phantom"
+              onClick={() => onAddNew?.()}
+            >
+              <div className="cg-img-wrap">
+                <Plus size={42} strokeWidth={1.6} style={{ color: 'var(--gold-500)' }} />
+              </div>
+              <div className="cg-phantom-body">
+                <div className="cg-phantom-label">+ Пополнить</div>
+                <div className="cg-phantom-hint">Сфотографируй или Выбери из каталога</div>
+              </div>
+            </button>
+          )}
+        </div>
+      )}
     </>
   )
 }

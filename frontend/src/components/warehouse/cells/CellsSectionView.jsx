@@ -8,12 +8,14 @@ import { useRef, useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import { Plus, X } from 'lucide-react'
 import WarehouseLayout from '../WarehouseLayout'
+import ProductionLayout from '../../production/ProductionLayout'
 import Button from '../../shared/Button'
 import UnitCardModal from '../../shared/UnitCardModal'
 import AddUnitModal from '../../shared/AddUnitModal'
 import SuccessPopup from '../../shared/SuccessPopup'
 import CatalogHeader from './CatalogHeader'
 import PickUnitList from './PickUnitList'
+import { sumOnStockCellQty } from '../../../utils/unitQty'
 import CellsGrid from './CellsGrid'
 import useWarehouseData from './useWarehouseData'
 import { warehouses as warehousesApi, units as unitsApi } from '../../../services/api'
@@ -24,12 +26,14 @@ import { useBodyLock } from '../../../hooks/useBodyLock'
 const EDITOR_ROLES = ['warehouse_director', 'warehouse_deputy']
 const TYPE_LABEL = { shelf: 'Полки', hanger: 'Вешалки', place: 'Места' }
 
-export default function CellsSectionView() {
+export default function CellsSectionView({ world = 'warehouse' } = {}) {
   const { warehouseId, sectionId } = useParams()
   const navigate = useNavigate()
   const { user } = useAuth()
   const toast = useToast()
-  const canEdit = EDITOR_ROLES.includes(user?.role)
+  const canEdit = world === 'warehouse' && EDITOR_ROLES.includes(user?.role)
+  const cellsBase = world === 'production' ? '/production/cells' : '/cells'
+  const Layout = world === 'production' ? ProductionLayout : WarehouseLayout
 
   const { warehouse, sections, loading, reload } = useWarehouseData(warehouseId)
   const section = sections.find(s => String(s.id) === String(sectionId)) || null
@@ -67,6 +71,14 @@ export default function CellsSectionView() {
   const [phantomAction, setPhantomAction] = useState(false)
   // Успех-попап после размещения/создания единицы.
   const [successData, setSuccessData] = useState(null)
+  // Режим просмотра единиц внутри полки/вешалки/места.
+  const [viewMode, setViewMode] = useState(() => {
+    try { return localStorage.getItem('sectionViewMode') || 'grid' } catch { return 'grid' }
+  })
+  function setViewModePersist(m) {
+    setViewMode(m)
+    try { localStorage.setItem('sectionViewMode', m) } catch { /* quota */ }
+  }
 
   useBodyLock(
     !!pickUnitTarget || !!addUnitTarget || !!cardId ||
@@ -131,14 +143,14 @@ export default function CellsSectionView() {
   // Секция не найдена — 404
   if (!loading && sections.length > 0 && !section) {
     return (
-      <WarehouseLayout>
+      <Layout>
         <div style={{ padding: 40, textAlign: 'center', color: 'var(--muted)' }}>
           Секция не найдена.
           <div style={{ marginTop: 16 }}>
-            <Button onClick={() => navigate(`/cells/${warehouseId}`)}>На главную склада</Button>
+            <Button onClick={() => navigate(`${cellsBase}/${warehouseId}`)}>На главную склада</Button>
           </div>
         </div>
-      </WarehouseLayout>
+      </Layout>
     )
   }
 
@@ -151,20 +163,19 @@ export default function CellsSectionView() {
   const parentId = section?.parent_section_id
   let backHref, backLabel
   if (parentId) {
-    backHref = `/cells/${warehouseId}/hall/${parentId}`
+    backHref = `${cellsBase}/${warehouseId}/hall/${parentId}`
     backLabel = 'Зал'
   } else if (isHall) {
-    backHref = `/cells/${warehouseId}`
+    backHref = `${cellsBase}/${warehouseId}`
     backLabel = 'Склад'
   } else {
-    backHref = `/cells/${warehouseId}/type/${section?.type || 'shelf'}`
+    backHref = `${cellsBase}/${warehouseId}/type/${section?.type || 'shelf'}`
     backLabel = typeLabel
   }
-  const occupied = (section?.cells || []).filter(c =>
-    c.unit_id && c.unit_status === 'on_stock').length
+  const occupied = sumOnStockCellQty(section?.cells)
 
   return (
-    <WarehouseLayout>
+    <Layout>
       <Styles />
 
       <div className="cs-page catalog-enter">
@@ -209,12 +220,29 @@ export default function CellsSectionView() {
           {loading ? (
             <div className="cs-loader">Загрузка…</div>
           ) : section ? (
-            <CellsGrid
-              cells={section.cells || []}
-              canAdd={canEdit}
-              onOpenUnit={(unitId) => setCardId(unitId)}
-              onAddNew={() => setPhantomAction(true)}
-            />
+            <>
+              {(section.cells || []).some(c => c.unit_id && c.unit_status !== 'written_off') && (
+                <div className="cs-view-toggle">
+                  {[
+                    { mode: 'grid', icon: '▦', title: 'Плитки' },
+                    { mode: 'list', icon: '☰', title: 'Список' },
+                  ].map(v => (
+                    <button key={v.mode}
+                      title={v.title}
+                      onClick={() => setViewModePersist(v.mode)}
+                      className={`cs-view-btn${viewMode === v.mode ? ' active' : ''}`}
+                    >{v.icon}</button>
+                  ))}
+                </div>
+              )}
+              <CellsGrid
+                cells={section.cells || []}
+                canAdd={canEdit}
+                viewMode={viewMode}
+                onOpenUnit={(unitId) => setCardId(unitId)}
+                onAddNew={() => setPhantomAction(true)}
+              />
+            </>
           ) : null}
         </div>
 
@@ -275,7 +303,7 @@ export default function CellsSectionView() {
           />
         )}
       </div>
-    </WarehouseLayout>
+    </Layout>
   )
 }
 
@@ -423,6 +451,23 @@ function Styles() {
 
       @media (max-width: 768px) {
         .cs-body { padding: 16px 14px 80px; }
+      }
+
+      /* Тумблер режима просмотра */
+      .cs-view-toggle {
+        display: flex; gap: 4px; margin-bottom: 14px; justify-content: flex-end;
+      }
+      .cs-view-btn {
+        width: 32px; height: 32px;
+        border: 1px solid var(--border); border-radius: var(--radius-btn);
+        background: var(--white, #fff); color: var(--muted);
+        font-size: 16px; cursor: pointer; font-family: inherit;
+        display: flex; align-items: center; justify-content: center;
+        transition: background 0.12s, color 0.12s, border-color 0.12s;
+      }
+      .cs-view-btn:hover { color: var(--text); }
+      .cs-view-btn.active {
+        background: var(--accent); color: #fff; border-color: var(--accent);
       }
     `}</style>
   )

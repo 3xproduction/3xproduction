@@ -7,6 +7,8 @@ import UnitCardModal from '../shared/UnitCardModal'
 import { useToast } from '../shared/Toast'
 import { units as unitsApi, requests as requestsApi, issuances as issuancesApi, projectUnits as projectUnitsApi, rent as rentApi, debts as debtsApi, writeoffs as writeoffsApi } from '../../services/api'
 import { useAuth } from '../../hooks/useAuth'
+import { pluralRu } from '../../utils/pluralRu'
+import { unitQty, sumUnitQty } from '../../utils/unitQty'
 
 const css = `
 .dash-page { padding: 28px 32px; max-width: 1200px; }
@@ -112,7 +114,9 @@ const css = `
 .dash-row:last-child { border-bottom: none; }
 .dash-row.clickable { cursor: pointer; }
 .dash-row.clickable:hover { background: var(--bg-secondary); margin: 0 -20px; padding: 10px 20px; border-radius: 6px; border-bottom-color: transparent; }
-.dash-row-title { font-weight: 500; font-size: 13.5px; color: var(--text); display: flex; align-items: center; gap: 6px; }
+.dash-row-title { font-weight: 500; font-size: 13.5px; color: var(--text); display: flex; align-items: center; gap: 6px; flex-wrap: nowrap; min-width: 0; }
+.dash-row-title-text { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.dash-row-title .dash-badge { flex-shrink: 0; }
 .dash-row-sub { color: var(--muted); font-size: 12px; margin-top: 2px; }
 
 .dash-badge {
@@ -131,8 +135,23 @@ const css = `
 }
 @media (max-width: 768px) {
   .dash-page { padding: 16px; }
-  .dash-head { flex-direction: column; align-items: flex-start; gap: 4px; }
-  .dash-title { font-size: 20px; }
+  /* Sticky-шапка под mtop. Заголовок и дата — в одной строке, дата ужимается. */
+  .dash-head {
+    position: sticky; top: var(--page-sticky-top, 52px); z-index: 12;
+    background: var(--paper);
+    margin: -16px -16px 16px;
+    padding: 12px 16px;
+    flex-direction: row;
+    align-items: baseline;
+    gap: 10px;
+    flex-wrap: nowrap;
+  }
+  .dash-title { font-size: 18px; flex-shrink: 0; }
+  .dash-date {
+    font-size: 12px; color: var(--muted);
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    min-width: 0;
+  }
   .dash-kpis { grid-template-columns: repeat(2, 1fr); gap: 10px; }
   .dash-kpi { padding: 14px; }
   .dash-kpi-value { font-size: 22px; }
@@ -222,17 +241,20 @@ export default function DashboardPage() {
   }
 
   useEffect(() => {
-    unitsApi.list().then(data => {
-      const us = data.units || []
+    Promise.all([
+      unitsApi.list().then(data => data.units || []).catch(() => []),
+      unitsApi.list({ scope: 'project', status: 'on_stock' }).then(data => data.units || []).catch(() => []),
+    ]).then(([commonUnits, projectStockUnits]) => {
+      const us = [...commonUnits, ...projectStockUnits]
       const assetsValue = us
         .filter(u => u.status === 'on_stock' || u.status === 'issued')
-        .reduce((s, u) => s + (Number(u.valuation) || 0) * (u.qty || 1), 0)
+        .reduce((s, u) => s + (Number(u.valuation) || 0) * unitQty(u), 0)
       setStats({
-        on_stock: us.filter(u => u.status === 'on_stock').length,
-        issued:   us.filter(u => u.status === 'issued').length,
-        overdue:  us.filter(u => u.status === 'overdue').length,
-        pending:  us.filter(u => u.status === 'pending').length,
-        no_cell:  us.filter(u => u.status === 'on_stock' && !u.cell_id).length,
+        on_stock: sumUnitQty(us.filter(u => u.status === 'on_stock')),
+        issued:   sumUnitQty(commonUnits.filter(u => u.status === 'issued')),
+        overdue:  sumUnitQty(commonUnits.filter(u => u.status === 'overdue')),
+        pending:  sumUnitQty(commonUnits.filter(u => u.status === 'pending')),
+        no_cell:  sumUnitQty(commonUnits.filter(u => u.status === 'on_stock' && !u.cell_id)),
         assets_value: assetsValue,
       })
     }).catch(() => {})
@@ -246,7 +268,7 @@ export default function DashboardPage() {
           legacyDebts: ws.filter(w => w.kind === 'debt').length,
         }
       }).catch(() => ({ writeoffs: 0, legacyDebts: 0 })),
-      unitsApi.list({ misplaced: 'true' }).then(d => (d.units || []).length).catch(() => 0),
+      unitsApi.list({ misplaced: 'true' }).then(d => sumUnitQty(d.units || [])).catch(() => 0),
     ]).then(([debts, w, misplaced]) => {
       const totalDebts = debts + w.legacyDebts
       setNotReturned({
@@ -328,7 +350,7 @@ export default function DashboardPage() {
     {
       label: 'Выдано', value: fmtNum(stats.issued),
       Icon: ArrowRightLeft, bg: 'var(--bg-secondary)', color: 'var(--ink-900)',
-      onClick: () => navigate('/units?status=issued'),
+      onClick: () => navigate('/issued'),
     },
     {
       label: 'Не вернули', value: fmtNum(notReturned.total),
@@ -339,7 +361,7 @@ export default function DashboardPage() {
     {
       label: 'Активы', value: fmtMoney(stats.assets_value),
       Icon: Wallet, bg: 'var(--gold-100)', color: 'var(--gold-600)',
-      sub: `${fmtNum(stats.on_stock + stats.issued)} позиций`,
+      sub: `${fmtNum(stats.on_stock + stats.issued)} ед.`,
       onClick: () => navigate('/assets'),
     },
     {
@@ -352,24 +374,29 @@ export default function DashboardPage() {
 
   // ── Уведомления ──
   const todos = []
-  if (reqs.filter(r => r._kind !== 'return').length) {
+  const pendingReqCount = reqs.filter(r => r._kind !== 'return').length
+  if (pendingReqCount) {
+    const noun = pluralRu(pendingReqCount, ['заявка', 'заявки', 'заявок'])
+    const verb = pluralRu(pendingReqCount, ['ждёт', 'ждут', 'ждут'])
     todos.push({
       Icon: ClipboardCheck,
-      text: `${reqs.filter(r => r._kind !== 'return').length} заявки ждут обработки`,
+      text: `${pendingReqCount} ${noun} ${verb} ответа`,
       onClick: () => navigate('/requests'),
     })
   }
   if (returnReqCount) {
+    const noun = pluralRu(returnReqCount, ['запрос', 'запроса', 'запросов'])
     todos.push({
       Icon: RotateCw,
-      text: `${returnReqCount} ${returnReqCount === 1 ? 'запрос возврата' : 'запросов возврата'}`,
+      text: `${returnReqCount} ${noun} возврата`,
       onClick: () => navigate('/requests'),
     })
   }
   if (stats.no_cell) {
+    const noun = pluralRu(stats.no_cell, ['пополнение', 'пополнения', 'пополнений'])
     todos.push({
       Icon: MapPin,
-      text: `${stats.no_cell} ${stats.no_cell === 1 ? 'единица ждёт полки' : 'единиц ждут полки'}`,
+      text: `${stats.no_cell} ${noun} без места`,
       onClick: () => navigate('/cells', { state: { openNoPlace: true } }),
     })
   }
@@ -519,8 +546,8 @@ export default function DashboardPage() {
           <div className="dash-card">
             <div className="dash-card-head">
               <span className="dash-card-title">Выданы</span>
-              <button className="dash-card-link" onClick={() => navigate('/requests?status=issued')}>
-                Выданы <ChevronRight size={12} />
+              <button className="dash-card-link" onClick={() => navigate('/issued')}>
+                Все <ChevronRight size={12} />
               </button>
             </div>
             {activeIssuances.length === 0
@@ -529,7 +556,7 @@ export default function DashboardPage() {
                 <div key={iss.id} className="dash-row">
                   <div style={{ minWidth: 0, flex: 1 }}>
                     <div className="dash-row-title">
-                      {iss.receiver_name || `Выдача #${String(iss.id).slice(0, 8)}`}
+                      <span className="dash-row-title-text">{iss.receiver_name || `Выдача #${String(iss.id).slice(0, 8)}`}</span>
                       {iss._isRent && <span className="dash-badge dash-badge-public">От партнёров</span>}
                       {iss.return_requested_at && <span className="dash-badge dash-badge-return">Возврат</span>}
                     </div>
@@ -540,7 +567,7 @@ export default function DashboardPage() {
                     </div>
                   </div>
                   <Button variant={iss.return_requested_at ? 'primary' : 'secondary'} size="sm"
-                    onClick={() => iss._isRent ? navigate(`/rent`) : navigate(`/return/${iss.id}`)}>
+                    onClick={() => iss._isRent ? navigate(`/return/rent/${iss._rentId}`) : navigate(`/return/${iss.id}`)}>
                     Возврат
                   </Button>
                 </div>

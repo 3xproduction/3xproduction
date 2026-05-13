@@ -425,15 +425,16 @@ export default function DecorationsPage() {
                 <input
                   ref={camRef}
                   type="file"
-                  accept="image/*,video/mp4,video/webm,video/quicktime"
-                  capture
+                  accept="image/*"
+                  capture="environment"
                   onChange={onPhotosSelected}
                   style={{ display: 'none' }}
                 />
                 <input
                   ref={videoRef}
                   type="file"
-                  accept="video/mp4,video/webm,video/quicktime"
+                  accept="video/*"
+                  capture="environment"
                   onChange={onPhotosSelected}
                   style={{ display: 'none' }}
                 />

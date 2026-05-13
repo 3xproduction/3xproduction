@@ -369,8 +369,8 @@ export default function LocationsPage() {
               )}
             </div>
             <input ref={fileRef} type="file" accept="image/*,video/mp4,video/webm,video/quicktime" multiple style={{ display: 'none' }} onChange={onFiles} />
-            <input ref={camRef} type="file" accept="image/*,video/mp4,video/webm,video/quicktime" capture style={{ display: 'none' }} onChange={onFiles} />
-            <input ref={videoRef} type="file" accept="video/mp4,video/webm,video/quicktime" style={{ display: 'none' }} onChange={onFiles} />
+            <input ref={camRef} type="file" accept="image/*" capture="environment" style={{ display: 'none' }} onChange={onFiles} />
+            <input ref={videoRef} type="file" accept="video/*" capture="environment" style={{ display: 'none' }} onChange={onFiles} />
 
             {/* Name */}
             <FL>Название *{aiLoading && <span style={{ marginLeft: 8, fontWeight: 400, color: 'var(--accent)' }}>AI распознаёт...</span>}</FL>

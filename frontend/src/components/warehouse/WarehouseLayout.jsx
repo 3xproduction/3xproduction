@@ -1,9 +1,9 @@
 import { useState, useEffect, useRef } from 'react'
-import { NavLink, useNavigate, useLocation } from 'react-router-dom'
+import { NavLink, useNavigate, useLocation, useSearchParams } from 'react-router-dom'
 import {
-  Home, Package, ClipboardList, LayoutGrid, AlertTriangle, Users,
+  Home, Package, LayoutGrid, AlertTriangle, Users,
   Menu, Search, Plus, ChevronDown, ChevronLeft, MapPin, LogOut,
-  Link as LinkIcon, Copy, Check,
+  Link as LinkIcon, Copy, Check, X, Zap, Send, Images,
 } from 'lucide-react'
 import { useAuth } from '../../hooks/useAuth'
 import { useGlobalSearch } from '../../hooks/useGlobalSearch'
@@ -20,8 +20,12 @@ import TriixLogo from '../shared/TriixLogo'
 // подсветка работает на все URL группы.
 const NAV_GROUPS = [
   { key: 'home',     to: '/dashboard', icon: Home,            label: 'Главная',  match: /^\/(dashboard|assets)/ },
-  { key: 'catalog',  to: '/units',     icon: Package,          label: 'Каталог',  match: /^\/(units|decorations|production\/project-warehouse)/ },
-  { key: 'requests', to: '/requests',  icon: ClipboardList,    label: 'Заявки',   match: /^\/(requests|issue|return|returns|acts|rent)/ },
+  { key: 'catalog',  to: '/units',     icon: Package,          label: 'Каталог',  match: /^\/(units|admin-stock|decorations|production\/project-warehouse)/ },
+  // «Движение» — объединённый раздел: заявки/выданное/возвраты в едином
+  // списке с подвкладками Все/Новые/Выданы/Возвращают/Вернули/Акты.
+  // Раньше назывался «Выдача» — переименован 2026-05-04 чтобы семантически
+  // покрыть все этапы цикла (а не только сам факт выдачи).
+  { key: 'issuance', to: '/issued',    icon: Send,             label: 'Движение', match: /^\/(requests|issued|walkin|issue|return|returns|acts|rent)/ },
   { key: 'map',      to: '/cells',     icon: LayoutGrid,       label: 'Склады',   match: /^\/cells/ },
   { key: 'problems', to: '/debts',     icon: AlertTriangle,    label: 'Проблемы', match: /^\/(debts|writeoffs|misplaced)/ },
   { key: 'team',     to: '/team',      icon: Users,            label: 'Команда',  match: /^\/team/ },
@@ -51,12 +55,13 @@ function getNav(role) {
 const CATALOG_TABS = [
   { to: '/units',                        label: 'Каталог',       match: /^\/units/ },
   { to: '/production/project-warehouse', label: 'Склад проекта', match: /^\/production\/project-warehouse/ },
+  { to: '/admin-stock',                  label: 'Админка',       match: /^\/admin-stock/ },
   { to: '/decorations',                  label: 'Декорации',     match: /^\/decorations/ },
 ]
-const REQUESTS_TABS = [
-  { to: '/requests', label: 'Заявки', match: /^\/requests/ },
-  { to: '/acts',     label: 'Акты',   match: /^\/acts/ },
-]
+// «Движение» — единая страница без SectionTabs. Все секции
+// (Все/Новые/Выданы/Возвращают/Вернули/Акты) живут как чипы-фильтры
+// внутри самой страницы /issued (IssuedByProjectsPage).
+const ISSUANCE_TABS = []
 const PROBLEMS_TABS = [
   { to: '/debts',     label: 'Долги',     match: /^\/debts/ },
   { to: '/writeoffs', label: 'Списания',  match: /^\/writeoffs/ },
@@ -68,6 +73,9 @@ const TEAM_TABS = [
 
 // Фильтр табов по скрытым для роли URL
 const HIDDEN_URLS_BY_ROLE = {
+  // Staff не видит «Акты» (закрытая аналитика), «Команду» и пр.
+  // «Движение» (/issued) теперь доступна — это иерархический список заявок
+  // с подфильтрами, для staff это единственный таб раздела.
   warehouse_staff: ['/rent', '/acts', '/team', '/assets', '/debts', '/writeoffs'],
 }
 function filterTabsForRole(tabs, role) {
@@ -75,14 +83,15 @@ function filterTabsForRole(tabs, role) {
   return tabs.filter(t => !hidden.includes(t.to))
 }
 
-// Мобильный bottom-bar: 4 основных + центральная «+» + пункт «Ещё»
+// Мобильный bottom-bar: 4 основных + центральная «+» + пункт «Ещё».
+// «Движение» ведёт на /issued — единый список заявок/выданного/возвратов.
 const MOBILE_TABS = [
   { to: '/dashboard', icon: Home,           label: 'Главная' },
   { to: '/units',     icon: Package,         label: 'Каталог' },
-  { to: '/requests',  icon: ClipboardList,   label: 'Заявки' },
+  { to: '/issued',    icon: Send,            label: 'Движение' },
 ]
 
-// Mobile drawer «Ещё»
+// Mobile drawer «Ещё».
 const MOBILE_DRAWER = [
   { to: '/cells',         icon: LayoutGrid,     label: 'Склады' },
   { to: '/debts',         icon: AlertTriangle,  label: 'Проблемы',    hideFor: ['warehouse_staff'] },
@@ -99,7 +108,27 @@ function getInitials(name = '') {
 
 const css = `
 /* ── Root ── */
-.wl-root { display: flex; min-height: 100vh; background: var(--paper); }
+/* --topbar-h: высота fixed-шапки (mtop на мобилке / topbar на десктопе).
+   --tabs-h: высота строки SectionTabs если она активна (горизонтальные
+            вкладки Заявки/Акты, Каталог/Склад/Декорации, Долги/…) — иначе 0.
+   --page-sticky-top: точка прилипания шапки страницы (заголовок+фильтры).
+            Прилипает под SectionTabs если они есть, иначе сразу под mtop. */
+.wl-root {
+  display: flex; min-height: 100vh; background: var(--paper);
+  /* DEV/STAGING-баннер (App.jsx) измеряет свою реальную высоту через ref и
+     выставляет --devenv-banner-h на documentElement. --top-offset = максимум
+     между safe-area-inset-top и высотой баннера: когда баннер есть, он сам
+     включает safe-area в свою padding-top, и нам нужно отступить ровно на
+     полную высоту баннера. Когда баннера нет — просто safe-area. */
+  --top-offset: max(env(safe-area-inset-top, 0px), var(--devenv-banner-h, 0px));
+  --topbar-h: calc(56px + var(--top-offset));
+  --tabs-h: 0px;
+  --page-sticky-top: calc(var(--topbar-h) + var(--tabs-h));
+}
+/* --tabs-h-real пишется из SectionTabs (ResizeObserver на st-bar) — это
+   точная высота строки табов в px. Фолбэк 40px используется до первого
+   замера и если SectionTabs ещё не смонтирован. */
+.wl-root.has-section-tabs { --tabs-h: var(--tabs-h-real, 40px); }
 
 /* ── Rail (desktop, 64px) ── */
 .wl-rail {
@@ -210,11 +239,11 @@ const css = `
 .wl-topbar {
   position: fixed;
   top: var(--impersonate-offset, 0px); left: 64px; right: 0;
-  height: 56px;
+  height: var(--topbar-h);
+  padding-top: var(--top-offset);
   background: var(--ink-950);
-  border-bottom: 1px solid var(--sidebar-border);
   display: flex; align-items: center;
-  padding: 0 20px;
+  padding-left: 20px; padding-right: 20px;
   gap: 14px;
   z-index: 90;
 }
@@ -306,7 +335,7 @@ const css = `
 /* ── Main content ── */
 .wl-main {
   margin-left: 64px;
-  padding-top: 56px;
+  padding-top: var(--topbar-h);
   flex: 1;
   min-height: 100vh;
 }
@@ -328,13 +357,21 @@ const css = `
   display: none;
   position: fixed;
   top: var(--impersonate-offset, 0px); left: 0; right: 0;
-  height: 52px;
+  /* +2px к высоте + sticky-элементы под mtop поднимаются на -1px (3px
+     перекрытия). Page padding-top остаётся var(--topbar-h), нижние пиксели
+     mtop перекрывают первые пиксели sticky-табов. */
+  height: calc(var(--topbar-h) + 2px);
+  padding-top: var(--top-offset);
   background: var(--ink-950);
-  border-bottom: 1px solid var(--sidebar-border);
+  /* НЕТ border-bottom: rgba(255,255,255,0.07) на стыке с белыми табами
+     выглядел как полупрозрачная серая полоска. Граница между ink-950 и
+     белым st-bar и так чёткая — дополнительная линия не нужна. */
   align-items: center;
-  padding: 0 12px;
+  padding-left: 12px; padding-right: 12px;
   gap: 8px;
   z-index: 200;
+  transform: translate3d(0, 0, 0);
+  will-change: transform;
 }
 .wl-mtop-logo {
   display: flex; align-items: center; gap: 8px; cursor: pointer; flex-shrink: 0;
@@ -356,7 +393,46 @@ const css = `
 .wl-mtop-wh span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .wl-mtop-actions { display: flex; gap: 2px; margin-left: auto; flex-shrink: 0; }
 
+/* Inline-поиск каталога: появляется в mtop вместо "иконка лупы → modal"
+   только на страницах каталога (/units, /decorations, /production/project-warehouse).
+   Значение синхронизируется с URL ?q=, страница каталога читает его. */
+.wl-mtop-cat-search {
+  flex: 1; min-width: 0;
+  display: flex; align-items: center; gap: 8px;
+  height: 34px; padding: 0 10px 0 32px;
+  background: rgba(255,255,255,0.06);
+  border: 1px solid var(--sidebar-border);
+  border-radius: 8px;
+  color: #fff;
+  font-size: 13px;
+  position: relative;
+}
+.wl-mtop-cat-search input {
+  flex: 1; min-width: 0; height: 100%;
+  background: transparent; border: none; outline: none;
+  color: #fff;
+  font-size: 13px;
+  font-family: inherit;
+}
+.wl-mtop-cat-search input::placeholder { color: rgba(255,255,255,0.4); }
+.wl-mtop-cat-search-icon {
+  position: absolute; left: 10px; top: 50%; transform: translateY(-50%);
+  color: rgba(255,255,255,0.5);
+  pointer-events: none;
+}
+.wl-mtop-cat-search-clear {
+  background: none; border: none;
+  color: rgba(255,255,255,0.5);
+  cursor: pointer; padding: 0;
+  display: flex; align-items: center; justify-content: center;
+  width: 18px; height: 18px;
+}
+.wl-mtop-cat-search-clear:hover { color: #fff; }
+
 /* ── Mobile bottom nav ── */
+/* iOS Safari квиркс: position:fixed внутри flex-контейнера прыгает при
+   rubber-band скролле. Принудительно создаём GPU-layer через translate3d
+   + will-change — отсекает контекст и элемент «клеится» к viewport. */
 .wl-mnav {
   display: none;
   position: fixed; bottom: 0; left: 0; right: 0;
@@ -364,6 +440,10 @@ const css = `
   border-top: 1px solid var(--border);
   z-index: 200;
   padding: 6px 0 max(6px, env(safe-area-inset-bottom));
+  transform: translate3d(0, 0, 0);
+  will-change: transform;
+  -webkit-backface-visibility: hidden;
+  backface-visibility: hidden;
 }
 .wl-mnav-inner { display: flex; justify-content: space-around; align-items: center; }
 .wl-mnav-item {
@@ -607,13 +687,30 @@ const css = `
   .wl-topbar  { display: none !important; }
   .wl-main    {
     margin-left: 0 !important;
-    padding-top: 52px;
+    padding-top: var(--topbar-h);
     /* Высота mobile bottom-nav (~70px контент + safe-area) */
     padding-bottom: calc(76px + env(safe-area-inset-bottom, 0px));
   }
   .wl-mtop    { display: flex !important; }
   .wl-mnav    { display: block !important; }
+  .wl-root    { --topbar-h: calc(52px + var(--top-offset)); }
+  /* Кнопка «Назад» на мобилке съедала отдельную строку перед шапкой страницы.
+     На страницах есть sticky-шапки со своим inline chevron-back, а в мобильном
+     нав-меню есть «Ещё» + системный жест. Прячем глобальную wl-back. */
+  .wl-back    { display: none !important; }
+  /* Универсальный inline chevron-back для sticky-шапок страниц.
+     На десктопе скрыт — там есть .wl-back. */
+  .page-back  { display: inline-flex !important; }
 }
+.page-back {
+  display: none;
+  background: none; border: none; cursor: pointer;
+  width: 32px; height: 32px; border-radius: 8px;
+  align-items: center; justify-content: center;
+  color: var(--muted);
+  flex-shrink: 0;
+}
+.page-back:hover { color: var(--text); background: var(--bg-secondary); }
 `
 
 export default function WarehouseLayout({ children }) {
@@ -634,6 +731,9 @@ export default function WarehouseLayout({ children }) {
   const qaSheetRef = useRef(null)
 
   const canPublicLink = !!ROLES[user?.role]?.canPublicLink
+  // Walk-in выдача — только директор/зам склада: они единственные имеют
+  // право заводить новых юзеров и проекты на лету.
+  const canWalkin = user?.role === 'warehouse_director' || user?.role === 'warehouse_deputy'
 
   // Блок body-scroll на время открытых оверлеев (drawer, bottom-sheet, модалка).
   useBodyLock(burger || qaOpen || whOpen || !!publicLink)
@@ -667,6 +767,23 @@ export default function WarehouseLayout({ children }) {
   const pathFull = location.pathname + location.search
   // Кнопка «Назад» показывается на всех страницах кроме главной.
   const showBack = !/^\/dashboard(?:\/|$|\?)/.test(location.pathname) && location.pathname !== '/'
+
+  // Режим каталога: на этих URL заменяем mtop-search-кнопку на инлайн-инпут,
+  // а UnitsPage/Decorations/ProjectWarehouse читают значение через ?q=.
+  const isCatalogRoute = /^\/(units|admin-stock|decorations|production\/project-warehouse)(\/|$)/.test(location.pathname)
+  // Активна ли строка SectionTabs (вкладки Заявки/Акты, Каталог/Склад/Декорации,
+  // Долги/Списания/Пересорт). Если да — sticky-шапка страницы должна прилипать
+  // НИЖЕ табов, а не на ту же позицию (иначе табы её перекрывают).
+  const hasSectionTabs =
+    [...CATALOG_TABS, ...ISSUANCE_TABS, ...PROBLEMS_TABS]
+      .some(t => t.match ? t.match.test(pathFull) : pathFull.startsWith(t.to))
+  const [searchParams, setSearchParams] = useSearchParams()
+  const catalogQuery = searchParams.get('q') || ''
+  function updateCatalogQuery(val) {
+    const next = new URLSearchParams(searchParams)
+    if (val) next.set('q', val); else next.delete('q')
+    setSearchParams(next, { replace: true })
+  }
 
   // Закрытие поповеров при клике вне.
   // ВАЖНО: проверяем И desktop-popover (qaRef) И mobile-bottom-sheet (qaSheetRef),
@@ -711,7 +828,7 @@ export default function WarehouseLayout({ children }) {
   return (
     <>
       <style>{css}</style>
-      <div className="wl-root">
+      <div className={`wl-root${hasSectionTabs ? ' has-section-tabs' : ''}`}>
 
         {/* ═══ Desktop Rail (64px) ═══ */}
         <aside className="wl-rail">
@@ -751,9 +868,16 @@ export default function WarehouseLayout({ children }) {
                   <button className="wl-qa-item" onClick={() => quick('/units?add=1')}>
                     <Package size={16} /> Добавить единицу
                   </button>
-                  <button className="wl-qa-item" onClick={() => quick('/cells/constructor')}>
-                    <LayoutGrid size={16} /> Создать секцию
+                  <button className="wl-qa-item" onClick={() => quick('/units/bulk')}>
+                    <Images size={16} /> Пакетное пополнение
                   </button>
+                  {canWalkin && (
+                    <button className="wl-qa-item" onClick={() => quick('/walkin/new')}>
+                      <Zap size={16} /> Быстрая выдача
+                    </button>
+                  )}
+                  {/* «Создать секцию» убрано — секции создаются из каталога
+                      складов (/cells → Создать зал), чтобы не плодить точки входа. */}
                   {canPublicLink && (
                     <button className="wl-qa-item" onClick={generatePublicLink} disabled={linkLoading}>
                       <LinkIcon size={16} /> {linkLoading ? 'Генерация…' : 'Ссылка на каталог'}
@@ -823,11 +947,31 @@ export default function WarehouseLayout({ children }) {
             <MapPin size={12} strokeWidth={2} />
             <span>{selectedWh}</span>
           </button>
-          <div className="wl-mtop-actions">
-            <button className="wl-top-btn" onClick={() => searchProps.setOpen(true)}>
-              <Search size={17} />
-            </button>
-          </div>
+          {isCatalogRoute ? (
+            <div className="wl-mtop-cat-search">
+              <Search size={14} className="wl-mtop-cat-search-icon" />
+              <input
+                value={catalogQuery}
+                onChange={e => updateCatalogQuery(e.target.value)}
+                placeholder="Поиск по каталогу…"
+              />
+              {catalogQuery && (
+                <button
+                  className="wl-mtop-cat-search-clear"
+                  onClick={() => updateCatalogQuery('')}
+                  aria-label="Очистить"
+                >
+                  <X size={14} />
+                </button>
+              )}
+            </div>
+          ) : (
+            <div className="wl-mtop-actions">
+              <button className="wl-top-btn" onClick={() => searchProps.setOpen(true)}>
+                <Search size={17} />
+              </button>
+            </div>
+          )}
 
           {whOpen && (
             <div className="wl-wh-dd" style={{ position: 'fixed', top: 56, right: 14, left: 'auto' }}>
@@ -847,7 +991,7 @@ export default function WarehouseLayout({ children }) {
         {/* ═══ Main content ═══ */}
         <main className="wl-main">
           <SectionTabs items={filterTabsForRole(CATALOG_TABS, role)} />
-          <SectionTabs items={filterTabsForRole(REQUESTS_TABS, role)} />
+          <SectionTabs items={filterTabsForRole(ISSUANCE_TABS, role)} />
           <SectionTabs items={filterTabsForRole(PROBLEMS_TABS, role)} />
           <SectionTabs items={filterTabsForRole(TEAM_TABS, role)} />
           {showBack && (
@@ -876,9 +1020,15 @@ export default function WarehouseLayout({ children }) {
               </button>
             </div>
 
-            <NavLink to="/requests" className={({ isActive }) => `wl-mnav-item${isActive ? ' active' : ''}`}>
-              <ClipboardList size={22} strokeWidth={1.8} />
-              Заявки
+            <NavLink
+              to="/issued"
+              className={() => {
+                const active = /^\/(requests|issued|walkin|issue|return|returns|acts|rent)/.test(location.pathname)
+                return `wl-mnav-item${active ? ' active' : ''}`
+              }}
+            >
+              <Send size={22} strokeWidth={1.8} />
+              Движение
             </NavLink>
             <button className="wl-mnav-item" onClick={() => setBurger(true)}>
               <Menu size={22} strokeWidth={1.8} />
@@ -900,6 +1050,16 @@ export default function WarehouseLayout({ children }) {
                 <div className="wl-qa-sheet-icon"><Package size={18} /></div>
                 Пополнить склад
               </button>
+              <button className="wl-qa-sheet-item" onClick={() => quick('/units/bulk')}>
+                <div className="wl-qa-sheet-icon"><Images size={18} /></div>
+                Пакетное пополнение
+              </button>
+              {canWalkin && (
+                <button className="wl-qa-sheet-item" onClick={() => quick('/walkin/new')}>
+                  <div className="wl-qa-sheet-icon"><Zap size={18} /></div>
+                  Быстрая выдача
+                </button>
+              )}
               {/* «Создать секцию» убрано с мобилки — секции создаются
                   напрямую из каталога складов (/cells → Создать зал). */}
               {canPublicLink && (
@@ -922,7 +1082,7 @@ export default function WarehouseLayout({ children }) {
                 <div className="wl-drawer-avatar">{getInitials(user?.name || 'ИП')}</div>
                 <div style={{ flex: 1, minWidth: 0 }}>
                   <div className="wl-drawer-name truncate">{user?.name || 'Профиль'}</div>
-                  <div className="wl-drawer-role truncate">{user?.role || ''}</div>
+                  <div className="wl-drawer-role truncate">{ROLES[user?.role]?.label || user?.role || ''}</div>
                 </div>
               </div>
 

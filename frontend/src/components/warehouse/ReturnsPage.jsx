@@ -9,6 +9,7 @@ import { ArrowLeft } from 'lucide-react'
 import WarehouseLayout from './WarehouseLayout'
 import ProductionLayout from '../production/ProductionLayout'
 import Badge from '../shared/Badge'
+import UnitCardModal from '../shared/UnitCardModal'
 import { issuances as issuancesApi, projectUnits as projectUnitsApi, rent as rentApi } from '../../services/api'
 import { useAuth } from '../../hooks/useAuth'
 import { ROLES } from '../../constants/roles'
@@ -37,6 +38,7 @@ export default function ReturnsPage() {
   const [items, setItems] = useState([])
   const [loading, setLoading] = useState(true)
   const [filter, setFilter] = useState('all')
+  const [cardId, setCardId] = useState(null)
 
   useEffect(() => {
     setLoading(true)
@@ -131,7 +133,7 @@ export default function ReturnsPage() {
           <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
             {filtered.map(r => (
               <div key={r.id}
-                onClick={() => r.unitId ? navigate(`/units/${r.unitId}`) : null}
+                onClick={() => r.unitId ? setCardId(r.unitId) : null}
                 style={{
                   background: 'var(--white)', border: '1px solid var(--border)', borderRadius: 10,
                   padding: 12, display: 'flex', alignItems: 'center', gap: 12,
@@ -147,6 +149,7 @@ export default function ReturnsPage() {
           </div>
         )}
       </div>
+      {cardId && <UnitCardModal unitId={cardId} onClose={() => setCardId(null)} />}
     </Layout>
   )
 }
