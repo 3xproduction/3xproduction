@@ -1,6 +1,6 @@
 # Codex checkpoint
 
-Updated: 2026-05-12
+Updated: 2026-05-13
 
 Current task:
 - Continue previous work on the "Админка" section in the Catalog.
@@ -26,5 +26,5 @@ Verification/deploy:
 - Focus checks passed: `node --check backend/src/routes/adminUnits.js`, `node --check backend/src/routes/units.js`, `npx.cmd eslint src\components\shared\AddUnitModal.jsx`, `npm.cmd run build`.
 - Full frontend lint remains red from pre-existing repo-wide issues; not fixed in this task.
 - Claude fast review: PASS. Gate: PASS with `-SkipFrontend`.
-- Deployed to staging `test-v2.84`, revision `bbabduekqc20ofjaol02`, digest `sha256:3c8e9c16be17f91a959d63d49be8d0c5c3c1dc31e9b295cf83bab617f6e5db85`.
+- Deployed to staging `test-v2.86`, revision `bbackcngjtmkpiq3p91d`, digest `sha256:a261282364c74e389901d418a3594f7ef5de556496a292201b7c79b078d1a769`.
 - Staging smoke: `/health=200`, `/manifest.webmanifest=200`; API smoke with `X-Auth-Token`: `warehouse_staff` create/list/delete admin-stock OK, `project_director` create/list/delete admin-stock OK, `producer` `/admin-units` returns 403.
