@@ -9,6 +9,7 @@ import { useEffect, useState } from 'react'
 import { Package, Search as SearchIcon, ChevronRight } from 'lucide-react'
 import { units as unitsApi } from '../../../services/api'
 import { categoryLabel } from '../../../constants/categories'
+import { sumUnitQty } from '../../../utils/unitQty'
 
 export default function PickUnitList({ onPicked }) {
   const [units, setUnits] = useState([])
@@ -42,7 +43,9 @@ export default function PickUnitList({ onPicked }) {
       )
     : units
 
-  const freeCount = units.filter(u => !u.cell_id && !u.pavilion_id).length
+  const freeUnits = units.filter(u => !u.cell_id && !u.pavilion_id)
+  const freeCount = sumUnitQty(freeUnits)
+  const placedCount = sumUnitQty(units) - freeCount
 
   return (
     <div className="pul-root">
@@ -86,7 +89,7 @@ export default function PickUnitList({ onPicked }) {
                 {showPlacedHeader && (
                   <div className="pul-section-title pul-section-title-second">
                     Уже размещены
-                    <span className="pul-section-count">{units.length - freeCount}</span>
+                    <span className="pul-section-count">{placedCount}</span>
                   </div>
                 )}
                 <button

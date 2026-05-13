@@ -9,7 +9,7 @@ import PublicUnitCardModal from '../shared/PublicUnitCardModal'
 import { categoryLabel } from '../../constants/categories'
 import { STATUS_LABEL, STATUS_COLOR } from '../../constants/statuses'
 
-const BASE = import.meta.env.VITE_API_URL || ''
+const BASE = import.meta.env.VITE_API_URL || (['5173', '4173'].includes(location.port) ? `${location.protocol}//${location.hostname}:3000` : '')
 
 // Вкладки кабинета — зеркалят фильтры RequestsProductionPage у директора площадки.
 const CABINET_TABS = [
@@ -656,7 +656,7 @@ export default function PublicWarehousePage() {
                     borderRadius: 'var(--radius-btn)', fontSize: 13, background: 'var(--white)', cursor: 'pointer',
                   }}>
                     {categories.map(c => (
-                      <option key={c} value={c}>{c === 'Все' ? 'Выбрать категорию' : categoryLabel(c)}</option>
+                      <option key={c} value={c}>{c === 'Все' ? 'Категория' : categoryLabel(c)}</option>
                     ))}
                   </select>
                   <span style={{ fontSize: 13, color: 'var(--muted)' }}>{filtered.length} ед.</span>

@@ -3,22 +3,24 @@
 // (например, с карты склада — поверх самой карты, а не каталога).
 
 import { useState, useEffect, useRef } from 'react'
-import { Camera, Film } from 'lucide-react'
+import { ArrowLeft, Camera, Film, Sparkles, Receipt, Gift } from 'lucide-react'
 import Button from './Button'
 import { ALL_CATEGORIES, categoryLabel } from '../../constants/categories'
-import { units as unitsApi, warehouses as warehousesApi } from '../../services/api'
+import { CLOTHING_SIZES_INT, CLOTHING_SIZES_RU, SHOE_SIZES, IS_SIZED_CAT, IS_SHOES_CAT } from '../../constants/clothingSizes'
+import { units as unitsApi, warehouses as warehousesApi, projectUnits as projectUnitsApi, adminUnits as adminUnitsApi } from '../../services/api'
 import { useAuth } from '../../hooks/useAuth'
 import { useToast } from './Toast'
+import { removeBgWhite, preloadBgModel, describeBgError, describeBgSkipped } from '../../utils/removeBg'
 
 const EMPTY_FORM = {
   name: '', category: ALL_CATEGORIES[0], dimensions: '', description: '',
   source: 'покупка', qty: 1, warehouse_id: '', cell_id: '', period: '', valuation: '',
+  // project-mode fields
+  purchase_mode: 'purchased', // 'purchased' | 'own'
+  purchase_price: '', purchase_date: new Date().toISOString().slice(0, 10), vendor: '',
 }
-const CLOTHING_SIZES = ['XS', 'S', 'M', 'L', 'XL', 'XXL', 'XXXL']
-const SHOE_SIZES = ['35', '36', '37', '38', '39', '40', '41', '42', '43', '44', '45', '46', '47']
-const IS_CLOTHING_CAT = (cat) => ['costumes', 'clothing'].includes(cat)
 
-function compressImage(file, maxSize = 1024, quality = 0.5) {
+function compressImage(file, maxSize = 1568, quality = 0.85) {
   return new Promise((resolve) => {
     const img = new Image()
     img.onload = () => {
@@ -45,9 +47,13 @@ export default function AddUnitModal({
   onCreated,           // (unit) => void, вызывается после успешного создания
   prefillCellId = '',
   prefillWarehouseId = '',
+  mode = 'warehouse',  // 'warehouse' | 'project' | 'admin' — куда сохраняем
 }) {
   const { user } = useAuth()
   const toast = useToast()
+  const isProjectMode = mode === 'project'
+  const isAdminMode = mode === 'admin'
+  const isDetachedStockMode = isProjectMode || isAdminMode
   const isDirector = ['warehouse_director', 'warehouse_deputy'].includes(user?.role)
   const canSeeSource = ['warehouse_director', 'warehouse_deputy', 'producer'].includes(user?.role)
 
@@ -55,15 +61,34 @@ export default function AddUnitModal({
   const [form, setForm] = useState(EMPTY_FORM)
   const [photos, setPhotos] = useState([])
   const [sizeType, setSizeType] = useState('clothing')
+  const [sizeRegion, setSizeRegion] = useState('ru') // 'ru' | 'int' — российская или международная сетка одежды
   const [adding, setAdding] = useState(false)
   const [addError, setAddError] = useState('')
   const [recognizing, setRecognizing] = useState(false)
   const [outliers, setOutliers] = useState(new Set())
   const [warehouses, setWarehouses] = useState([])
   const [cells, setCells] = useState([])
+  const [receiptFile, setReceiptFile] = useState(null)
+  const [receiptPreview, setReceiptPreview] = useState('')
   const fileRef = useRef()
   const camRef = useRef()
   const videoRef = useRef()
+  const receiptRef = useRef()
+
+  // «Белый фон» — opt-in. Persist в localStorage чтобы юзер не переключал каждый раз.
+  const [whiteBg, setWhiteBg] = useState(() => {
+    try { return localStorage.getItem('whiteBgEnabled') === '1' } catch { return false }
+  })
+  // Прогресс удаления фона: { idx, total, phase, percent? }
+  const [bgProgress, setBgProgress] = useState(null)
+
+  function toggleWhiteBg() {
+    const next = !whiteBg
+    setWhiteBg(next)
+    try { localStorage.setItem('whiteBgEnabled', next ? '1' : '0') } catch { /* localStorage can be unavailable in private mode */ }
+    // Прогрев модели в фоне — чтобы первое фото обрабатывалось без ожидания.
+    if (next) preloadBgModel().catch(() => {})
+  }
 
   // Reset и префилл каждый раз при открытии.
   useEffect(() => {
@@ -77,8 +102,13 @@ export default function AddUnitModal({
     setAddError('')
     setAddStep(1)
     setSizeType('clothing')
-    warehousesApi.list().then(d => setWarehouses(d.warehouses || [])).catch(() => {})
-  }, [open, prefillCellId, prefillWarehouseId])
+    setSizeRegion('ru')
+    setReceiptFile(null)
+    setReceiptPreview('')
+    if (!isDetachedStockMode || isAdminMode) {
+      warehousesApi.list().then(d => setWarehouses(d.warehouses || [])).catch(() => {})
+    }
+  }, [open, prefillCellId, prefillWarehouseId, isDetachedStockMode, isAdminMode])
 
   useEffect(() => {
     if (!form.warehouse_id) { setCells([]); return }
@@ -90,7 +120,35 @@ export default function AddUnitModal({
 
   async function onFilesSelected(e) {
     const files = Array.from(e.target.files)
-    const processed = await Promise.all(files.map(f => isVideoFile(f) ? f : compressImage(f)))
+    // Сжимаем картинки сразу (видео — пропускаем).
+    const compressed = await Promise.all(files.map(f => isVideoFile(f) ? f : compressImage(f)))
+
+    let processed = compressed
+    if (whiteBg) {
+      // Удаление фона — последовательно с прогрессом, видео пропускаем.
+      const onlyImgIdx = compressed.map((f, i) => isVideoFile(f) ? -1 : i).filter(i => i !== -1)
+      const total = onlyImgIdx.length
+      processed = [...compressed]
+      let skipReason = null
+      let firstErr = null
+      for (let n = 0; n < onlyImgIdx.length; n++) {
+        const i = onlyImgIdx[n]
+        setBgProgress({ idx: n + 1, total })
+        try {
+          const out = await removeBgWhite(compressed[i])
+          processed[i] = out
+          if (out?._bgSkipped && !skipReason) skipReason = out._bgSkipped
+        } catch (err) {
+          console.error('Background removal failed:', err?.code, err?.message)
+          if (!firstErr) firstErr = err
+          processed[i] = compressed[i]
+        }
+      }
+      setBgProgress(null)
+      if (firstErr) toast?.(describeBgError(firstErr), 'error')
+      else if (skipReason) toast?.(describeBgSkipped(skipReason), 'warning')
+    }
+
     setPhotos(prev => [...prev, ...processed].slice(0, 5))
     setOutliers(new Set())
   }
@@ -98,8 +156,8 @@ export default function AddUnitModal({
   async function handlePhotosReady() {
     const imagePhotoIdx = photos.map((p, i) => isVideoFile(p) ? -1 : i).filter(i => i !== -1)
     const images = imagePhotoIdx.map(i => photos[i])
-    if (images.length < 2) {
-      toast?.('Загрузите минимум 2 фото одного предмета', 'error')
+    if (images.length < 1) {
+      toast?.('Загрузите хотя бы одно фото', 'error')
       return
     }
     setRecognizing(true)
@@ -118,13 +176,21 @@ export default function AddUnitModal({
         return
       }
       if (result?.name || result?.category || result?.description) {
-        setForm(f => ({
-          ...f,
-          name: result.name || f.name,
-          category: ALL_CATEGORIES.includes(result.category) ? result.category : f.category,
-          period: result.period || f.period,
-          description: result.description || f.description,
-        }))
+        setForm(f => {
+          const nextCat = ALL_CATEGORIES.includes(result.category) ? result.category : f.category
+          if (nextCat !== f.category) {
+            // Синхронизируем тип размерной сетки с распознанной категорией.
+            setSizeType(IS_SHOES_CAT(nextCat) ? 'shoe' : 'clothing')
+            setSizeRegion('ru')
+          }
+          return {
+            ...f,
+            name: result.name || f.name,
+            category: nextCat,
+            period: result.period || f.period,
+            description: result.description || f.description,
+          }
+        })
         toast?.('AI заполнил поля — проверьте и отредактируйте', 'success')
       } else {
         toast?.('AI нужна ещё попытка или заполните вручную', 'error')
@@ -139,26 +205,62 @@ export default function AddUnitModal({
 
   async function handleAdd() {
     if (!form.name.trim()) return
-    if (isDirector && !form.valuation) { setAddError('Укажите стоимость единицы'); return }
+    if (!isDetachedStockMode && isDirector && !form.valuation) { setAddError('Укажите стоимость единицы'); return }
+    if (isProjectMode && form.purchase_mode === 'purchased') {
+      if (!form.purchase_price) { setAddError('Укажите цену покупки'); return }
+      if (!receiptFile) { setAddError('Прикрепите фото чека'); return }
+    }
     setAdding(true)
     setAddError('')
     try {
-      const createUnit = async () => unitsApi.create({
-        name: form.name,
-        category: form.category,
-        dimensions: form.dimensions || null,
-        description: form.description || null,
-        source: canSeeSource ? form.source : null,
-        qty: Number(form.qty) || 1,
-        valuation: form.valuation ? Number(form.valuation) : null,
-        warehouse_id: form.warehouse_id || null,
-        cell_id: form.cell_id || null,
-        period: form.period || null,
-      })
-      let data
-      try { data = await createUnit() }
-      catch { data = await createUnit() }
-      const unitId = data.unit?.id
+      let data, unitId
+      if (isDetachedStockMode) {
+        // 1. Загрузка чека (для purchased). В админке чек опциональный.
+        let receiptUrl = null
+        if (form.purchase_mode === 'purchased' && receiptFile) {
+          const fd = new FormData()
+          fd.append('receipt', receiptFile)
+          const r = isAdminMode
+            ? await adminUnitsApi.uploadReceipt(fd)
+            : await projectUnitsApi.uploadReceipt(fd)
+          receiptUrl = r.url
+        }
+        // 2. Создание единицы в отдельном каталоге без физической полки.
+        const purchasePrice = form.purchase_price ? Number(form.purchase_price) : null
+        const payload = {
+          name: form.name,
+          category: form.category,
+          dimensions: form.dimensions || null,
+          description: form.description || null,
+          qty: Number(form.qty) || 1,
+          period: form.period || null,
+          purchased: form.purchase_mode === 'purchased',
+          purchase_price: form.purchase_mode === 'purchased' ? purchasePrice : null,
+          purchase_date:  form.purchase_mode === 'purchased' ? form.purchase_date : null,
+          vendor:         form.purchase_mode === 'purchased' ? (form.vendor || null) : null,
+          receipt_url:    receiptUrl,
+          valuation: form.purchase_mode === 'purchased' && purchasePrice ? purchasePrice : null,
+        }
+        data = isAdminMode ? await adminUnitsApi.create(payload) : await projectUnitsApi.create(payload)
+        unitId = data.unit?.id
+      } else {
+        const createUnit = async () => unitsApi.create({
+          name: form.name,
+          category: form.category,
+          dimensions: form.dimensions || null,
+          description: form.description || null,
+          source: canSeeSource ? form.source : null,
+          qty: Number(form.qty) || 1,
+          valuation: form.valuation ? Number(form.valuation) : null,
+          warehouse_id: form.warehouse_id || null,
+          cell_id: form.cell_id || null,
+          period: form.period || null,
+        })
+        try { data = await createUnit() }
+        catch { data = await createUnit() }
+        unitId = data.unit?.id
+      }
+
       let photoErrors = 0
       if (unitId && photos.length > 0) {
         for (const file of photos) {
@@ -170,6 +272,10 @@ export default function AddUnitModal({
       }
       if (photoErrors > 0) {
         toast?.(`Единица создана, но ${photoErrors} фото не загрузилось`, 'error')
+      } else if (isAdminMode) {
+        toast?.('Добавлено в Админку', 'success')
+      } else if (isProjectMode) {
+        toast?.('Добавлено на склад проекта', 'success')
       } else {
         toast?.(isDirector ? 'Позиция добавлена на склад' : 'Позиция отправлена на утверждение', 'success')
       }
@@ -180,6 +286,13 @@ export default function AddUnitModal({
     } finally {
       setAdding(false)
     }
+  }
+
+  function onReceiptSelected(e) {
+    const f = e.target.files?.[0]
+    if (!f) return
+    setReceiptFile(f)
+    setReceiptPreview(URL.createObjectURL(f))
   }
 
   if (!open) return null
@@ -205,17 +318,56 @@ export default function AddUnitModal({
         {/* STEP 1 — Photos */}
         {addStep === 1 && (
           <>
-            {recognizing ? (
+            {recognizing || bgProgress ? (
               <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', padding: '48px 0', gap: 16 }}>
                 <div style={{ width: 48, height: 48, border: '3px solid var(--border)', borderTopColor: 'var(--accent)', borderRadius: '50%', animation: 'spin 0.8s linear infinite' }} />
-                <div style={{ fontSize: 14, fontWeight: 500, color: 'var(--text)' }}>AI анализирует фото...</div>
-                <div style={{ fontSize: 13, color: 'var(--muted)' }}>Заполняем данные автоматически</div>
+                {bgProgress ? (
+                  <>
+                    <div style={{ fontSize: 14, fontWeight: 500, color: 'var(--text)' }}>
+                      {`Делаю белый фон ${bgProgress.idx}/${bgProgress.total}…`}
+                    </div>
+                    <div style={{ fontSize: 13, color: 'var(--muted)' }}>
+                      {bgProgress.idx === 1
+                        ? 'Первое фото — до 15 секунд (прогрев), дальше быстрее'
+                        : 'Обработка на сервере, ~1–3 секунды на фото'}
+                    </div>
+                  </>
+                ) : (
+                  <>
+                    <div style={{ fontSize: 14, fontWeight: 500, color: 'var(--text)' }}>AI анализирует фото...</div>
+                    <div style={{ fontSize: 13, color: 'var(--muted)' }}>Заполняем данные автоматически</div>
+                  </>
+                )}
                 <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
               </div>
             ) : (
               <>
                 <div style={{ fontWeight: 600, fontSize: 16, marginBottom: 6 }}>Загрузите фото</div>
-                <div style={{ fontSize: 13, color: 'var(--muted)', marginBottom: 20 }}>От 2 до 5 фото одного предмета (разные ракурсы). Видео — опционально.</div>
+                <div style={{ fontSize: 13, color: 'var(--muted)', marginBottom: 12 }}>От 1 до 5 фото одного предмета (разные ракурсы). Видео — опционально.</div>
+
+                {/* Чекбокс «Белый фон» — opt-in, persist в localStorage. */}
+                <label style={{
+                  display: 'flex', alignItems: 'center', gap: 10,
+                  padding: '10px 12px', marginBottom: 16,
+                  background: whiteBg ? 'var(--gold-50, #FAF6E8)' : 'var(--bg)',
+                  border: `1px solid ${whiteBg ? 'var(--accent)' : 'var(--border)'}`,
+                  borderRadius: 'var(--radius-btn)', cursor: 'pointer',
+                  transition: 'background .15s, border-color .15s',
+                }}>
+                  <input
+                    type="checkbox"
+                    checked={whiteBg}
+                    onChange={toggleWhiteBg}
+                    style={{ width: 18, height: 18, accentColor: 'var(--accent)', cursor: 'pointer' }}
+                  />
+                  <Sparkles size={16} color={whiteBg ? 'var(--accent)' : 'var(--muted)'} strokeWidth={1.6} />
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--text)' }}>Сделать белый фон</div>
+                    <div style={{ fontSize: 11, color: 'var(--muted)', lineHeight: 1.3 }}>
+                      Удалит фон вокруг предмета. Обработка на сервере — 1–3 секунды на фото.
+                    </div>
+                  </div>
+                </label>
 
                 {outliers.size > 0 && (
                   <div style={{
@@ -269,18 +421,34 @@ export default function AddUnitModal({
                   )}
                 </div>
                 <input ref={fileRef} type="file" accept="image/*,video/mp4,video/webm,video/quicktime" multiple style={{ display: 'none' }} onChange={onFilesSelected} />
-                <input ref={camRef} type="file" accept="image/*,video/mp4,video/webm,video/quicktime" capture style={{ display: 'none' }} onChange={onFilesSelected} />
-                <input ref={videoRef} type="file" accept="video/mp4,video/webm,video/quicktime" style={{ display: 'none' }} onChange={onFilesSelected} />
+                <input ref={camRef} type="file" accept="image/*" capture="environment" style={{ display: 'none' }} onChange={onFilesSelected} />
+                <input ref={videoRef} type="file" accept="video/*" capture="environment" style={{ display: 'none' }} onChange={onFilesSelected} />
 
                 <div style={{ display: 'flex', gap: 8 }}>
                   <Button variant="secondary" fullWidth onClick={onClose}>Отмена</Button>
-                  <Button fullWidth disabled={photos.filter(f => !isVideoFile(f)).length < 2} onClick={handlePhotosReady}>
-                    {photos.filter(f => !isVideoFile(f)).length < 2 ? `Нужно ещё ${2 - photos.filter(f => !isVideoFile(f)).length} фото` : 'Готово'}
+                  <Button fullWidth disabled={photos.filter(f => !isVideoFile(f)).length < 1} onClick={handlePhotosReady}>
+                    {photos.filter(f => !isVideoFile(f)).length < 1 ? 'Добавь фото' : 'Готово'}
                   </Button>
                 </div>
               </>
             )}
           </>
+        )}
+
+        {addStep > 1 && (
+          <button
+            type="button"
+            onClick={() => setAddStep(addStep - 1)}
+            style={{
+              height: 32, padding: '0 10px', marginBottom: 14,
+              display: 'inline-flex', alignItems: 'center', gap: 6,
+              border: '1px solid var(--border)', borderRadius: 'var(--radius-btn)',
+              background: 'var(--white)', color: 'var(--text)', cursor: 'pointer',
+              fontSize: 13, fontWeight: 500,
+            }}
+          >
+            <ArrowLeft size={14} /> Назад
+          </button>
         )}
 
         {/* STEP 2 — Description */}
@@ -300,7 +468,15 @@ export default function AddUnitModal({
             </div>
 
             <FL>Категория *</FL>
-            <select value={form.category} onChange={e => setForm(f => ({ ...f, category: e.target.value, dimensions: '' }))}
+            <select value={form.category} onChange={e => {
+              const next = e.target.value
+              setForm(f => ({ ...f, category: next, dimensions: '' }))
+              // Для обуви сразу переключаемся на сетку обуви — Одежда/Обувь
+              // переключатель в этой категории не имеет смысла. Для остальных
+              // sized-категорий (одежда, костюмы, аксессуары) — сетка одежды.
+              setSizeType(IS_SHOES_CAT(next) ? 'shoe' : 'clothing')
+              setSizeRegion('ru')
+            }}
               style={{ width: '100%', height: 38, padding: '0 10px', border: '1px solid var(--border)', borderRadius: 'var(--radius-btn)', fontSize: 13, marginBottom: 12, background: 'var(--white)' }}>
               {ALL_CATEGORIES.map(c => <option key={c} value={c}>{categoryLabel(c)}</option>)}
             </select>
@@ -312,17 +488,30 @@ export default function AddUnitModal({
             <textarea value={form.description} onChange={e => setForm(f => ({ ...f, description: e.target.value }))} placeholder="Цвет, состояние, материал, особенности..."
               style={{ width: '100%', height: 72, padding: '8px 10px', border: '1px solid var(--border)', borderRadius: 'var(--radius-btn)', fontSize: 13, resize: 'vertical', marginBottom: 12, fontFamily: 'inherit' }} />
 
-            {IS_CLOTHING_CAT(form.category) && (
+            {IS_SIZED_CAT(form.category) && (
               <>
                 <FL>Размер</FL>
-                <div style={{ display: 'flex', gap: 8, marginBottom: 8 }}>
-                  <button onClick={() => setSizeType('clothing')}
-                    style={{ padding: '4px 12px', fontSize: 12, borderRadius: 'var(--radius-btn)', border: '1px solid var(--border)', background: sizeType === 'clothing' ? 'var(--accent)' : 'var(--white)', color: sizeType === 'clothing' ? '#fff' : 'var(--text)', cursor: 'pointer' }}>Одежда</button>
-                  <button onClick={() => setSizeType('shoe')}
-                    style={{ padding: '4px 12px', fontSize: 12, borderRadius: 'var(--radius-btn)', border: '1px solid var(--border)', background: sizeType === 'shoe' ? 'var(--accent)' : 'var(--white)', color: sizeType === 'shoe' ? '#fff' : 'var(--text)', cursor: 'pointer' }}>Обувь</button>
-                </div>
+                {!IS_SHOES_CAT(form.category) && (
+                  <div style={{ display: 'flex', gap: 8, marginBottom: 8 }}>
+                    <button onClick={() => { setSizeType('clothing'); setForm(f => ({ ...f, dimensions: '' })) }}
+                      style={{ padding: '4px 12px', fontSize: 12, borderRadius: 'var(--radius-btn)', border: '1px solid var(--border)', background: sizeType === 'clothing' ? 'var(--accent)' : 'var(--white)', color: sizeType === 'clothing' ? '#fff' : 'var(--text)', cursor: 'pointer' }}>Одежда</button>
+                    <button onClick={() => { setSizeType('shoe'); setForm(f => ({ ...f, dimensions: '' })) }}
+                      style={{ padding: '4px 12px', fontSize: 12, borderRadius: 'var(--radius-btn)', border: '1px solid var(--border)', background: sizeType === 'shoe' ? 'var(--accent)' : 'var(--white)', color: sizeType === 'shoe' ? '#fff' : 'var(--text)', cursor: 'pointer' }}>Обувь</button>
+                  </div>
+                )}
+                {sizeType === 'clothing' && (
+                  <div style={{ display: 'inline-flex', gap: 0, marginBottom: 10, border: '1px solid var(--border)', borderRadius: 'var(--radius-btn)', overflow: 'hidden', background: 'var(--bg-secondary)' }}>
+                    <button onClick={() => { setSizeRegion('ru'); setForm(f => ({ ...f, dimensions: '' })) }}
+                      style={{ padding: '5px 14px', fontSize: 11.5, fontWeight: 600, border: 'none', background: sizeRegion === 'ru' ? 'var(--white)' : 'transparent', color: sizeRegion === 'ru' ? 'var(--gold-700, var(--gold-600))' : 'var(--muted)', cursor: 'pointer', boxShadow: sizeRegion === 'ru' ? '0 1px 2px rgba(0,0,0,0.06)' : 'none' }}>RU</button>
+                    <button onClick={() => { setSizeRegion('int'); setForm(f => ({ ...f, dimensions: '' })) }}
+                      style={{ padding: '5px 14px', fontSize: 11.5, fontWeight: 600, border: 'none', background: sizeRegion === 'int' ? 'var(--white)' : 'transparent', color: sizeRegion === 'int' ? 'var(--gold-700, var(--gold-600))' : 'var(--muted)', cursor: 'pointer', boxShadow: sizeRegion === 'int' ? '0 1px 2px rgba(0,0,0,0.06)' : 'none' }}>INT</button>
+                  </div>
+                )}
                 <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginBottom: 12 }}>
-                  {(sizeType === 'shoe' ? SHOE_SIZES : CLOTHING_SIZES).map(s => (
+                  {(sizeType === 'shoe'
+                    ? SHOE_SIZES
+                    : (sizeRegion === 'ru' ? CLOTHING_SIZES_RU : CLOTHING_SIZES_INT)
+                  ).map(s => (
                     <button key={s} onClick={() => setForm(f => ({ ...f, dimensions: s }))}
                       style={{ padding: '6px 12px', fontSize: 12, borderRadius: 'var(--radius-btn)', border: '1px solid var(--border)', background: form.dimensions === s ? 'var(--accent)' : 'var(--white)', color: form.dimensions === s ? '#fff' : 'var(--text)', cursor: 'pointer', fontWeight: form.dimensions === s ? 600 : 400 }}>{s}</button>
                   ))}
@@ -340,8 +529,8 @@ export default function AddUnitModal({
           </>
         )}
 
-        {/* STEP 3 — Source, cost, warehouse */}
-        {addStep === 3 && (
+        {/* STEP 3 — Source, cost, warehouse / project source */}
+        {addStep === 3 && !isDetachedStockMode && (
           <>
             <div style={{ fontWeight: 600, fontSize: 16, marginBottom: 6 }}>Размещение</div>
             <div style={{ fontSize: 13, color: 'var(--muted)', marginBottom: 16 }}>Источник и место хранения</div>
@@ -393,6 +582,101 @@ export default function AddUnitModal({
             <div style={{ display: 'flex', gap: 8 }}>
               <Button variant="secondary" fullWidth onClick={() => setAddStep(2)}>Назад</Button>
               <Button fullWidth disabled={(isDirector && !form.valuation) || adding} onClick={handleAdd}>
+                {adding ? 'Сохранение...' : 'Добавить'}
+              </Button>
+            </div>
+          </>
+        )}
+
+        {/* STEP 3 — detached stock mode: purchase / kept */}
+        {addStep === 3 && isDetachedStockMode && (
+          <>
+            <div style={{ fontWeight: 600, fontSize: 16, marginBottom: 6 }}>Источник</div>
+            <div style={{ fontSize: 13, color: 'var(--muted)', marginBottom: 16 }}>
+              {isAdminMode ? 'Покупка для административного цеха или запас без чека' : 'Куплено для проекта или своё/найденное'}
+            </div>
+
+            <div style={{ display: 'flex', gap: 8, marginBottom: 14 }}>
+              {[
+                { k: 'purchased', icon: <Receipt size={14} />, label: isAdminMode ? 'Куплено в Админку' : 'Куплено для проекта', hint: isAdminMode ? 'Чек можно приложить' : 'С чеком' },
+                { k: 'own',       icon: <Gift size={14} />,    label: isAdminMode ? 'Запас без покупки' : 'Своё / найденное', hint: 'Без чека' },
+              ].map(opt => (
+                <button key={opt.k} onClick={() => setForm(f => ({ ...f, purchase_mode: opt.k }))}
+                  style={{
+                    flex: 1, padding: '10px 12px', borderRadius: 'var(--radius-btn)',
+                    border: form.purchase_mode === opt.k ? '1.5px solid var(--accent)' : '1px solid var(--border)',
+                    background: form.purchase_mode === opt.k ? 'var(--gold-50, #FAF6E8)' : 'var(--white)',
+                    textAlign: 'left', cursor: 'pointer',
+                  }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontWeight: 600, fontSize: 13 }}>
+                    {opt.icon} {opt.label}
+                  </div>
+                  <div style={{ fontSize: 11, color: 'var(--muted)', marginTop: 2 }}>{opt.hint}</div>
+                </button>
+              ))}
+            </div>
+
+            {form.purchase_mode === 'purchased' && (
+              <div style={{ background: 'var(--bg)', borderRadius: 'var(--radius-btn)', padding: 12, marginBottom: 12 }}>
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10, marginBottom: 10 }}>
+                  <div>
+                    <FL>Цена покупки, ₽</FL>
+                    <FI type="number" value={form.purchase_price} onChange={v => setForm(f => ({ ...f, purchase_price: v }))} placeholder="1450" />
+                  </div>
+                  <div>
+                    <FL>Дата покупки</FL>
+                    <input type="date" value={form.purchase_date} onChange={e => setForm(f => ({ ...f, purchase_date: e.target.value }))}
+                      style={{ width: '100%', height: 38, padding: '0 10px', border: '1px solid var(--border)', borderRadius: 'var(--radius-btn)', fontSize: 13, background: 'var(--white)', boxSizing: 'border-box' }} />
+                  </div>
+                </div>
+                <FL>Магазин / поставщик</FL>
+                <FI value={form.vendor} onChange={v => setForm(f => ({ ...f, vendor: v }))} placeholder="Леруа Мерлен" />
+                <FL>Фото чека {isAdminMode ? '' : '*'}</FL>
+                {receiptPreview ? (
+                  <div style={{ position: 'relative', display: 'inline-block', marginBottom: 4 }}>
+                    <img src={receiptPreview} alt="" style={{ maxWidth: 140, maxHeight: 140, borderRadius: 8, border: '1px solid var(--border)' }} />
+                    <button onClick={() => { setReceiptFile(null); setReceiptPreview('') }}
+                      style={{ position: 'absolute', top: -6, right: -6, width: 22, height: 22, borderRadius: '50%',
+                        border: 'none', background: 'var(--red)', color: '#fff', cursor: 'pointer' }}>×</button>
+                  </div>
+                ) : (
+                  <button onClick={() => receiptRef.current?.click()}
+                    style={{ padding: '10px 16px', borderRadius: 8, border: '1.5px dashed var(--border)',
+                      background: 'var(--white)', cursor: 'pointer', fontSize: 13 }}>
+                    📷 Прикрепить чек
+                  </button>
+                )}
+                <input ref={receiptRef} type="file" accept="image/*" capture="environment" style={{ display: 'none' }} onChange={onReceiptSelected} />
+              </div>
+            )}
+
+            {isAdminMode ? (
+              <>
+                <FL>Адрес хранения</FL>
+                <select
+                  value={warehouses.some(w => w.name === form.period) ? form.period : ''}
+                  onChange={e => setForm(f => ({ ...f, period: e.target.value }))}
+                  style={{ width: '100%', height: 38, padding: '0 10px', border: '1px solid var(--border)', borderRadius: 'var(--radius-btn)', fontSize: 13, marginBottom: 8, background: 'var(--white)' }}
+                >
+                  <option value="">Вписать свой адрес</option>
+                  {warehouses.map(w => <option key={w.id} value={w.name}>{w.name}</option>)}
+                </select>
+                <FI value={form.period} onChange={v => setForm(f => ({ ...f, period: v }))} placeholder="Например: офис, шкаф реквизита, склад на площадке" />
+              </>
+            ) : (
+              <>
+                <FL>Временное понятие</FL>
+                <FI value={form.period} onChange={v => setForm(f => ({ ...f, period: v }))} placeholder="Советское, XVIII век, современное..." />
+              </>
+            )}
+
+            {addError && <div style={{ color: 'var(--red)', fontSize: 13, marginBottom: 12 }}>{addError}</div>}
+
+            <div style={{ display: 'flex', gap: 8 }}>
+              <Button variant="secondary" fullWidth onClick={() => setAddStep(2)}>Назад</Button>
+              <Button fullWidth disabled={adding ||
+                (form.purchase_mode === 'purchased' && isProjectMode && (!form.purchase_price || !receiptFile))}
+                onClick={handleAdd}>
                 {adding ? 'Сохранение...' : 'Добавить'}
               </Button>
             </div>

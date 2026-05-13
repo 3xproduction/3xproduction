@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react'
-import { Package, Archive } from 'lucide-react'
+import { useNavigate } from 'react-router-dom'
+import { Package, Archive, ChevronLeft } from 'lucide-react'
 import WarehouseLayout from './WarehouseLayout'
 import ProductionLayout from '../production/ProductionLayout'
 import Badge from '../shared/Badge'
@@ -24,6 +25,7 @@ function formatDate(str) {
 
 export default function DebtsPage() {
   const { user } = useAuth()
+  const navigate = useNavigate()
   const toast = useToast()
   const canClose = ['warehouse_director', 'warehouse_deputy', 'producer'].includes(user?.role)
   const canWriteoff = ['warehouse_director', 'warehouse_deputy', 'producer'].includes(user?.role)
@@ -111,13 +113,35 @@ export default function DebtsPage() {
 
   return (
     <Layout>
-      <div style={{ padding: '28px 32px', maxWidth: 900 }}>
-        <h1 style={{ fontSize: 22, fontWeight: 600, marginBottom: 2 }}>Долги</h1>
-        <p style={{ color: 'var(--muted)', fontSize: 13, marginBottom: 20 }}>
-          Невозвращённое имущество
-        </p>
+      <style>{`
+        @media (max-width: 768px) {
+          .debts-page { padding: 16px !important; }
+          .debts-sticky {
+            position: sticky; top: var(--page-sticky-top, 52px); z-index: 12;
+            background: var(--paper);
+            margin: -16px -16px 14px;
+            padding: 12px 16px;
+          }
+          .debts-filters { overflow-x: auto; scrollbar-width: none; -webkit-overflow-scrolling: touch; }
+          .debts-filters::-webkit-scrollbar { display: none; }
+          .debts-filters > button { flex-shrink: 0; }
+        }
+      `}</style>
+      <div className="debts-page" style={{ padding: '28px 32px', maxWidth: 900 }}>
+        <div className="debts-sticky">
+          <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+            <button className="page-back" onClick={() => navigate(-1)} aria-label="Назад">
+              <ChevronLeft size={20} />
+            </button>
+            <div>
+              <h1 style={{ fontSize: 22, fontWeight: 600, marginBottom: 2 }}>Долги</h1>
+              <p style={{ color: 'var(--muted)', fontSize: 13, margin: 0 }}>
+                Невозвращённое имущество
+              </p>
+            </div>
+          </div>
 
-        <div style={{ display: 'flex', gap: 6, marginBottom: 20 }}>
+          <div className="debts-filters" style={{ display: 'flex', gap: 6, marginTop: 12 }}>
           {FILTERS.map(f => (
             <button key={f.value} onClick={() => setFilter(f.value)} style={{
               padding: '6px 14px', borderRadius: 20, fontSize: 13, fontWeight: 500,
@@ -127,6 +151,7 @@ export default function DebtsPage() {
               cursor: 'pointer',
             }}>{f.label}</button>
           ))}
+          </div>
         </div>
 
         {loading ? (

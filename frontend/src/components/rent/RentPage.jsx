@@ -12,6 +12,7 @@ import ConfirmModal from '../shared/ConfirmModal'
 import SignatureCanvas from '../shared/SignatureCanvas'
 import PhotoUpload from '../shared/PhotoUpload'
 import MultiPhotoPicker from '../shared/MultiPhotoPicker'
+import UnitCardModal from '../shared/UnitCardModal'
 import { useToast } from '../shared/Toast'
 import { categoryLabel, CATEGORIES_FILTER } from '../../constants/categories'
 import { rent as rentApi, units as unitsApi, warehouses as warehousesApi } from '../../services/api'
@@ -109,6 +110,7 @@ export default function RentPage() {
   const [loadingUnits, setLoadingUnits] = useState(null)
   const [updating, setUpdating] = useState(null)
   const [confirmReturnReq, setConfirmReturnReq] = useState(null)
+  const [cardId, setCardId] = useState(null)
   const [searchParams, setSearchParams] = useSearchParams()
   const toast = useToast()
 
@@ -315,7 +317,7 @@ export default function RentPage() {
                                 display: 'flex', alignItems: 'center', gap: 10, padding: '8px 10px',
                                 borderRadius: 8, background: 'var(--bg)', border: '1px solid var(--border)',
                                 cursor: 'pointer',
-                              }} onClick={() => navigate(`/units/${uid}`)}>
+                              }} onClick={() => setCardId(uid)}>
                                 {photos[0]?.url ? (
                                   <img src={photos[0].url} alt="" style={{ width: 44, height: 44, borderRadius: 6, objectFit: 'contain', flexShrink: 0 }} />
                                 ) : (
@@ -374,6 +376,7 @@ export default function RentPage() {
         onConfirm={doRequestReturn}
         onCancel={() => setConfirmReturnReq(null)}
       />
+      {cardId && <UnitCardModal unitId={cardId} onClose={() => setCardId(null)} onChanged={loadDeals} />}
     </Layout>
   )
 }

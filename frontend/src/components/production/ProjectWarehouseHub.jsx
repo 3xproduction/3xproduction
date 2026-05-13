@@ -7,6 +7,7 @@
 // Активная вкладка берётся из ?tab=... query-param, чтобы deep-link работал.
 // Старые роуты (/production/colleagues, /production/handovers) редиректят сюда.
 
+import { useEffect, useState } from 'react'
 import { useSearchParams, useNavigate } from 'react-router-dom'
 import { Box, Users, Inbox, ClipboardList } from 'lucide-react'
 import ProductionLayout from './ProductionLayout'
@@ -16,7 +17,9 @@ import ColleaguesPage from './ColleaguesPage'
 import HandoversPage from './HandoversPage'
 import LoanRequestsSection from './LoanRequestsSection'
 import { useAuth } from '../../hooks/useAuth'
+import { useNotifications } from '../../hooks/useNotifications'
 import { ROLES } from '../../constants/roles'
+import { colleagues as colleaguesApi, projectUnits as projectUnitsApi } from '../../services/api'
 
 const TABS = [
   { k: 'my',         label: 'Мой склад',       icon: Box },
@@ -43,6 +46,44 @@ export default function ProjectWarehouseHub() {
 
   const Layout = ROLES[role]?.world === 'warehouse' ? WarehouseLayout : ProductionLayout
 
+  // Цифорка у вкладки «Запросы»: максимум из unread-уведомлений и актуальных
+  // pending-заявок. Так цифра появляется и у того, кто сам нажал «Запросить»:
+  // requester не получает push на собственное действие, но outgoing pending
+  // всё равно должен подсветить вкладку.
+  const { items: notifs } = useNotifications()
+  const [pendingRequestsCount, setPendingRequestsCount] = useState(0)
+  const unreadRequestsCount = notifs.filter(n =>
+    !n.read && ['project_loan_request', 'warehouse_return_request'].includes(n.entity_type)
+  ).length
+  const requestsBadge = Math.max(unreadRequestsCount, pendingRequestsCount)
+
+  useEffect(() => {
+    if (colleaguesOnly) return
+    let cancelled = false
+    function reloadRequestsBadge() {
+      Promise.all([
+        colleaguesApi.listRequests('incoming', 'pending').catch(() => ({ requests: [] })),
+        colleaguesApi.listRequests('outgoing', 'pending').catch(() => ({ requests: [] })),
+        projectUnitsApi.listReturnRequests('incoming', 'pending').catch(() => ({ requests: [] })),
+      ]).then(([incoming, outgoing, whReturns]) => {
+        if (cancelled) return
+        setPendingRequestsCount(
+          (incoming.requests || []).length +
+          (outgoing.requests || []).length +
+          (whReturns.requests || []).length
+        )
+      })
+    }
+    reloadRequestsBadge()
+    window.addEventListener('project-warehouse-requests-changed', reloadRequestsBadge)
+    const id = setInterval(reloadRequestsBadge, 30000)
+    return () => {
+      cancelled = true
+      window.removeEventListener('project-warehouse-requests-changed', reloadRequestsBadge)
+      clearInterval(id)
+    }
+  }, [colleaguesOnly])
+
   function setTab(k) {
     const next = new URLSearchParams(sp)
     next.set('tab', k)
@@ -63,6 +104,7 @@ export default function ProjectWarehouseHub() {
             {visibleTabs.map(t => {
               const Icon = t.icon
               const isActive = active === t.k
+              const badge = t.k === 'requests' ? requestsBadge : 0
               return (
                 <button key={t.k} onClick={() => setTab(t.k)}
                   style={{
@@ -74,6 +116,15 @@ export default function ProjectWarehouseHub() {
                     whiteSpace: 'nowrap',
                   }}>
                   <Icon size={15} strokeWidth={1.8} /> {t.label}
+                  {badge > 0 && (
+                    <span style={{
+                      display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+                      minWidth: 18, height: 18, padding: '0 5px',
+                      fontSize: 11, fontWeight: 700,
+                      background: 'var(--red, #dc2626)', color: '#fff',
+                      borderRadius: 9,
+                    }}>{badge > 99 ? '99+' : badge}</span>
+                  )}
                 </button>
               )
             })}

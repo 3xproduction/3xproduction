@@ -1,5 +1,5 @@
 // Модалка запроса единицы у чужого проекта. Референс визуала — форма новой заявки
-// в складе (RequestsPage): дедлайн + комментарий + выбор получателя.
+// в складе (RequestsPage): комментарий + выбор получателя.
 // Специфика inter-project: получатель (requester) подставляется автоматически из
 // текущего пользователя, а «кому направлен запрос» — роль-выдающий из проекта-владельца.
 
@@ -14,7 +14,13 @@ import { ROLES } from '../../constants/roles'
 export default function RequestUnitModal({ unit, ownerProjectId, ownerProjectName, onClose, onSent }) {
   const { user } = useAuth()
   const toast = useToast()
-  const [deadline, setDeadline] = useState('')
+  // Pre-fill +7 дней — типичный срок займа. Так заявка отправляется в один клик
+  // без обязательного шага «выбрать дату» (раньше кнопка disabled блокировала).
+  const [deadline] = useState(() => {
+    const d = new Date()
+    d.setDate(d.getDate() + 7)
+    return d.toISOString().slice(0, 10)
+  })
   const [comment, setComment] = useState('')
   const [responders, setResponders] = useState([])
   const [responderId, setResponderId] = useState('')
@@ -23,7 +29,6 @@ export default function RequestUnitModal({ unit, ownerProjectId, ownerProjectNam
 
   useEffect(() => {
     if (!ownerProjectId) return
-    setLoadingResponders(true)
     colleaguesApi.responders(ownerProjectId, unit.category)
       .then(d => {
         setResponders(d.responders || [])
@@ -33,7 +38,7 @@ export default function RequestUnitModal({ unit, ownerProjectId, ownerProjectNam
       .finally(() => setLoadingResponders(false))
   }, [ownerProjectId, unit?.category])
 
-  const canSend = !!deadline && !sending
+  const canSend = !sending
 
   async function send() {
     setSending(true)
@@ -107,16 +112,6 @@ export default function RequestUnitModal({ unit, ownerProjectId, ownerProjectNam
           )}
         </div>
 
-        {/* Deadline */}
-        <div style={{ marginBottom: 12 }}>
-          <div style={{ fontSize: 12, fontWeight: 500, marginBottom: 4 }}>До какого числа нужна *</div>
-          <input type="date" value={deadline} onChange={e => setDeadline(e.target.value)}
-            min={new Date().toISOString().slice(0, 10)} style={inputStyle} />
-          <div style={{ fontSize: 11, color: 'var(--muted)', marginTop: 3 }}>
-            Срок можно продлить по согласованию с владельцем.
-          </div>
-        </div>
-
         {/* Comment */}
         <div style={{ marginBottom: 14 }}>
           <div style={{ fontSize: 12, fontWeight: 500, marginBottom: 4 }}>Комментарий</div>
@@ -131,11 +126,6 @@ export default function RequestUnitModal({ unit, ownerProjectId, ownerProjectNam
             {sending ? 'Отправка...' : 'Отправить заявку'}
           </Button>
         </div>
-        {!deadline && (
-          <div style={{ fontSize: 11, color: 'var(--muted)', marginTop: 8, textAlign: 'center' }}>
-            Укажите срок возврата
-          </div>
-        )}
       </div>
     </div>
   )

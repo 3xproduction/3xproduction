@@ -1,8 +1,10 @@
 import { useState, useEffect, useRef } from 'react'
-import { Search, UserPlus, Copy, Check, X } from 'lucide-react'
+import { useNavigate } from 'react-router-dom'
+import { Search, UserPlus, Copy, Check, X, ChevronLeft } from 'lucide-react'
 import WarehouseLayout from './WarehouseLayout'
 import ProductionLayout from '../production/ProductionLayout'
 import Button from '../shared/Button'
+import { useToast } from '../shared/Toast'
 import { team as teamApi, invites as invitesApi } from '../../services/api'
 import { useAuth } from '../../hooks/useAuth'
 import { ROLES } from '../../constants/roles'
@@ -32,12 +34,20 @@ const css = `
   display: flex; align-items: center; justify-content: center;
   font-size: 14px; font-weight: 600; color: #fff; flex-shrink: 0;
 }
-.team-name { font-weight: 600; font-size: 14px; }
-.team-email { font-size: 12px; color: var(--muted); margin-top: 2px; }
+.team-name { font-weight: 600; font-size: 14px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.team-email {
+  font-size: 12px; color: var(--muted); margin-top: 2px;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  cursor: pointer; user-select: none;
+}
+.team-email:hover { color: var(--accent); }
+.team-email:active { opacity: 0.6; }
 .team-role-badge {
   display: inline-block; padding: 3px 10px;
   background: var(--accent-dim); color: var(--accent);
   border-radius: 20px; font-size: 12px; font-weight: 500;
+  /* Без обрезки на десктопе — места хватает. */
+  white-space: nowrap;
 }
 .team-zone { font-size: 11px; color: var(--muted); margin-top: 3px; }
 .team-date { font-size: 11px; color: var(--muted); margin-top: 3px; }
@@ -88,8 +98,22 @@ const css = `
 @media (max-width: 768px) {
   .team-page { padding: 16px; }
   .team-title { font-size: 18px; }
-  .team-item { padding: 12px 14px; }
+  .team-item { padding: 12px 14px; gap: 10px; }
+  /* На мобилке роль может быть в 2 строки (нормальный word-wrap), не урезаем —
+     ellipsis скрывал бо́льшую часть. Имя/email уже nowrap+ellipsis сверху. */
+  .team-role-badge {
+    padding: 2px 8px; font-size: 11.5px;
+    white-space: normal; line-height: 1.25;
+    word-break: break-word;
+  }
   .invite-modal { padding: 20px; }
+  /* Sticky-шапка под mtop: заголовок + кнопка «Пригласить» + поиск. */
+  .team-sticky {
+    position: sticky; top: var(--page-sticky-top, 52px); z-index: 12;
+    background: var(--paper);
+    margin: -16px -16px 12px;
+    padding: 12px 16px 8px;
+  }
 }
 `
 
@@ -119,6 +143,23 @@ function formatDate(str) {
 
 export default function TeamPage() {
   const { user } = useAuth()
+  const navigate = useNavigate()
+  const toast = useToast()
+  const copyEmail = (email) => {
+    if (!email) return
+    const ok = (msg) => toast?.(msg, 'success')
+    const fail = () => toast?.('Не удалось скопировать', 'error')
+    if (navigator.clipboard?.writeText) {
+      navigator.clipboard.writeText(email).then(() => ok(`Скопировано: ${email}`)).catch(fail)
+    } else {
+      try {
+        const ta = document.createElement('textarea')
+        ta.value = email; ta.style.position = 'fixed'; ta.style.opacity = '0'
+        document.body.appendChild(ta); ta.select(); document.execCommand('copy'); document.body.removeChild(ta)
+        ok(`Скопировано: ${email}`)
+      } catch { fail() }
+    }
+  }
   const [members, setMembers] = useState([])
   const [loading, setLoading] = useState(true)
   const [search, setSearch] = useState('')
@@ -221,28 +262,35 @@ export default function TeamPage() {
     <Layout>
       <style>{css}</style>
       <div className="team-page">
-        <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', marginBottom: 20 }}>
-          <div>
-            <h1 className="team-title">Наша команда</h1>
-            <p className="team-sub">{loading ? '...' : `${members.length} участников`}</p>
+        <div className="team-sticky">
+          <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', marginBottom: 12, gap: 10 }}>
+            <div style={{ display: 'flex', alignItems: 'flex-start', gap: 6, minWidth: 0 }}>
+              <button className="page-back" onClick={() => navigate(-1)} aria-label="Назад">
+                <ChevronLeft size={20} />
+              </button>
+              <div style={{ minWidth: 0 }}>
+                <h1 className="team-title">Наша команда</h1>
+                <p className="team-sub" style={{ marginBottom: 0 }}>{loading ? '...' : `${members.length} участников`}</p>
+              </div>
+            </div>
+            {canInvite && (
+              <Button onClick={openInvite} style={{ display: 'flex', alignItems: 'center', gap: 6, flexShrink: 0 }}>
+                <UserPlus size={15} />
+                Пригласить
+              </Button>
+            )}
           </div>
-          {canInvite && (
-            <Button onClick={openInvite} style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-              <UserPlus size={15} />
-              Пригласить
-            </Button>
-          )}
-        </div>
 
-        <div style={{ display: 'flex', gap: 10, marginBottom: 20 }}>
-          <div className="team-search-wrap">
-            <Search size={15} className="team-search-icon" />
-            <input
-              className="team-search"
-              value={search}
-              onChange={e => setSearch(e.target.value)}
-              placeholder="Найдите по имени, email или роли..."
-            />
+          <div style={{ display: 'flex', gap: 10 }}>
+            <div className="team-search-wrap">
+              <Search size={15} className="team-search-icon" />
+              <input
+                className="team-search"
+                value={search}
+                onChange={e => setSearch(e.target.value)}
+                placeholder="Найдите по имени, email или роли..."
+              />
+            </div>
           </div>
         </div>
 
@@ -259,7 +307,11 @@ export default function TeamPage() {
                 </div>
                 <div style={{ flex: 1, minWidth: 0 }}>
                   <div className="team-name">{m.name}</div>
-                  <div className="team-email">{m.email}</div>
+                  <div
+                    className="team-email"
+                    title={m.email}
+                    onClick={(e) => { e.stopPropagation(); copyEmail(m.email) }}
+                  >{m.email}</div>
                 </div>
                 <div style={{ textAlign: 'right', flexShrink: 0 }}>
                   <div className="team-role-badge">{ROLES[m.role]?.label || m.role}</div>

@@ -5,8 +5,12 @@ import Badge from '../shared/Badge'
 import Button from '../shared/Button'
 import ConfirmModal from '../shared/ConfirmModal'
 import UnitCardModal from '../shared/UnitCardModal'
+import TruncTip from '../shared/TruncTip'
+import UnitMissingDataBadge from '../shared/UnitMissingDataBadge'
+import { missingUnitCardStyle } from '../../utils/unitMissingData'
 import { STATUS_LABEL, STATUS_COLOR } from '../../constants/statuses'
 import { ALL_CATEGORIES, CATEGORIES_FILTER, categoryLabel } from '../../constants/categories'
+import { IS_CLOTHING_CAT } from '../../constants/clothingSizes'
 import { units as unitsApi, requests as requestsApi, warehouses as warehousesApi, rent as rentApi } from '../../services/api'
 import { useAuth } from '../../hooks/useAuth'
 
@@ -27,9 +31,11 @@ export default function WarehouseViewPage() {
   const [category, setCategory] = useState('all')
   const [requestedUnits, setRequestedUnits] = useState({})
   const [expanded, setExpanded] = useState(null)
-  const [units, setUnits] = useState([])
-  const [loading, setLoading] = useState(true)
-  const [searching, setSearching] = useState(false)
+  // Синхронный peek в localStorage-кэш — даёт мгновенный показ старого
+  // списка вместо "Загрузка..." на холодном старте Serverless Container.
+  const _cached = unitsApi.listCached({})
+  const [units, setUnits] = useState(_cached?.units || [])
+  const [loading, setLoading] = useState(!_cached)
   const [cardId, setCardId] = useState(null)
   const [whList, setWhList] = useState([])
   const [selectedWh, setSelectedWh] = useState('all')
@@ -56,11 +62,10 @@ export default function WarehouseViewPage() {
   useEffect(() => {
     const params = {}
     if (debouncedSearch.trim()) params.search = debouncedSearch.trim()
-    setSearching(true)
     unitsApi.list(params)
       .then(d => setUnits(d.units || []))
       .catch(() => {})
-      .finally(() => { setSearching(false); setLoading(false) })
+      .finally(() => setLoading(false))
   }, [debouncedSearch])
 
   useEffect(() => {
@@ -128,6 +133,16 @@ export default function WarehouseViewPage() {
   return (
     <ProductionLayout>
       <style>{`
+        /* 2 карточки в ряд на узких экранах (Android ~360px, старые iPhone).
+           См. комментарий в UnitsPage — auto-fill уходит в 1 колонку при
+           горизонтальных отступах, поэтому фиксируем явно. */
+        @media (max-width: 480px) {
+          .catalog-grid {
+            grid-template-columns: repeat(2, 1fr) !important;
+            gap: 10px !important;
+          }
+          .wv-page { padding: 16px 12px !important; }
+        }
         @media (max-width: 768px) {
           .wv-row { flex-wrap: wrap !important; gap: 10px !important; padding: 12px 14px !important; }
           .wv-info { width: 100% !important; order: 2; }
@@ -136,10 +151,10 @@ export default function WarehouseViewPage() {
           .wv-chevron { display: none !important; }
         }
       `}</style>
-      <div style={{ padding: '24px 32px', maxWidth: 900 }}>
+      <div className="wv-page" style={{ padding: '24px 32px' }}>
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 24, gap: 12 }}>
           <div>
-            <h1 style={{ fontSize: 20, fontWeight: 600 }}>Склад</h1>
+            <h1 style={{ fontSize: 20, fontWeight: 600 }}>Каталог</h1>
             <p style={{ fontSize: 13, color: 'var(--muted)', marginTop: 2 }}>Просмотр остатков</p>
           </div>
           {user?.role === 'producer' && (
@@ -172,7 +187,7 @@ export default function WarehouseViewPage() {
             height: 40, padding: '0 12px', border: '1px solid var(--border)',
             borderRadius: 'var(--radius-btn)', fontSize: 13, background: 'var(--white)', cursor: 'pointer',
           }}>
-            {CATEGORIES_FILTER.map(c => <option key={c} value={c}>{c === 'all' ? 'Выбрать категорию' : categoryLabel(c)}</option>)}
+            {CATEGORIES_FILTER.map(c => <option key={c} value={c}>{c === 'all' ? 'Категория' : categoryLabel(c)}</option>)}
           </select>
           <select value={selectedWh} onChange={e => setSelectedWh(e.target.value)} style={{
             height: 40, padding: '0 12px', border: '1px solid var(--border)',
@@ -208,15 +223,17 @@ export default function WarehouseViewPage() {
         {/* Grid */}
         {viewMode === 'grid' && (
           <div>
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(170px, 1fr))', gap: 12 }}>
+          <div className="catalog-grid" style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(170px, 1fr))', gap: 12 }}>
             {(isSearching ? directUnits : filtered).map(u => {
               const reqStatus = requestedUnits[u.id]
               const isWrittenOff = u.status === 'written_off' || u.misplaced
+              const missingStyle = missingUnitCardStyle(u, user?.role)
               return (
                 <div key={u.id} onClick={() => setCardId(u.id)} style={{
                   background: isWrittenOff ? 'var(--bg-secondary)' : 'var(--card)',
                   borderRadius: 'var(--radius-card)',
-                  border: '1px solid var(--border)', cursor: 'pointer', overflow: 'hidden',
+                  border: missingStyle.border || '1px solid var(--border)', cursor: 'pointer', overflow: 'hidden',
+                  boxShadow: missingStyle.boxShadow,
                   filter: isWrittenOff ? 'grayscale(1)' : 'none', opacity: isWrittenOff ? 0.6 : 1,
                 }}>
                   <div style={{
@@ -224,12 +241,26 @@ export default function WarehouseViewPage() {
                     alignItems: 'center', justifyContent: 'center', fontSize: 40, overflow: 'hidden',
                   }}>
                     {u.photo_url
-                      ? <img src={u.photo_url} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover', filter: isWrittenOff ? 'blur(6px)' : 'none' }} />
+                      ? <img src={u.photo_url} alt="" loading="lazy" decoding="async" style={{ width: '100%', height: '100%', objectFit: 'cover', filter: isWrittenOff ? 'blur(6px)' : 'none' }} />
                       : <span>📦</span>}
                   </div>
                   <div style={{ padding: '10px 12px' }}>
-                    <div style={{ fontWeight: 500, fontSize: 13, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', textDecoration: isWrittenOff ? 'line-through' : 'none', color: isWrittenOff ? 'var(--muted)' : 'var(--text)' }}>{u.name}</div>
-                    <div style={{ fontSize: 11, color: 'var(--muted)', marginTop: 2 }}>{categoryLabel(u.category)}</div>
+                    <TruncTip as="div" style={{ fontWeight: 500, fontSize: 13, textDecoration: isWrittenOff ? 'line-through' : 'none', color: isWrittenOff ? 'var(--muted)' : 'var(--text)' }}>{u.name}</TruncTip>
+                    <TruncTip
+                      as="div"
+                      style={{ fontSize: 11, color: 'var(--muted)', marginTop: 2 }}
+                      fullText={`${categoryLabel(u.category)}${IS_CLOTHING_CAT(u.category) && u.dimensions ? ` · ${u.dimensions.split('/')[0].trim()}` : ''}`}
+                    >
+                      {categoryLabel(u.category)}
+                      {IS_CLOTHING_CAT(u.category) && u.dimensions && (
+                        <>
+                          {' · '}
+                          <span style={{ color: 'var(--text)', fontWeight: 500 }}>
+                            {u.dimensions.split('/')[0].trim()}
+                          </span>
+                        </>
+                      )}
+                    </TruncTip>
                     <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 6 }}>
                       <Badge color={STATUS_COLOR[u.status]}>{STATUS_LABEL[u.status]}</Badge>
                       {!reqStatus && u.status === 'on_stock' && (
@@ -244,6 +275,7 @@ export default function WarehouseViewPage() {
                       )}
                       {reqStatus && REQUEST_STATUSES[reqStatus] && <Badge color={REQUEST_STATUSES[reqStatus].color}>{REQUEST_STATUSES[reqStatus].label}</Badge>}
                     </div>
+                    <UnitMissingDataBadge unit={u} role={user?.role} />
                   </div>
                 </div>
               )
@@ -259,20 +291,36 @@ export default function WarehouseViewPage() {
                 <span style={{ fontSize: 13, fontWeight: 500, whiteSpace: 'nowrap' }}>{label}</span>
                 <div style={{ flex: 1, height: 1, background: 'var(--border)' }} />
               </div>
-              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(170px, 1fr))', gap: 12 }}>
+              <div className="catalog-grid" style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(170px, 1fr))', gap: 12 }}>
                 {items.map(u => {
                   const reqStatus = requestedUnits[u.id]
+                  const missingStyle = missingUnitCardStyle(u, user?.role)
                   return (
                     <div key={u.id} onClick={() => setCardId(u.id)} style={{
                       background: 'var(--card)', borderRadius: 'var(--radius-card)',
-                      border: '1px solid var(--border)', cursor: 'pointer', overflow: 'hidden', opacity,
+                      border: missingStyle.border || '1px solid var(--border)', cursor: 'pointer', overflow: 'hidden', opacity,
+                      boxShadow: missingStyle.boxShadow,
                     }}>
                       <div style={{ aspectRatio: '1', background: 'var(--bg)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 40, overflow: 'hidden' }}>
-                        {u.photo_url ? <img src={u.photo_url} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover' }} /> : <span>📦</span>}
+                        {u.photo_url ? <img src={u.photo_url} alt="" loading="lazy" decoding="async" style={{ width: '100%', height: '100%', objectFit: 'cover' }} /> : <span>📦</span>}
                       </div>
                       <div style={{ padding: '10px 12px' }}>
-                        <div style={{ fontWeight: 500, fontSize: 13, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{u.name}</div>
-                        <div style={{ fontSize: 11, color: 'var(--muted)', marginTop: 2 }}>{categoryLabel(u.category)}</div>
+                        <TruncTip as="div" style={{ fontWeight: 500, fontSize: 13 }}>{u.name}</TruncTip>
+                        <TruncTip
+                          as="div"
+                          style={{ fontSize: 11, color: 'var(--muted)', marginTop: 2 }}
+                          fullText={`${categoryLabel(u.category)}${IS_CLOTHING_CAT(u.category) && u.dimensions ? ` · ${u.dimensions.split('/')[0].trim()}` : ''}`}
+                        >
+                          {categoryLabel(u.category)}
+                          {IS_CLOTHING_CAT(u.category) && u.dimensions && (
+                            <>
+                              {' · '}
+                              <span style={{ color: 'var(--text)', fontWeight: 500 }}>
+                                {u.dimensions.split('/')[0].trim()}
+                              </span>
+                            </>
+                          )}
+                        </TruncTip>
                         <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 6 }}>
                           <Badge color={STATUS_COLOR[u.status]}>{STATUS_LABEL[u.status]}</Badge>
                           {!reqStatus && u.status === 'on_stock' && (
@@ -283,6 +331,7 @@ export default function WarehouseViewPage() {
                           )}
                           {reqStatus && REQUEST_STATUSES[reqStatus] && <Badge color={REQUEST_STATUSES[reqStatus].color}>{REQUEST_STATUSES[reqStatus].label}</Badge>}
                         </div>
+                        <UnitMissingDataBadge unit={u} role={user?.role} />
                       </div>
                     </div>
                   )
@@ -300,10 +349,12 @@ export default function WarehouseViewPage() {
               const reqStatus = requestedUnits[u.id]
               const isOpen = expanded === u.id
               const isWrittenOff = u.status === 'written_off' || u.misplaced
+              const missingStyle = missingUnitCardStyle(u, user?.role)
               return (
                 <div key={u.id} style={{
                   background: isWrittenOff ? 'var(--bg-secondary)' : 'var(--white)', borderRadius: 'var(--radius-card)',
-                  border: '1px solid var(--border)', overflow: 'hidden',
+                  border: missingStyle.border || '1px solid var(--border)', overflow: 'hidden',
+                  boxShadow: missingStyle.boxShadow,
                   filter: isWrittenOff ? 'grayscale(1)' : 'none', opacity: isWrittenOff ? 0.6 : 1,
                 }}>
                   <div className="wv-row" style={{ display: 'flex', alignItems: 'center', gap: 14, padding: '14px 16px', cursor: 'pointer' }}
@@ -315,7 +366,7 @@ export default function WarehouseViewPage() {
                       overflow: 'hidden',
                     }}>
                       {u.photo_url
-                        ? <img src={u.photo_url} alt="" style={{ width: '100%', height: '100%', objectFit: 'contain', filter: isWrittenOff ? 'blur(4px)' : 'none' }} />
+                        ? <img src={u.photo_url} alt="" loading="lazy" decoding="async" style={{ width: '100%', height: '100%', objectFit: 'contain', filter: isWrittenOff ? 'blur(4px)' : 'none' }} />
                         : '📦'}
                     </div>
                     <div className="wv-info" style={{ flex: 1, minWidth: 0 }}>
@@ -323,8 +374,9 @@ export default function WarehouseViewPage() {
                         onClick={e => { e.stopPropagation(); setCardId(u.id) }}>{u.name}</div>
                       <div style={{ fontSize: 12, color: 'var(--muted)', marginTop: 2 }}>
                         {u.serial ? `${u.serial} · ` : ''}{categoryLabel(u.category)}{(u.cell_custom || u.cell_code) ? ` · Полка ${u.cell_custom || u.cell_code}` : ''}
-                      </div>
                     </div>
+                    <UnitMissingDataBadge unit={u} role={user?.role} compact />
+                  </div>
                     <div className="wv-right" style={{ display: 'flex', alignItems: 'center', gap: 8, flexShrink: 0 }}>
                       <Badge color={STATUS_COLOR[u.status]}>{STATUS_LABEL[u.status]}</Badge>
                       <div onClick={e => e.stopPropagation()}>
@@ -450,7 +502,7 @@ export default function WarehouseViewPage() {
                         overflow: 'hidden',
                       }}>
                         {u.photo_url
-                          ? <img src={u.photo_url} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+                          ? <img src={u.photo_url} alt="" loading="lazy" decoding="async" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
                           : <Package size={16} style={{ color: 'var(--muted)' }} />}
                       </div>
                       <div style={{ flex: 1, minWidth: 0 }}>

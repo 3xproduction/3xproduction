@@ -1,7 +1,151 @@
-const BASE = import.meta.env.VITE_API_URL || ''
+const BASE = import.meta.env.VITE_API_URL || (['5173', '4173'].includes(location.port) ? `${location.protocol}//${location.hostname}:3000` : '')
+const UNIT_BULK_FLOW_HEADERS = { 'X-Bulk-Flow': 'unit-bulk-upload' }
+const UNIT_BULK_RETRY_OPTS = {
+  headers: UNIT_BULK_FLOW_HEADERS,
+  retry429: true,
+  retry429Attempts: 8,
+  retry429BaseMs: 1200,
+}
 
 function getToken() {
   return localStorage.getItem('token')
+}
+
+function wait(ms) {
+  return new Promise(resolve => setTimeout(resolve, ms))
+}
+
+function retryAfterMs(res, attempt, baseMs) {
+  const raw = res.headers.get('Retry-After')
+  if (raw) {
+    const seconds = Number(raw)
+    if (Number.isFinite(seconds)) return Math.min(Math.max(seconds * 1000, 1000), 60_000)
+    const dateMs = Date.parse(raw)
+    if (Number.isFinite(dateMs)) return Math.min(Math.max(dateMs - Date.now(), 1000), 60_000)
+  }
+  const backoff = Math.min(baseMs * (2 ** attempt), 15_000)
+  return backoff + Math.floor(Math.random() * 350)
+}
+
+// ── Кэш GET-запросов: in-memory + localStorage (stale-while-revalidate) ──
+// Каталог/склады/заявки — тяжёлые. Сетка такая:
+//
+//   • In-memory cache (TTL 30s) — попадание = мгновенный return без сети.
+//   • localStorage (TTL 24h)    — пережил перезагрузку. При наличии:
+//       сначала отдаём *кэш как stale*, затем тихо в фоне дёргаем сеть и
+//       резолвим Promise свежими данными. Колл-сайт получит ОБА колбэка
+//       через метод .onUpdate(cb) на возвращённом промисе.
+//
+// Cold-start serverless container ~5-10 сек — никак не уйдёт без provisioned,
+// но stale-while-revalidate делает повторные заходы (а это 90% случаев)
+// мгновенными визуально.
+const _cache = new Map()
+function _cacheGet(key) {
+  const e = _cache.get(key)
+  if (!e) return null
+  if (Date.now() > e.expiresAt) { _cache.delete(key); return null }
+  return e.data
+}
+function _cacheSet(key, data, ttlMs) {
+  _cache.set(key, { data, expiresAt: Date.now() + ttlMs })
+}
+// Префиксы путей, инвалидированные мутацией (units.create, .update, и т.п.).
+// Следующий cachedGet с совпадающим префиксом обойдёт LS-stale и пойдёт
+// сразу в сеть — иначе после `unitsApi.create() → await unitsApi.list()`
+// caller получил бы старый список без только что созданной единицы.
+// После первого fresh-fetch префикс снимается → дальше обычный SWR.
+const _invalidatedPrefixes = new Set()
+function _consumeInvalidatedPrefix(path) {
+  for (const p of _invalidatedPrefixes) {
+    if (path.startsWith(p)) {
+      _invalidatedPrefixes.delete(p)
+      return true
+    }
+  }
+  return false
+}
+
+function _cacheInvalidate(prefixes) {
+  const arr = Array.isArray(prefixes) ? prefixes : [prefixes]
+  for (const k of _cache.keys()) {
+    if (arr.some(p => k.startsWith(p))) _cache.delete(k)
+  }
+  // localStorage НЕ чистим: он работает как stale-fallback для холодного
+  // старта (refresh страницы / открытие после долгой паузы). Если стереть —
+  // на refresh пользователь снова увидит пустой каталог + 5-10 сек "Загрузка…"
+  // (cold-start serverless). Помечаем префиксы как "инвалид" — ближайший
+  // in-session cachedGet с этим путём сходит в сеть, а не вернёт устаревший LS.
+  for (const p of arr) _invalidatedPrefixes.add(p)
+}
+
+const LS_PREFIX = 'apicache:'
+// 30 дней. Раньше было 24h — слишком короткий, юзер не каждый день заходит,
+// после 24h простоя кэш пропадал → на холодный старт получал пустой экран
+// + 30-60 сек ожидания (cold-start serverless container). Лучше показать
+// очень устаревший список, чем "Загрузка..." на минуту: cachedGet всё равно
+// в фоне дёрнет сеть и обновит через .onUpdate.
+const LS_TTL = 30 * 24 * 60 * 60 * 1000 // 30 days
+function _lsGet(key) {
+  try {
+    const raw = localStorage.getItem(LS_PREFIX + key)
+    if (!raw) return null
+    const obj = JSON.parse(raw)
+    if (!obj || Date.now() > obj.expiresAt) return null
+    return obj.data
+  } catch { return null }
+}
+function _lsSet(key, data) {
+  try {
+    localStorage.setItem(LS_PREFIX + key, JSON.stringify({ data, expiresAt: Date.now() + LS_TTL }))
+  } catch { /* quota */ }
+}
+
+// Синхронно отдаёт stale-кэш (in-memory или localStorage) если есть, иначе null.
+// Используется для инициализации useState из закешированных данных, чтобы
+// при холодном старте контейнера (5-10 сек) пользователь видел старый список
+// сразу, а не пустой "Загрузка..." до прихода свежих данных.
+export function peekCache(path) {
+  return _cacheGet(path) || _lsGet(path) || null
+}
+
+// Возвращает promise, на котором есть .onUpdate(cb) — вызывается со свежими
+// данными когда они приходят из сети после stale-показа.
+function cachedGet(path, ttlMs = 30000) {
+  const mem = _cacheGet(path)
+  if (mem) {
+    const p = Promise.resolve(mem)
+    p.onUpdate = () => p  // у in-memory hit нет фонового апдейта — самим уже свежо
+    return p
+  }
+  // Если путь был инвалидирован недавней мутацией — игнорируем LS-stale и
+  // идём сразу в сеть. Иначе caller (например, unitsApi.list() после create)
+  // получит старый список без только что созданной/изменённой записи.
+  const wasInvalidated = _consumeInvalidatedPrefix(path)
+  const stale = wasInvalidated ? null : _lsGet(path)
+  if (stale) {
+    // stale-while-revalidate: возвращаем stale моментально, в фоне обновляем.
+    let updateCb = null
+    const fresh = request('GET', path).then(data => {
+      _cacheSet(path, data, ttlMs)
+      _lsSet(path, data)
+      if (updateCb) {
+        try { updateCb(data) } catch { /* swallow */ }
+      }
+      return data
+    }).catch(() => stale) // сеть упала — оставим stale
+    const p = Promise.resolve(stale)
+    p.onUpdate = (cb) => { updateCb = cb; return fresh }
+    return p
+  }
+  // Холодный старт без stale — ждём сеть.
+  const p = request('GET', path).then(data => {
+    _cacheSet(path, data, ttlMs)
+    _lsSet(path, data)
+    return data
+  })
+  _cacheSet(path, p, 1000) // защита от параллельных дублей
+  p.onUpdate = () => p
+  return p
 }
 
 // Эндпоинты, для которых 401 не должен инициировать принудительный logout.
@@ -10,54 +154,72 @@ function getToken() {
 const SKIP_AUTO_LOGOUT = [/^\/public\//, /^\/auth\/login$/]
 
 async function request(method, path, body, opts = {}) {
-  const headers = { 'Content-Type': 'application/json' }
+  const {
+    retry429 = false,
+    retry429Attempts = 0,
+    retry429BaseMs = 1000,
+    headers: extraHeaders = {},
+    ...fetchOpts
+  } = opts
+
+  const isFormData = body instanceof FormData
+  const headers = isFormData
+    ? { ...extraHeaders }
+    : { 'Content-Type': 'application/json', ...extraHeaders }
   const token = getToken()
   if (token) headers['X-Auth-Token'] = token
 
   const config = {
     method,
     headers,
-    ...opts,
+    ...fetchOpts,
   }
 
-  if (body && !(body instanceof FormData)) {
+  if (body && !isFormData) {
     config.body = JSON.stringify(body)
-  } else if (body instanceof FormData) {
+  } else if (isFormData) {
     // Для FormData нельзя ставить Content-Type — браузер сам добавит boundary.
-    // Сохраняем только X-Auth-Token, если он есть.
-    const fdHeaders = {}
+    // Сохраняем только специальные заголовки и X-Auth-Token, если он есть.
+    const fdHeaders = { ...extraHeaders }
     if (token) fdHeaders['X-Auth-Token'] = token
     config.headers = fdHeaders
     config.body = body
   }
 
-  const res = await fetch(`${BASE}${path}`, config)
-  const data = await res.json().catch(() => ({}))
+  for (let attempt = 0; ; attempt++) {
+    const res = await fetch(`${BASE}${path}`, config)
+    const data = await res.json().catch(() => ({}))
 
-  if (!res.ok) {
-    // 401 с валидной ранее авторизацией → токен протух/невалиден. Чистим
-    // сессию и даём дружелюбное сообщение. Исключения — публичные эндпоинты.
-    const isSkipAutoLogout = SKIP_AUTO_LOGOUT.some(rx => rx.test(path))
-    if (res.status === 401 && !isSkipAutoLogout && token) {
-      localStorage.removeItem('token')
-      localStorage.removeItem('user')
-      const err = new Error('Сессия истекла — войдите заново')
-      err.status = 401
+    if (!res.ok) {
+      if (res.status === 429 && retry429 && attempt < retry429Attempts) {
+        await wait(retryAfterMs(res, attempt, retry429BaseMs))
+        continue
+      }
+
+      // 401 с валидной ранее авторизацией → токен протух/невалиден. Чистим
+      // сессию и даём дружелюбное сообщение. Исключения — публичные эндпоинты.
+      const isSkipAutoLogout = SKIP_AUTO_LOGOUT.some(rx => rx.test(path))
+      if (res.status === 401 && !isSkipAutoLogout && token) {
+        localStorage.removeItem('token')
+        localStorage.removeItem('user')
+        const err = new Error('Сессия истекла — войдите заново')
+        err.status = 401
+        err.data = data
+        // Мягкий редирект на логин, чтобы пользователь не застревал
+        setTimeout(() => {
+          if (!location.pathname.startsWith('/login')) location.href = '/login'
+        }, 800)
+        throw err
+      }
+
+      const err = new Error(data.error || `HTTP ${res.status}`)
+      err.status = res.status
       err.data = data
-      // Мягкий редирект на логин, чтобы пользователь не застревал
-      setTimeout(() => {
-        if (!location.pathname.startsWith('/login')) location.href = '/login'
-      }, 800)
       throw err
     }
 
-    const err = new Error(data.error || `HTTP ${res.status}`)
-    err.status = res.status
-    err.data = data
-    throw err
+    return data
   }
-
-  return data
 }
 
 // ─── Auth ────────────────────────────────────────────────────────────────────
@@ -73,6 +235,9 @@ export const auth = {
   changeName:     (name)           => request('PATCH', '/auth/name',     { name }),
   changePhone:    (phone)          => request('PATCH', '/auth/phone',    { phone }),
   changePassword: (current, next) => request('PATCH', '/auth/password', { current, next }),
+  // Walk-in claim: provisional-юзер ставит пароль и получает JWT.
+  claimGet:       (token)                  => request('GET',  `/auth/claim/${token}`),
+  claimSet:       (token, password, email) => request('POST', `/auth/claim/${token}`, { password, email }),
 }
 
 // ─── Invites ─────────────────────────────────────────────────────────────────
@@ -82,26 +247,52 @@ export const invites = {
 }
 
 // ─── Units ───────────────────────────────────────────────────────────────────
+// Любая мутация над units/warehouses/requests дёргает _invalidateUnitsRelated:
+// каталог/карта/заявки часто отображают одни и те же данные в разных разрезах.
+function _invalidateUnitsRelated() {
+  _cacheInvalidate(['/units', '/warehouses', '/requests', '/issuances', '/project-units', '/colleagues', '/admin-units'])
+}
+
 export const units = {
   list:     (params = {}) => {
     const q = new URLSearchParams(params).toString()
-    return request('GET', `/units${q ? '?' + q : ''}`)
+    // Поиск (?search=) не кэшируем — слишком переменчивый.
+    if (params.search) return request('GET', `/units${q ? '?' + q : ''}`)
+    return cachedGet(`/units${q ? '?' + q : ''}`)
+  },
+  // Синхронный peek в кэш — для инициализации state'а на первом рендере.
+  // Поиск не кэшируется, поэтому для search-параметров возвращаем null.
+  listCached: (params = {}) => {
+    if (params.search) return null
+    const q = new URLSearchParams(params).toString()
+    return peekCache(`/units${q ? '?' + q : ''}`)
   },
   get:      (id)   => request('GET',  `/units/${id}`),
-  create:   (body) => request('POST', '/units', body),
-  update:   (id, body) => request('PUT', `/units/${id}`, body),
-  delete:   (id)       => request('DELETE', `/units/${id}`),
-  bulkDelete: (ids)    => request('POST', '/units/bulk-delete', { ids }),
+  create:   (body) => request('POST', '/units', body).then(r => { _invalidateUnitsRelated(); return r }),
+  update:   (id, body) => request('PUT', `/units/${id}`, body).then(r => { _invalidateUnitsRelated(); return r }),
+  delete:   (id)       => request('DELETE', `/units/${id}`).then(r => { _invalidateUnitsRelated(); return r }),
+  bulkDelete: (ids)    => request('POST', '/units/bulk-delete', { ids }).then(r => { _invalidateUnitsRelated(); return r }),
   approvals: ()    => request('GET',  '/units/approvals'),
-  approve:  (id, approval_id, valuation, extra) => request('POST', `/units/${id}/approve`, { approval_id, valuation, ...(extra || {}) }),
-  reject:   (id, approval_id, reason) => request('POST', `/units/${id}/reject`, { approval_id, reason }),
-  writeoff: (id, reason) => request('POST', `/units/${id}/writeoff`, { reason }),
-  requestWriteoff: (id, reason) => request('POST', `/units/${id}/request-writeoff`, { reason }),
-  markMissing:     (id, reason) => request('POST', `/units/${id}/mark-missing`, { reason }),
-  resolveMissing:  (id)         => request('POST', `/units/${id}/resolve-missing`),
-  uploadPhoto: (id, formData) => request('POST', `/units/${id}/photos`, formData),
+  approve:  (id, approval_id, valuation, extra) => request('POST', `/units/${id}/approve`, { approval_id, valuation, ...(extra || {}) }).then(r => { _invalidateUnitsRelated(); return r }),
+  reject:   (id, approval_id, reason) => request('POST', `/units/${id}/reject`, { approval_id, reason }).then(r => { _invalidateUnitsRelated(); return r }),
+  writeoff: (id, reason) => request('POST', `/units/${id}/writeoff`, { reason }).then(r => { _invalidateUnitsRelated(); return r }),
+  requestWriteoff: (id, reason) => request('POST', `/units/${id}/request-writeoff`, { reason }).then(r => { _invalidateUnitsRelated(); return r }),
+  markMissing:     (id, reason) => request('POST', `/units/${id}/mark-missing`, { reason }).then(r => { _invalidateUnitsRelated(); return r }),
+  resolveMissing:  (id)         => request('POST', `/units/${id}/resolve-missing`).then(r => { _invalidateUnitsRelated(); return r }),
+  uploadPhoto: (id, formData) => request('POST', `/units/${id}/photos`, formData).then(r => { _invalidateUnitsRelated(); return r }),
   recognize:   (formData) => request('POST', '/units/recognize', formData),
-  deletePhoto: (id, photoId) => request('DELETE', `/units/${id}/photos/${photoId}`),
+  listBulkMatch: (params = {}) => {
+    const q = new URLSearchParams(params).toString()
+    return request('GET', `/units${q ? '?' + q : ''}`, undefined, UNIT_BULK_RETRY_OPTS)
+  },
+  createBulk: (body) =>
+    request('POST', '/units', body, UNIT_BULK_RETRY_OPTS).then(r => { _invalidateUnitsRelated(); return r }),
+  uploadPhotoBulk: (id, formData) =>
+    request('POST', `/units/${id}/photos`, formData, UNIT_BULK_RETRY_OPTS).then(r => { _invalidateUnitsRelated(); return r }),
+  recognizeBulk: (formData) => request('POST', '/units/recognize', formData, UNIT_BULK_RETRY_OPTS),
+  deletePhoto: (id, photoId) => request('DELETE', `/units/${id}/photos/${photoId}`).then(r => { _invalidateUnitsRelated(); return r }),
+  regenPhotoBg: (id, photoId, model = 'u2net') => request('POST', `/units/${id}/photos/${photoId}/regen-bg`, { model }).then(r => { _invalidateUnitsRelated(); return r }),
+  bulkRegenBg: (ids, opts = {}) => request('POST', '/units/bulk-regen-bg', { ids, ...opts }).then(r => { _invalidateUnitsRelated(); return r }),
   history:  (id)   => request('GET', `/units/${id}/history`),
 }
 
@@ -153,15 +344,30 @@ export const projectUnits = {
     return request('GET', `/project-units${q ? '?' + q : ''}`)
   },
   create:            (body) => request('POST',   '/project-units', body),
+  createForProjectPhoto: (formData) =>
+    request('POST', '/project-units/create-for-project-photo', formData).then(r => { _invalidateUnitsRelated(); return r }),
+  createForProjectPhotos: (formData) =>
+    request('POST', '/project-units/create-for-project-photo', formData).then(r => { _invalidateUnitsRelated(); return r }),
+  createForProjectPhotosBulk: (formData) =>
+    request('POST', '/project-units/create-for-project-photo', formData, UNIT_BULK_RETRY_OPTS).then(r => { _invalidateUnitsRelated(); return r }),
   update:        (id, body) => request('PUT',    `/project-units/${id}`, body),
   delete:        (id, reason) => request('DELETE', `/project-units/${id}`, reason ? { reason } : undefined),
   uploadReceipt:  (formData) => request('POST',   '/project-units/upload-receipt', formData),
   transfer:      (id, comment) => request('POST', `/project-units/${id}/transfer-to-warehouse`, { comment }),
   pendingTransfers: ()      => request('GET',   '/project-units/pending-transfers'),
+  // Список всех проектов — для селектора в ProjectWarehousePage (wh-director/deputy/producer).
+  allProjects:      ()      => request('GET',   '/project-units/projects'),
   acceptTransfer: (id, warehouse_id, cell_id) =>
     request('POST', `/project-units/${id}/accept-transfer`, { warehouse_id, cell_id }),
   rejectTransfer: (id, reason) =>
     request('POST', `/project-units/${id}/reject-transfer`, { reason }),
+  // Batch-перемещение единиц с центрального склада на склад указанного проекта.
+  // Доступно warehouse_director / warehouse_deputy / warehouse_staff.
+  // Возвращает { ok, moved_count, errors[], project }.
+  moveToProject: (unit_ids, project_id) =>
+    request('POST', '/project-units/move-to-project', { unit_ids, project_id }).then(r => { _invalidateUnitsRelated(); return r }),
+  moveToProjectBulk: (unit_ids, project_id) =>
+    request('POST', '/project-units/move-to-project', { unit_ids, project_id }, UNIT_BULK_RETRY_OPTS).then(r => { _invalidateUnitsRelated(); return r }),
 
   // Двухэтапный возврат: warehouse/producer создаёт запрос → проект имеет 3 дня →
   // warehouse/producer подтверждает фактический возврат.
@@ -177,11 +383,24 @@ export const projectUnits = {
     request('POST', `/project-units/return-requests/${requestId}/cancel`),
 }
 
+// ─── Administrative shop stock ──────────────────────────────────────────────
+export const adminUnits = {
+  list: (params = {}) => {
+    const q = new URLSearchParams(params).toString()
+    if (params.search) return request('GET', `/admin-units${q ? '?' + q : ''}`)
+    return cachedGet(`/admin-units${q ? '?' + q : ''}`)
+  },
+  create: (body) =>
+    request('POST', '/admin-units', body).then(r => { _invalidateUnitsRelated(); return r }),
+  uploadReceipt: (formData) =>
+    request('POST', '/admin-units/upload-receipt', formData),
+}
+
 // ─── Warehouses / Cells ──────────────────────────────────────────────────────
 export const warehouses = {
-  list:          ()             => request('GET',  '/warehouses'),
-  create:        (body)         => request('POST', '/warehouses', body),
-  cells:         (warehouseId) => request('GET',  `/warehouses/${warehouseId}/cells`),
+  list:          ()             => cachedGet('/warehouses'),
+  create:        (body)         => request('POST', '/warehouses', body).then(r => { _invalidateUnitsRelated(); return r }),
+  cells:         (warehouseId) => cachedGet(`/warehouses/${warehouseId}/cells`),
   createSection: (body) => request('POST', '/warehouses/sections', body),
   updateSection: (id, patch) => request('PUT', `/warehouses/sections/${id}`, patch),
   addCell:       (sectionId)     => request('POST', `/warehouses/sections/${sectionId}/cells`),
@@ -201,10 +420,15 @@ export const warehouses = {
 export const requests = {
   list:   (params = {}) => {
     const q = new URLSearchParams(params).toString()
-    return request('GET', `/requests${q ? '?' + q : ''}`)
+    return cachedGet(`/requests${q ? '?' + q : ''}`, 15000)
   },
-  create: (body)        => request('POST', '/requests', body),
-  status: (id, status)  => request('PUT',  `/requests/${id}/status`, { status }),
+  create: (body)        => request('POST', '/requests', body).then(r => { _invalidateUnitsRelated(); return r }),
+  status: (id, status)  => request('PUT',  `/requests/${id}/status`, { status }).then(r => { _invalidateUnitsRelated(); return r }),
+  // Полная пересинхронизация состава активной заявки. formData содержит
+  // existing_unit_ids (JSON), new_units (JSON) и поля photos_<temp_id> для
+  // новых единиц. См. backend/src/routes/requests.js POST /:id/items.
+  updateItems: (id, formData) =>
+    request('POST', `/requests/${id}/items`, formData).then(r => { _invalidateUnitsRelated(); return r }),
 }
 
 // ─── Issuances ───────────────────────────────────────────────────────────────
@@ -259,6 +483,7 @@ export const rent = {
   workflowStage: (id, stage) => request('PUT', `/rent/${id}/workflow-stage`, { stage }),
   issuePublic: (id, formData) => request('POST', `/rent/${id}/issue-public`, formData),
   requestReturn: (id) => request('POST', `/rent/${id}/request-return`),
+  cancelReturnRequest: (id) => request('POST', `/rent/${id}/cancel-return-request`),
   finalizeReturn: (id, formData) => request('POST', `/rent/${id}/finalize-return`, formData),
 }
 
@@ -400,16 +625,50 @@ export const casting = {
   delete:      (id)          => request('DELETE', `/casting/${id}`),
   uploadPhoto: (id, formData) => request('POST',  `/casting/${id}/photos`, formData),
   deletePhoto: (id, photoId) => request('DELETE', `/casting/${id}/photos/${photoId}`),
+  recognize:   (formData)    => request('POST',   '/casting/recognize', formData),
 }
 
 // ─── Analytics ───────────────────────────────────────────────────────────────
 export const analytics = {
   warehouse: ()             => request('GET', '/analytics/warehouse'),
-  producer:  (projectId)   => {
-    const q = projectId ? `?project_id=${projectId}` : ''
-    return request('GET', `/analytics/producer${q}`)
+  producer:  (projectId, periodDays) => {
+    const params = new URLSearchParams()
+    if (projectId) params.set('project_id', projectId)
+    if (periodDays) params.set('period_days', String(periodDays))
+    const q = params.toString()
+    return request('GET', `/analytics/producer${q ? `?${q}` : ''}`)
   },
   project:   (projectId) => request('GET', `/analytics/project/${projectId}`),
+}
+
+// ─── Walk-in выдача ─────────────────────────────────────────────────────────
+// Один эндпоинт /walkin/issue делает в одной транзакции: project (если новый)
+// + project_director (provisional) + получатель (provisional) + units +
+// issuance + PDF + email-уведомления.
+export const walkin = {
+  issue: (formData) => request('POST', '/walkin/issue', formData),
+  searchProjects: (q) => request('GET', `/walkin/projects?q=${encodeURIComponent(q)}`),
+  searchUsers: (project_id, q) =>
+    request('GET', `/walkin/users?project_id=${encodeURIComponent(project_id)}&q=${encodeURIComponent(q)}`),
+}
+
+// ─── Выданное по проектам (раздел /issued) ─────────────────────────────────
+// Иерархия проект → человек → единицы для warehouse_director/deputy.
+// Запросы возврата на 3 уровнях; быстрый mass-return через walkin-return.
+export const issued = {
+  // view: 'issued' | 'all' | 'new' | 'returning' | 'returned' | 'acts'
+  // params: { days: 30 | 90 | 'all' } для returned/acts
+  byProjects: (view = 'issued', params = {}) => {
+    const qs = new URLSearchParams({ view, ...params }).toString()
+    return request('GET', `/issued/by-projects?${qs}`)
+  },
+  cancelReturnRequestByIssuance: (issuance_id) =>
+    request('POST', '/issued/cancel-return-request-by-issuance', { issuance_id }),
+  user: (userId) => request('GET', `/issued/user/${userId}`),
+  requestReturnByIssuance: (issuance_id) => request('POST', '/issued/request-return-by-issuance', { issuance_id }),
+  requestReturnByUser:     (user_id) => request('POST', '/issued/request-return-by-user', { user_id }),
+  requestReturnByProject:  (project_id) => request('POST', '/issued/request-return-by-project', { project_id }),
+  walkinReturn:            (formData) => request('POST', '/issued/walkin-return', formData),
 }
 
 // ─── Global Search ──────────────────────────────────────────────────────────

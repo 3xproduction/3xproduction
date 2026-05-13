@@ -56,6 +56,101 @@ router.post('/register', async (req, res) => {
   }
 })
 
+// GET /auth/claim/:token
+//
+// Lookup provisional-юзера по claim_token (заведённого через walk-in выдачу
+// со склада). Возвращает базовую инфу для UI экрана активации: имя, роль,
+// проект, email (если был указан). Не отдаёт sensitive-поля.
+router.get('/claim/:token', async (req, res) => {
+  try {
+    const { rows } = await db.query(
+      `SELECT u.id, u.name, u.email, u.phone, u.role, u.is_provisional,
+              u.claim_token_expires, p.name AS project_name
+       FROM users u LEFT JOIN projects p ON p.id = u.project_id
+       WHERE u.claim_token = $1`,
+      [req.params.token]
+    )
+    if (!rows.length) return res.status(404).json({ error: 'Token not found' })
+    const u = rows[0]
+    if (!u.is_provisional) return res.status(410).json({ error: 'Account already activated' })
+    if (u.claim_token_expires && new Date(u.claim_token_expires) < new Date()) {
+      return res.status(410).json({ error: 'Token expired' })
+    }
+    res.json({
+      name: u.name,
+      email: u.email,
+      phone: u.phone,
+      role: u.role,
+      project_name: u.project_name,
+    })
+  } catch (err) {
+    console.error(err)
+    res.status(500).json({ error: 'Server error' })
+  }
+})
+
+// POST /auth/claim/:token
+//
+// Активация provisional-юзера. Тело: { password, email? } — email может быть
+// задан, если при walk-in его не указали. Ставит password_hash, очищает
+// claim_token, выдаёт JWT (auto-login).
+router.post('/claim/:token', async (req, res) => {
+  const { password, email } = req.body
+  if (!password) return res.status(400).json({ error: 'Missing password' })
+  if (password.length < 8) return res.status(400).json({ error: 'Password must be at least 8 characters' })
+
+  try {
+    const { rows } = await db.query(
+      `SELECT id, email, role, project_id, is_provisional, claim_token_expires
+       FROM users WHERE claim_token = $1`,
+      [req.params.token]
+    )
+    if (!rows.length) return res.status(404).json({ error: 'Token not found' })
+    const u = rows[0]
+    if (!u.is_provisional) return res.status(410).json({ error: 'Account already activated' })
+    if (u.claim_token_expires && new Date(u.claim_token_expires) < new Date()) {
+      return res.status(410).json({ error: 'Token expired' })
+    }
+
+    // Если email не задавался при walk-in — берём из тела. Если задан и в
+    // теле другой — игнорируем тело (фиксируем то что вписал склад на месте,
+    // чтобы юзер не подменил данные на чужой email).
+    let finalEmail = u.email
+    if (!finalEmail) {
+      if (!email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+        return res.status(400).json({ error: 'Email required' })
+      }
+      const { rows: dup } = await db.query(
+        `SELECT id FROM users WHERE LOWER(email)=LOWER($1) AND id <> $2`, [email, u.id]
+      )
+      if (dup.length) return res.status(409).json({ error: 'Email already registered' })
+      finalEmail = email
+    }
+
+    const password_hash = await bcrypt.hash(password, SALT_ROUNDS)
+    await db.query(
+      `UPDATE users SET password_hash = $1, email = $2,
+                        is_provisional = false,
+                        claim_token = NULL, claim_token_expires = NULL
+       WHERE id = $3`,
+      [password_hash, finalEmail, u.id]
+    )
+
+    const token = jwt.sign(
+      { id: u.id, role: u.role, project_id: u.project_id },
+      process.env.JWT_SECRET,
+      { expiresIn: '30d' }
+    )
+    res.json({
+      token,
+      user: { id: u.id, email: finalEmail, role: u.role, project_id: u.project_id },
+    })
+  } catch (err) {
+    console.error(err)
+    res.status(500).json({ error: 'Server error' })
+  }
+})
+
 // POST /auth/login
 router.post('/login', async (req, res) => {
   const { email, password } = req.body

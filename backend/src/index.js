@@ -3,7 +3,9 @@ const express     = require('express')
 const cors        = require('cors')
 const helmet      = require('helmet')
 const rateLimit   = require('express-rate-limit')
+const ipKeyGenerator = rateLimit.ipKeyGenerator || ((ip) => ip)
 const pinoHttp    = require('pino-http')
+const jwt         = require('jsonwebtoken')
 const fs          = require('fs')
 const path        = require('path')
 const { pool } = require('./db')
@@ -31,9 +33,14 @@ async function runMigrations() {
     `)
     const dir = path.join(__dirname, 'db/migrations')
     const files = fs.readdirSync(dir).filter(f => f.endsWith('.sql')).sort()
+    // Один запрос вместо N: SELECT'ить все применённые миграции один раз и
+    // дальше сверять в JS. Раньше для 56 миграций было 56 round-trip'ов до
+    // БД на холодный старт — это секунды задержки до первого ответа сервера
+    // (плюс cold-start serverless container). Теперь — один SELECT.
+    const { rows: appliedRows } = await client.query('SELECT filename FROM _migrations')
+    const applied = new Set(appliedRows.map(r => r.filename))
     for (const file of files) {
-      const { rows } = await client.query('SELECT id FROM _migrations WHERE filename=$1', [file])
-      if (rows.length) continue
+      if (applied.has(file)) continue
       const sql = fs.readFileSync(path.join(dir, file), 'utf8')
       await client.query('BEGIN')
       try {
@@ -62,7 +69,17 @@ app.set('trust proxy', 1)
 app.use(pinoHttp({ logger }))
 
 // Security headers
-app.use(helmet({ contentSecurityPolicy: false }))
+// COEP/COOP/CORP отключены: @imgly/background-removal грузит ONNX-модель
+// (~80MB) с external CDN (staticimgly.com), которому helmet по умолчанию
+// блокирует доступ через `Cross-Origin-Embedder-Policy: require-corp`.
+// Без COEP `SharedArrayBuffer` недоступен — ONNX падает на single-thread
+// (медленнее, но работает в любом браузере). См. utils/removeBg.js.
+app.use(helmet({
+  contentSecurityPolicy: false,
+  crossOriginEmbedderPolicy: false,
+  crossOriginOpenerPolicy: false,
+  crossOriginResourcePolicy: { policy: 'cross-origin' },
+}))
 
 // Кэш-политика:
 //   • Статика (JS/CSS/картинки) — не трогаем, пусть её обрабатывает Express static.
@@ -82,6 +99,12 @@ const NO_CACHE_PREFIXES = [
   // двумя последовательными запросами. 30-секундный кэш после reload()
   // скрывал свежее размещение → UX «ничего не произошло».
   '/warehouses',
+  // /walkin: autocomplete юзеров/проектов должен видеть только что
+  // созданных людей сразу после walk-in выдачи.
+  '/walkin',
+  // /issued: список выданного должен быть свежим — после mass-return
+  // или новой выдачи устаревший кэш скрывает изменения.
+  '/issued',
 ]
 app.use((req, res, next) => {
   if (req.path.match(/\.(js|css|png|jpg|svg|ico|woff2?)$/)) return next()
@@ -91,27 +114,100 @@ app.use((req, res, next) => {
     res.set('Cache-Control', 'no-store')
   } else {
     res.set('Cache-Control', 'private, max-age=30')
+    // Без Vary браузер хранит ответ только по URL. Тогда XHR-ответ
+    // (`Accept: */*`, `Sec-Fetch-Dest: empty`) реюзается при page-navigation
+    // на тот же URL — пользователь видит raw JSON вместо UI, и SPA-fallback
+    // ниже не успевает сработать (запрос не доходит до сервера).
+    res.vary('Sec-Fetch-Dest')
+    res.vary('Accept')
   }
   next()
 })
 
-// CORS — explicit origins, no wildcard
+// CORS — explicit origins (prod) + LAN dev (localhost/192.168/10.x/172.x on 5173/4173)
+const LAN_DEV_ORIGIN_RE = /^https?:\/\/(localhost|127\.0\.0\.1|192\.168\.\d+\.\d+|10\.\d+\.\d+\.\d+|172\.(1[6-9]|2\d|3[01])\.\d+\.\d+):(5173|4173)$/
 app.use(cors({
-  origin: process.env.FRONTEND_URL
-    ? [process.env.FRONTEND_URL, 'http://localhost:5173']
-    : ['http://localhost:5173', 'http://localhost:3000'],
+  origin: (origin, cb) => {
+    if (!origin) return cb(null, true)
+    if (process.env.FRONTEND_URL && origin === process.env.FRONTEND_URL) return cb(null, true)
+    if (LAN_DEV_ORIGIN_RE.test(origin)) return cb(null, true)
+    cb(new Error('CORS: origin not allowed'), false)
+  },
   credentials: true,
 }))
 
 // Body size limit
 app.use(express.json({ limit: '1mb' }))
 
-// Global rate limit: 100 requests per minute per IP
+const UNIT_BULK_FLOW_HEADER = 'unit-bulk-upload'
+function readAuthToken(req) {
+  const header = req.get('x-auth-token') || req.get('authorization') || ''
+  return header.startsWith('Bearer ') ? header.slice(7) : header
+}
+
+function verifiedBulkPayload(req) {
+  if (Object.prototype.hasOwnProperty.call(req, '_unitBulkPayload')) return req._unitBulkPayload
+  const token = readAuthToken(req)
+  if (!token || !process.env.JWT_SECRET) {
+    req._unitBulkPayload = null
+    return null
+  }
+  try {
+    const payload = jwt.verify(token, process.env.JWT_SECRET)
+    req._unitBulkPayload = payload?.id ? payload : null
+  } catch {
+    req._unitBulkPayload = null
+  }
+  return req._unitBulkPayload
+}
+
+function isUnitBulkFlowRequest(req) {
+  if (req.get('x-bulk-flow') !== UNIT_BULK_FLOW_HEADER) return false
+  if (!verifiedBulkPayload(req)) return false
+
+  if (req.path.startsWith('/project-units')) {
+    const subpath = req.path.slice('/project-units'.length) || '/'
+    return req.method === 'POST'
+      && (subpath === '/move-to-project' || subpath === '/create-for-project-photo')
+  }
+
+  if (!req.path.startsWith('/units')) return false
+  const subpath = req.path.slice('/units'.length) || '/'
+  if (req.method === 'POST' && (subpath === '/' || subpath === '/recognize' || subpath === '/remove-bg')) return true
+  if (req.method === 'GET' && subpath === '/remove-bg/warm') return true
+  if (req.method === 'POST' && /^\/[^/]+\/photos$/.test(subpath)) return true
+  return req.method === 'GET'
+    && subpath === '/'
+    && req.query.photo_match_available === '1'
+    && typeof req.query.search === 'string'
+    && req.query.search.trim().length > 0
+}
+
+const unitBulkFlowLimiter = rateLimit({
+  windowMs: 15 * 60_000,
+  max: 3000,
+  standardHeaders: true,
+  legacyHeaders: false,
+  keyGenerator: (req) => {
+    const payload = verifiedBulkPayload(req)
+    return payload?.id ? `unit-bulk-user:${payload.id}` : `unit-bulk-ip:${ipKeyGenerator(req.ip)}`
+  },
+  message: { error: 'Слишком много операций пакетного пополнения. Подождите немного, очередь продолжится.' },
+})
+app.use((req, res, next) => {
+  if (isUnitBulkFlowRequest(req)) return unitBulkFlowLimiter(req, res, next)
+  return next()
+})
+
+// Global rate limit: 100 requests per minute per IP. Unit bulk upload has a
+// separate authenticated-flow limiter above, so a 300-photo batch does not
+// consume the normal catalog/navigation budget.
 app.use(rateLimit({
   windowMs: 60_000,
   max: 100,
   standardHeaders: true,
   legacyHeaders: false,
+  skip: isUnitBulkFlowRequest,
 }))
 
 // Strict rate limit for auth endpoints
@@ -123,9 +219,39 @@ app.use('/auth/recover', authLimiter)
 // Serve frontend SPA for browser navigation (before API routes)
 const frontendDist = path.join(__dirname, '../../frontend/dist')
 if (fs.existsSync(frontendDist)) {
-  app.use(express.static(frontendDist))
+  // Vite кладёт хешированные ассеты в /assets (`index-Bux9rVzL.js` и т.п.).
+  // Имя меняется при каждом изменении контента → можно безопасно отдавать
+  // immutable + max-age=1y. Раньше было `public, max-age=0` — браузер на каждый
+  // refresh переспрашивал сервер conditional GET'ом, и на cold-start serverless
+  // контейнера (~30-60с до первого ответа) это давало пустой экран минутами,
+  // даже если бандл уже лежал в кэше браузера.
+  // index.html НЕ хеширован → должен ревалидироваться каждый раз (no-store
+  // выставит express по умолчанию через res.sendFile ниже).
+  app.use(express.static(frontendDist, {
+    setHeaders: (res, filePath) => {
+      if (/[/\\]assets[/\\]/.test(filePath)) {
+        res.set('Cache-Control', 'public, max-age=31536000, immutable')
+      } else if (filePath.endsWith('index.html')) {
+        res.set('Cache-Control', 'no-store')
+      }
+    },
+  }))
   app.use((req, res, next) => {
-    if (req.method === 'GET' && req.headers.accept && req.headers.accept.includes('text/html')) {
+    // SPA fallback на page navigation. Условие срабатывает если:
+    //   - Accept включает text/html (классический браузерный GET);
+    //   - ИЛИ Sec-Fetch-Dest: document (всегда выставляется при page-navigation
+    //     в современных браузерах: open URL, F5, ссылка, закладка). XHR/fetch
+    //     присылают `empty`, prefetch — `script`/`image` и т.п.
+    //
+    // Двойная проверка нужна для случаев, когда Chrome PWA при холодном старте
+    // делает запрос с Accept: */* (без text/html) — раньше такие запросы попадали
+    // прямо на API endpoint, и юзер видел raw JSON ответа в адресной строке.
+    if (req.method !== 'GET') return next()
+    const accept = req.headers.accept || ''
+    const fetchDest = req.headers['sec-fetch-dest']
+    const isPageNav = accept.includes('text/html') || fetchDest === 'document'
+    if (isPageNav) {
+      res.set('Cache-Control', 'no-store')
       return res.sendFile(path.join(frontendDist, 'index.html'))
     }
     next()
@@ -137,6 +263,7 @@ app.use('/auth',       require('./routes/auth'))
 app.use('/invites',    require('./routes/invites'))
 app.use('/units',      require('./routes/units'))
 app.use('/project-units', require('./routes/projectUnits'))
+app.use('/admin-units', require('./routes/adminUnits'))
 app.use('/handovers',  require('./routes/handovers'))
 app.use('/colleagues', require('./routes/colleagues'))
 app.use('/warehouses', require('./routes/warehouses'))
@@ -156,6 +283,8 @@ app.use('/vehicles',     require('./routes/vehicles'))
 app.use('/casting',      require('./routes/casting'))
 app.use('/scenes',       require('./routes/scenes'))
 app.use('/search',       require('./routes/search'))
+app.use('/walkin',       require('./routes/walkin'))
+app.use('/issued',       require('./routes/issued'))
 
 // POST /admin/reset-docs — clear documents and lists for fresh re-import
 app.post('/admin/reset-docs', require('./middleware/auth').verifyJWT, async (req, res) => {
@@ -884,6 +1013,26 @@ async function processGenerateUnitTags(task, params) {
 setInterval(processAiTask, 30000)
 // Run once on startup after short delay
 setTimeout(processAiTask, 5000)
+
+// Keep rembg-sidecar warm. YC SC засыпает после ~5 мин простоя, после чего
+// первое фото ловит cold-start ~15с — пользователю кажется, что фича висит.
+// Пингуем /warm каждые 4 мин — стоимость пренебрежимая (одна реквест-сек на
+// каждые 240 сек, sidecar отвечает за <50мс).
+async function pingRembgWarm() {
+  const url = process.env.REMBG_URL
+  if (!url) return
+  try {
+    const ctrl = new AbortController()
+    const timer = setTimeout(() => ctrl.abort(), 10_000)
+    await fetch(url.replace(/\/+$/, '') + '/warm', { signal: ctrl.signal })
+    clearTimeout(timer)
+  } catch {
+    // Молча — sidecar мог быть занят/уснуть, следующий тик попробует снова.
+  }
+}
+setInterval(pingRembgWarm, 4 * 60 * 1000)
+// Один сразу — иначе первый юзер после рестарта контейнера ждёт 4 мин до прогрева.
+setTimeout(pingRembgWarm, 10_000)
 
 // Health check
 app.get('/health', (_, res) => res.json({ ok: true }))

@@ -349,6 +349,7 @@ router.get('/warehouse/:token', async (req, res) => {
       LEFT JOIN unit_photos p ON p.unit_id = u.id AND p.type = 'stock'
       WHERE u.status != 'written_off'
         AND COALESCE(u.is_project_kept, false) = false
+        AND COALESCE(u.is_admin_stock, false) = false
     `
     if (category) {
       params.push(category)

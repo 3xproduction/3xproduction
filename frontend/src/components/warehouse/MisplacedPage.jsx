@@ -2,7 +2,8 @@
 // Блюрятся и видны только директору/заму/продюсеру. Можно «Нашли» → вернуть на склад.
 
 import { useState, useEffect } from 'react'
-import { Package } from 'lucide-react'
+import { useNavigate } from 'react-router-dom'
+import { Package, ChevronLeft } from 'lucide-react'
 import WarehouseLayout from './WarehouseLayout'
 import ProductionLayout from '../production/ProductionLayout'
 import Badge from '../shared/Badge'
@@ -21,6 +22,7 @@ function formatDate(str) {
 
 export default function MisplacedPage() {
   const { user } = useAuth()
+  const navigate = useNavigate()
   const toast = useToast()
   const canResolve = ['warehouse_director', 'warehouse_deputy', 'warehouse_staff'].includes(user?.role)
   const Layout = ROLES[user?.role]?.world === 'production' ? ProductionLayout : WarehouseLayout
@@ -51,11 +53,29 @@ export default function MisplacedPage() {
 
   return (
     <Layout>
-      <div style={{ padding: '28px 32px', maxWidth: 900 }}>
-        <h1 style={{ fontSize: 22, fontWeight: 600, marginBottom: 2 }}>Пересорт</h1>
-        <p style={{ color: 'var(--muted)', fontSize: 13, marginBottom: 20 }}>
-          Единицы, не найденные при сборке заявки
-        </p>
+      <style>{`
+        @media (max-width: 768px) {
+          .misplaced-page { padding: 16px !important; }
+          .misplaced-sticky {
+            position: sticky; top: var(--page-sticky-top, 52px); z-index: 12;
+            background: var(--paper);
+            margin: -16px -16px 16px;
+            padding: 12px 16px;
+          }
+        }
+      `}</style>
+      <div className="misplaced-page" style={{ padding: '28px 32px', maxWidth: 900 }}>
+        <div className="misplaced-sticky">
+          <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+            <button className="page-back" onClick={() => navigate(-1)} aria-label="Назад">
+              <ChevronLeft size={20} />
+            </button>
+            <h1 style={{ fontSize: 22, fontWeight: 600, marginBottom: 2 }}>Пересорт</h1>
+          </div>
+          <p style={{ color: 'var(--muted)', fontSize: 13, margin: 0 }}>
+            Единицы, не найденные при сборке заявки
+          </p>
+        </div>
 
         {loading ? (
           <div style={{ color: 'var(--muted)', fontSize: 14, padding: '60px 0', textAlign: 'center' }}>Загрузка...</div>

@@ -8,12 +8,14 @@ import {
   Package, Shirt, Truck, Plus, Trash2,
 } from 'lucide-react'
 import WarehouseLayout from '../WarehouseLayout'
+import ProductionLayout from '../../production/ProductionLayout'
 import Button from '../../shared/Button'
 import ConfirmModal from '../../shared/ConfirmModal'
 import CatalogHeader from './CatalogHeader'
 import SectionCover from './SectionCover'
 import useWarehouseData from './useWarehouseData'
 import CreateSectionModal from './CreateSectionModal'
+import { sumOnStockCellQty } from '../../../utils/unitQty'
 import { warehouses as warehousesApi } from '../../../services/api'
 import { useAuth } from '../../../hooks/useAuth'
 import { useToast } from '../../shared/Toast'
@@ -24,12 +26,14 @@ const EDITOR_ROLES = ['warehouse_director', 'warehouse_deputy']
 const TYPE_LABEL = { shelf: 'Полки', hanger: 'Вешалки', place: 'Места' }
 const TYPE_ICON  = { shelf: Package, hanger: Shirt, place: Truck }
 
-export default function CellsTypeView() {
+export default function CellsTypeView({ world = 'warehouse' } = {}) {
   const { warehouseId, type } = useParams()
   const navigate = useNavigate()
   const { user } = useAuth()
   const toast = useToast()
-  const canEdit = EDITOR_ROLES.includes(user?.role)
+  const canEdit = world === 'warehouse' && EDITOR_ROLES.includes(user?.role)
+  const cellsBase = world === 'production' ? '/production/cells' : '/cells'
+  const Layout = world === 'production' ? ProductionLayout : WarehouseLayout
 
   const { warehouse, sections, loading, reload } = useWarehouseData(warehouseId)
 
@@ -64,14 +68,14 @@ export default function CellsTypeView() {
   // Валидация параметра type
   useEffect(() => {
     if (!['shelf', 'hanger', 'place'].includes(type)) {
-      navigate(`/cells/${warehouseId}`, { replace: true })
+      navigate(`${cellsBase}/${warehouseId}`, { replace: true })
     }
   }, [type, warehouseId, navigate])
 
   const Icon = TYPE_ICON[type] || Package
 
   return (
-    <WarehouseLayout>
+    <Layout>
       <Styles />
 
       <div className="ct-page catalog-enter">
@@ -82,7 +86,7 @@ export default function CellsTypeView() {
               ? 'Загрузка…'
               : `${warehouse?.name || ''} · ${typeSections.length} ${pluralSections(typeSections.length)}`
           }
-          backTo={`/cells/${warehouseId}`}
+          backTo={`${cellsBase}/${warehouseId}`}
           backLabel={warehouse?.name || 'Склад'}
           right={canEdit ? (
             <button
@@ -122,7 +126,7 @@ export default function CellsTypeView() {
                     key={s.id}
                     section={s}
                     canEdit={canEdit}
-                    onOpen={() => navigate(`/cells/${warehouseId}/section/${s.id}`)}
+                    onOpen={() => navigate(`${cellsBase}/${warehouseId}/section/${s.id}`)}
                     onDelete={() => setConfirmDel(s)}
                   />
                 ))}
@@ -153,7 +157,7 @@ export default function CellsTypeView() {
           onClose={() => setCreateSectionOpen(false)}
           onCreated={(section) => {
             setCreateSectionOpen(false)
-            navigate(`/cells/${warehouseId}/section/${section.id}`)
+            navigate(`${cellsBase}/${warehouseId}/section/${section.id}`)
           }}
         />
 
@@ -167,7 +171,7 @@ export default function CellsTypeView() {
           onCancel={() => setConfirmDel(null)}
         />
       </div>
-    </WarehouseLayout>
+    </Layout>
   )
 }
 
@@ -180,9 +184,7 @@ function SectionCard({ section, canEdit, onOpen, onDelete }) {
           <div className="ct-card-name">{section.name}</div>
           <div className="ct-card-meta">
             {(() => {
-              const n = (section.cells || []).filter(
-                c => c.unit_id && c.unit_status === 'on_stock'
-              ).length
+              const n = sumOnStockCellQty(section.cells)
               if (n === 0) return 'Пусто'
               const mod10 = n % 10, mod100 = n % 100
               const word = (mod10 === 1 && mod100 !== 11) ? 'единица'

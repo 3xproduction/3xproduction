@@ -15,8 +15,9 @@ RUN cd frontend && npm install --include=dev
 COPY backend/ ./backend/
 COPY frontend/ ./frontend/
 
-# Build frontend
-RUN cd frontend && npm run build
+# Build frontend (BUILD_MODE=staging → использует .env.staging и включает DEV-брендинг)
+ARG BUILD_MODE=production
+RUN cd frontend && npx vite build --mode ${BUILD_MODE}
 
 EXPOSE 3000
 

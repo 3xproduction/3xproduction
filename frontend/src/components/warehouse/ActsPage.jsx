@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react'
-import { FileText, FileCheck, Handshake } from 'lucide-react'
+import { useNavigate } from 'react-router-dom'
+import { FileText, FileCheck, Handshake, ChevronLeft } from 'lucide-react'
 import WarehouseLayout from './WarehouseLayout'
 import ProductionLayout from '../production/ProductionLayout'
 import { issuances as issuancesApi } from '../../services/api'
@@ -8,6 +9,8 @@ import { ROLES } from '../../constants/roles'
 
 const css = `
 .acts-page { padding: 28px 32px; max-width: 900px; }
+/* Embed: вкладка внутри IssuedByProjectsPage. Шапку и паддинги задаёт родитель. */
+.acts-page-embed { padding: 0 !important; max-width: none !important; }
 .acts-title { font-size: 22px; font-weight: 600; letter-spacing: -0.03em; margin-bottom: 2px; }
 .acts-sub { color: var(--muted); font-size: 13px; }
 .acts-tabs { display: flex; gap: 0; border-bottom: 1px solid var(--border); margin: 20px 0 20px; }
@@ -54,12 +57,24 @@ const css = `
 .acts-damage { color: var(--amber); }
 .acts-empty { color: var(--muted); font-size: 14px; padding: 60px 0; text-align: center; }
 
+.acts-sticky {}
+
 @media (max-width: 768px) {
   .acts-page { padding: 16px; }
+  .acts-page-embed { padding: 0 !important; }
   .acts-title { font-size: 18px; }
   .acts-item { flex-wrap: wrap; padding: 14px 16px; }
   .acts-item-meta { gap: 8px; }
   .acts-pdf-btn { width: 100%; text-align: center; margin-top: 4px; }
+  .acts-sticky {
+    position: sticky; top: var(--page-sticky-top, 52px); z-index: 12;
+    background: var(--paper);
+    margin: -16px -16px 0;
+    padding: 12px 16px 0;
+  }
+  /* Табы Заявки/Аренда — горизонтальный скролл, без отдельного отступа сверху. */
+  .acts-sticky .acts-tabs { margin: 12px 0 0; overflow-x: auto; scrollbar-width: none; }
+  .acts-sticky .acts-tabs::-webkit-scrollbar { display: none; }
 }
 `
 
@@ -68,9 +83,14 @@ function formatDate(str) {
   return new Date(str).toLocaleDateString('ru-RU', { day: 'numeric', month: 'short', year: 'numeric' })
 }
 
-export default function ActsPage() {
+export default function ActsPage({ embed = false }) {
   const { user } = useAuth()
-  const Layout = ROLES[user?.role]?.world === 'production' ? ProductionLayout : WarehouseLayout
+  const navigate = useNavigate()
+  // В embed-режиме шапка задаётся родителем (IssuedByProjectsPage),
+  // оборачивающего Layout не нужно — рендерим только контент актов.
+  const Layout = embed
+    ? 'div'
+    : (ROLES[user?.role]?.world === 'production' ? ProductionLayout : WarehouseLayout)
   const [tab, setTab] = useState('requests')
   const [data, setData] = useState({ issuances: [], returns: [], rentDeals: [] })
   const [loading, setLoading] = useState(true)
@@ -87,9 +107,19 @@ export default function ActsPage() {
   return (
     <Layout>
       <style>{css}</style>
-      <div className="acts-page">
-        <h1 className="acts-title">Акты</h1>
-        <p className="acts-sub">Акты по заявкам и аренде</p>
+      <div className={embed ? 'acts-page acts-page-embed' : 'acts-page'}>
+        <div className="acts-sticky">
+          {!embed && (
+            <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+              <button className="page-back" onClick={() => navigate(-1)} aria-label="Назад">
+                <ChevronLeft size={20} />
+              </button>
+              <div>
+                <h1 className="acts-title" style={{ margin: 0 }}>Акты</h1>
+                <p className="acts-sub" style={{ margin: 0 }}>Акты по заявкам и аренде</p>
+              </div>
+            </div>
+          )}
 
         <div className="acts-tabs">
           <button className={`acts-tab${tab === 'requests' ? ' active' : ''}`} onClick={() => setTab('requests')}>
@@ -102,6 +132,7 @@ export default function ActsPage() {
             Аренда
             <span className="acts-tab-count">{(data.rentDeals || []).length}</span>
           </button>
+        </div>
         </div>
 
         {loading ? (

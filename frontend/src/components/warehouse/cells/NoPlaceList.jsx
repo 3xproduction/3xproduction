@@ -5,6 +5,7 @@
 import { Check, Package, ChevronRight, Search as SearchIcon } from 'lucide-react'
 import { useState } from 'react'
 import { categoryLabel } from '../../../constants/categories'
+import { sumUnitQty } from '../../../utils/unitQty'
 
 export default function NoPlaceList({ units, loading, onOpenCard }) {
   const [search, setSearch] = useState('')
@@ -51,7 +52,7 @@ export default function NoPlaceList({ units, loading, onOpenCard }) {
 
       <div className="npl-section-title">
         Без места
-        <span className="npl-section-count">{safe.length}</span>
+        <span className="npl-section-count">{sumUnitQty(safe)}</span>
       </div>
 
       {filtered.length === 0 ? (

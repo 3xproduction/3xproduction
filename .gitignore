@@ -24,3 +24,7 @@ Thumbs.db
 # Misc
 git
 master
+
+# Codex/Claude generated review artifacts
+.codex/reviews/*
+!.codex/reviews/.gitkeep

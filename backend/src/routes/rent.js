@@ -467,6 +467,25 @@ router.post('/:id/request-return', verifyJWT, checkRole(...RENT_ROLES, 'warehous
   }
 })
 
+// POST /rent/:id/cancel-return-request — отменить запрос возврата по
+// активной партнёрской сделке. Симметрично /issued/cancel-return-request-by-issuance.
+router.post('/:id/cancel-return-request', verifyJWT, checkRole(...RENT_ROLES, 'warehouse_staff'), async (req, res) => {
+  try {
+    const { rows } = await db.query(
+      `UPDATE rent_deals
+         SET return_requested_at = NULL
+       WHERE id = $1 AND return_requested_at IS NOT NULL
+       RETURNING id`,
+      [req.params.id]
+    )
+    if (!rows.length) return res.status(404).json({ error: 'Запрос возврата не найден' })
+    res.json({ ok: true })
+  } catch (err) {
+    console.error('rent cancel-return-request:', err)
+    res.status(500).json({ error: 'Server error' })
+  }
+})
+
 // POST /rent/:id/finalize-return — полный возврат по партнёрской сделке.
 // Мультипартный endpoint, зеркалит /issuances/returns: фото/подписи сдающего+
 // принимающего, states-map (items_condition) → на единицах «Возврат» / «Долг» /
@@ -710,6 +729,8 @@ router.get('/public/warehouse/:token', async (req, res) => {
        FROM units u
        LEFT JOIN unit_photos p ON p.unit_id = u.id AND p.type='stock'
        WHERE u.status != 'written_off'
+         AND COALESCE(u.is_project_kept, false) = false
+         AND COALESCE(u.is_admin_stock, false) = false
        GROUP BY u.id
        ORDER BY u.category, u.name`
     )

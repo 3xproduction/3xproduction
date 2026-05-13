@@ -1,4 +1,6 @@
 import { useState } from 'react'
+import { useNavigate } from 'react-router-dom'
+import { ChevronLeft } from 'lucide-react'
 import WarehouseLayout from '../warehouse/WarehouseLayout'
 import ProductionLayout from '../production/ProductionLayout'
 import Button from './Button'
@@ -9,6 +11,7 @@ import { auth } from '../../services/api'
 
 export default function ProfilePage() {
   const { user, login } = useAuth()
+  const navigate = useNavigate()
   const [nameVal, setNameVal] = useState(user?.name || '')
   const [nameSaving, setNameSaving] = useState(false)
   const [nameSaved, setNameSaved] = useState(false)
@@ -50,17 +53,32 @@ export default function ProfilePage() {
 
   const Layout = ROLES[user?.role]?.world === 'production' ? ProductionLayout : WarehouseLayout
 
+  const inputStyle = {
+    width: '100%', height: 40, padding: '0 12px',
+    border: '1px solid var(--border)', borderRadius: 'var(--radius-btn)',
+    background: 'var(--white)', fontSize: 14, fontFamily: 'inherit', outline: 'none',
+  }
+
   return (
     <Layout>
       <style>{`
         @media (max-width: 768px) {
-          .prof-field-row { flex-wrap: nowrap !important; align-items: flex-end !important; }
-          .prof-field-row > div { min-width: 0; margin-bottom: 0 !important; }
-          .prof-field-row button { flex-shrink: 0; white-space: nowrap; margin-bottom: 0 !important; }
+          .profile-sticky {
+            position: sticky; top: var(--page-sticky-top, 52px); z-index: 12;
+            background: var(--paper);
+            margin: -16px -16px 16px;
+            padding: 12px 16px;
+          }
+          .profile-page { padding: 16px !important; }
         }
       `}</style>
-      <div style={{ padding: '24px 32px', maxWidth: 560 }}>
-        <h1 style={{ fontSize: 20, fontWeight: 600, marginBottom: 28 }}>Профиль</h1>
+      <div className="profile-page" style={{ padding: '24px 32px', maxWidth: 560 }}>
+        <div className="profile-sticky" style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+          <button className="page-back" onClick={() => navigate(-1)} aria-label="Назад">
+            <ChevronLeft size={20} />
+          </button>
+          <h1 style={{ fontSize: 20, fontWeight: 600, margin: 0 }}>Профиль</h1>
+        </div>
 
         <div style={{
           background: 'var(--white)', borderRadius: 'var(--radius-card)',
@@ -92,12 +110,16 @@ export default function ProfilePage() {
           border: '1px solid var(--border)', padding: '24px', marginBottom: 20,
         }}>
           <div style={{ fontWeight: 600, fontSize: 15, marginBottom: 14 }}>Имя и фамилия</div>
-          <div className="prof-field-row" style={{ display: 'flex', gap: 8, alignItems: 'flex-end' }}>
-            <div style={{ flex: 1 }}>
-              <Input label="ФИО" value={nameVal} onChange={e => setNameVal(e.target.value)} />
-            </div>
-            <Button disabled={nameSaving || !nameVal.trim() || nameVal === user?.name}
-              style={{ height: 40, flexShrink: 0, marginBottom: 16 }}
+          <label style={{ display: 'block', fontWeight: 500, marginBottom: 6, fontSize: 13 }}>ФИО</label>
+          <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+            <input
+              style={{ ...inputStyle, flex: 1, minWidth: 0 }}
+              value={nameVal}
+              onChange={e => setNameVal(e.target.value)}
+            />
+            <Button
+              disabled={nameSaving || !nameVal.trim() || nameVal === user?.name}
+              style={{ height: 40, flexShrink: 0, whiteSpace: 'nowrap' }}
               onClick={async () => {
                 setNameSaving(true)
                 try {
@@ -106,7 +128,7 @@ export default function ProfilePage() {
                   login(localStorage.getItem('token'), updated)
                   setNameSaved(true)
                   setTimeout(() => setNameSaved(false), 2500)
-                } catch {}
+                } catch { /* silent */ }
                 setNameSaving(false)
               }}>
               {nameSaving ? '...' : 'Сохранить'}
@@ -114,13 +136,18 @@ export default function ProfilePage() {
           </div>
           {nameSaved && <div style={{ color: 'var(--green)', fontSize: 13, marginTop: 8, fontWeight: 500 }}>Сохранено</div>}
 
-          <div style={{ fontWeight: 600, fontSize: 15, marginBottom: 14, marginTop: 20 }}>Телефон</div>
-          <div className="prof-field-row" style={{ display: 'flex', gap: 8, alignItems: 'flex-end' }}>
-            <div style={{ flex: 1 }}>
-              <Input label="Номер телефона" placeholder="+7 900 000 00 00" value={phoneVal} onChange={e => setPhoneVal(e.target.value)} />
-            </div>
-            <Button disabled={phoneSaving || !phoneVal.trim() || phoneVal === (user?.phone || '')}
-              style={{ height: 40, flexShrink: 0, marginBottom: 16 }}
+          <div style={{ fontWeight: 600, fontSize: 15, marginBottom: 14, marginTop: 24 }}>Телефон</div>
+          <label style={{ display: 'block', fontWeight: 500, marginBottom: 6, fontSize: 13 }}>Номер телефона</label>
+          <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+            <input
+              style={{ ...inputStyle, flex: 1, minWidth: 0 }}
+              placeholder="+7 900 000 00 00"
+              value={phoneVal}
+              onChange={e => setPhoneVal(e.target.value)}
+            />
+            <Button
+              disabled={phoneSaving || !phoneVal.trim() || phoneVal === (user?.phone || '')}
+              style={{ height: 40, flexShrink: 0, whiteSpace: 'nowrap' }}
               onClick={async () => {
                 setPhoneSaving(true)
                 try {
@@ -129,7 +156,7 @@ export default function ProfilePage() {
                   login(localStorage.getItem('token'), updated)
                   setPhoneSaved(true)
                   setTimeout(() => setPhoneSaved(false), 2500)
-                } catch {}
+                } catch { /* silent */ }
                 setPhoneSaving(false)
               }}>
               {phoneSaving ? '...' : 'Сохранить'}

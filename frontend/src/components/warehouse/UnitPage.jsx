@@ -133,12 +133,18 @@ export default function UnitPage() {
             <div style={{ background: 'var(--bg)', borderRadius: 'var(--radius-card)', padding: 16, marginBottom: 16 }}>
               <InfoRow label="Серийный номер" value={unit.serial} />
               {unit.warehouse_name && <InfoRow label="Склад" value={unit.warehouse_name} />}
-              {unit.cell_name && <InfoRow label="Полка" value={unit.cell_name} />}
+              {unit.hall_name && <InfoRow label="Зал" value={unit.hall_name} />}
+              {unit.section_name && (
+                <InfoRow
+                  label={({ shelf: 'Полка', hanger: 'Вешалка', place: 'Место' })[unit.section_type] || 'Секция'}
+                  value={unit.section_name}
+                />
+              )}
               {unit.qty && <InfoRow label="Количество" value={`${unit.qty} шт.`} />}
-              {unit.dimensions && <InfoRow label="Размеры" value={unit.dimensions} />}
+              {unit.dimensions && <InfoRow label="Размер" value={unit.dimensions.split('/')[0].trim()} />}
               {canSeeValuation && unit.source && <InfoRow label="Источник" value={unit.source} />}
               {unit.materials && <InfoRow label="Материалы" value={unit.materials} />}
-              {unit.period && <InfoRow label="Временное понятие" value={unit.period} />}
+              {unit.period && <InfoRow label={unit.is_admin_stock ? 'Адрес хранения' : 'Временное понятие'} value={unit.period} />}
               {unit.condition && <InfoRow label="Состояние" value={unit.condition} last />}
             </div>
 
@@ -170,6 +176,7 @@ export default function UnitPage() {
                       name: unit.name || '', category: unit.category || '', serial: unit.serial || '',
                       description: unit.description || '', qty: unit.qty || 1, condition: unit.condition || '',
                       valuation: unit.valuation || '', dimensions: unit.dimensions || '',
+                      source: unit.source || '',
                       materials: unit.materials || '', period: unit.period || '',
                     })
                     setShowEdit(true)
@@ -222,6 +229,9 @@ export default function UnitPage() {
             <EFL>Размеры</EFL>
             <input value={editForm.dimensions} onChange={e => setEditForm(f => ({ ...f, dimensions: e.target.value }))}
               style={inputStyle} />
+            <EFL>Источник</EFL>
+            <input value={editForm.source} onChange={e => setEditForm(f => ({ ...f, source: e.target.value }))}
+              placeholder="покупка, аренда, дар..." style={inputStyle} />
             <EFL>Состояние</EFL>
             <input value={editForm.condition} onChange={e => setEditForm(f => ({ ...f, condition: e.target.value }))}
               style={inputStyle} />
@@ -231,8 +241,8 @@ export default function UnitPage() {
             <EFL>Материалы</EFL>
             <input value={editForm.materials} onChange={e => setEditForm(f => ({ ...f, materials: e.target.value }))}
               placeholder="Дерево, металл, пластик..." style={inputStyle} />
-            <EFL>Временное понятие</EFL>
-            <input value={editForm.period} onChange={e => setEditForm(f => ({ ...f, period: e.target.value }))} placeholder="Советское, XVIII век..." style={inputStyle} />
+            <EFL>{unit.is_admin_stock ? 'Адрес хранения' : 'Временное понятие'}</EFL>
+            <input value={editForm.period} onChange={e => setEditForm(f => ({ ...f, period: e.target.value }))} placeholder={unit.is_admin_stock ? 'Офис, шкаф реквизита, склад на площадке' : 'Советское, XVIII век...'} style={inputStyle} />
             <EFL>Описание</EFL>
             <textarea value={editForm.description} onChange={e => setEditForm(f => ({ ...f, description: e.target.value }))}
               style={{ ...inputStyle, height: 72, resize: 'vertical', padding: '8px 10px' }} />
@@ -245,7 +255,9 @@ export default function UnitPage() {
                     const res = await unitsApi.update(unit.id, editForm)
                     if (res.unit) setUnit(res.unit)
                     setShowEdit(false)
-                  } catch {}
+                  } catch {
+                    // Keep the modal open; the user can retry without losing edits.
+                  }
                   setEditSaving(false)
                 }}>
                 {editSaving ? 'Сохранение...' : 'Сохранить'}

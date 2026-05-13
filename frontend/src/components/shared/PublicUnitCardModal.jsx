@@ -12,7 +12,7 @@ import { useBodyLock } from '../../hooks/useBodyLock'
 // публичный endpoint по category. История показывается с фото движений и
 // названием проекта/контрагента (user_name намеренно не раскрываем).
 
-const BASE = import.meta.env.VITE_API_URL || ''
+const BASE = import.meta.env.VITE_API_URL || (['5173', '4173'].includes(location.port) ? `${location.protocol}//${location.hostname}:3000` : '')
 
 const STATUS_DOT = {
   on_stock:    'var(--green)',
@@ -196,7 +196,7 @@ export default function PublicUnitCardModal({ unit: initialUnit, token, onClose,
                   <div className="uc-rows">
                     {unit.serial     && <Row label="Серийный" value={unit.serial} />}
                     {unit.qty        && <Row label="Количество" value={`${unit.qty} шт.`} />}
-                    {unit.dimensions && <Row label="Размеры" value={unit.dimensions} />}
+                    {unit.dimensions && <Row label="Размер" value={unit.dimensions.split('/')[0].trim()} />}
                     {unit.period     && <Row label="Период" value={unit.period} />}
                   </div>
 
@@ -460,7 +460,7 @@ const css = `
   }
   .uc-gallery-slide img,
   .uc-gallery-slide video {
-    width: 100%; height: 100%; object-fit: cover;
+    width: 100%; height: 100%; object-fit: contain;
   }
   .uc-dots-mobile {
     display: flex !important; justify-content: center; gap: 5px;

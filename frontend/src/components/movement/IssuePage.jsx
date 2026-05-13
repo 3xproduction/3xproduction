@@ -1,11 +1,12 @@
 import { useState, useEffect } from 'react'
 import { useNavigate, useParams, useLocation } from 'react-router-dom'
-import { Check } from 'lucide-react'
+import { Check, Pencil } from 'lucide-react'
 import WarehouseLayout from '../warehouse/WarehouseLayout'
 import Button from '../shared/Button'
 import ConfirmModal from '../shared/ConfirmModal'
 import MultiPhotoPicker from '../shared/MultiPhotoPicker'
 import SignatureCanvas from '../shared/SignatureCanvas'
+import EditRequestItemsModal from '../warehouse/EditRequestItemsModal'
 import { useToast } from '../shared/Toast'
 import { requests as requestsApi, issuances as issuancesApi, units as unitsApi, rent as rentApi } from '../../services/api'
 
@@ -57,6 +58,32 @@ export default function IssuePage() {
   // Залог — только для партнёрской выдачи, отправляется в rent_deal.deposit.
   const [showDeposit, setShowDeposit] = useState(false)
   const [depositAmount, setDepositAmount] = useState('')
+  // Открыта ли модалка «Доложить состав» (POST /requests/:id/items).
+  // Доступна только для проектных заявок (не rent_deal) на шаге Сборки.
+  const [editingItems, setEditingItems] = useState(false)
+
+  // Перезагружает заявку и её состав. Дёргается из useEffect и после
+  // EditRequestItemsModal.onSaved — после правки состава нужно подтянуть
+  // свежий unit_ids (могли добавиться новые/удалиться старые).
+  async function reloadRequestUnits() {
+    if (!requestId) return
+    const data = await requestsApi.list().catch(() => ({ requests: [] }))
+    const req = (data.requests || []).find(r => String(r.id) === String(requestId))
+    if (!req) return
+    setReceiverId(req.requester_id)
+    setReceiverName(req.requester_name || 'Пользователь')
+    const ids = req.unit_ids || []
+    const ud = await unitsApi.list().catch(() => ({ units: [] }))
+    const us = (ud.units || []).filter(u => ids.includes(u.id))
+    setUnits(us)
+    // Сохраняем уже-собранные галочки и пользовательский выбор, если позиции
+    // не были удалены. Новые позиции по умолчанию выбраны (как при первой загрузке).
+    setSelected(prev => {
+      const keep = new Set([...prev].filter(id => ids.includes(id)))
+      for (const u of us) keep.add(u.id)
+      return keep
+    })
+  }
 
   useEffect(() => {
     if (rentDealId) {
@@ -80,24 +107,13 @@ export default function IssuePage() {
         })
       }).finally(() => setInitLoading(false))
     } else if (requestId) {
-      requestsApi.list().then(data => {
-        const req = (data.requests || []).find(r => String(r.id) === String(requestId))
-        if (req) {
-          setReceiverId(req.requester_id)
-          setReceiverName(req.requester_name || 'Пользователь')
-          const ids = req.unit_ids || []
-          unitsApi.list().then(ud => {
-            const us = (ud.units || []).filter(u => ids.includes(u.id))
-            setUnits(us)
-            setSelected(new Set(us.map(u => u.id)))
-          })
-        }
-      }).finally(() => setInitLoading(false))
+      reloadRequestUnits().finally(() => setInitLoading(false))
     } else {
       unitsApi.list({ status: 'on_stock' }).then(data => {
         setUnits(data.units || [])
       }).finally(() => setInitLoading(false))
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [requestId, rentDealId])
 
   const selectedUnits = units.filter(u => selected.has(u.id) && !missing.has(u.id))
@@ -122,8 +138,30 @@ export default function IssuePage() {
     setSelected(s => { const n = new Set(s); n.add(id); return n })
   }
 
-  function setUnitPhotos(unitId, files) {
-    setPhotos(p => ({ ...p, [unitId]: files }))
+  function compressImage(file, maxSize = 1024, quality = 0.5) {
+    return new Promise((resolve) => {
+      const img = new Image()
+      img.onload = () => {
+        const canvas = document.createElement('canvas')
+        let { width, height } = img
+        if (width > maxSize || height > maxSize) {
+          if (width > height) { height = Math.round(height * maxSize / width); width = maxSize }
+          else { width = Math.round(width * maxSize / height); height = maxSize }
+        }
+        canvas.width = width
+        canvas.height = height
+        canvas.getContext('2d').drawImage(img, 0, 0, width, height)
+        canvas.toBlob(blob => resolve(new File([blob], file.name.replace(/\.[^.]+$/, '.jpg'), { type: 'image/jpeg' })), 'image/jpeg', quality)
+      }
+      img.src = URL.createObjectURL(file)
+    })
+  }
+
+  async function setUnitPhotos(unitId, files) {
+    const processed = await Promise.all(
+      files.map(f => f.type?.startsWith('video/') || f.type === 'image/jpeg' && f.size < 500_000 ? f : compressImage(f))
+    )
+    setPhotos(p => ({ ...p, [unitId]: processed }))
   }
 
   async function handleIssue(signatureData) {
@@ -151,7 +189,9 @@ export default function IssuePage() {
         await issuancesApi.issue(fd)
       }
       setSuccess(true)
-      setTimeout(() => navigate('/dashboard'), 1600)
+      // Акт сохраняется автоматически в /acts. Редирект — в раздел «Выдано»,
+      // где пользователь сразу видит свежую выдачу под нужным проектом.
+      setTimeout(() => navigate('/issued'), 1600)
     } catch (err) {
       toast?.(err.message || 'Ошибка выдачи', 'error')
     } finally {
@@ -203,9 +243,26 @@ export default function IssuePage() {
         {/* Step 0 — Сборка (объединено: список + сбор + даты) */}
         {step === 0 && (
           <div>
-            <div style={{ fontWeight: 600, marginBottom: 4 }}>Сборка</div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 4 }}>
+              <div style={{ fontWeight: 600, flex: 1 }}>Сборка</div>
+              {/* «Доложить состав» — открывает EditRequestItemsModal,
+                  переиспользует backend POST /requests/:id/items.
+                  Доступно только для проектных заявок (не rent_deal). */}
+              {requestId && !rentDealId && (
+                <button onClick={() => setEditingItems(true)} style={{
+                  display: 'flex', alignItems: 'center', gap: 6,
+                  padding: '6px 12px', fontSize: 12, fontWeight: 500,
+                  background: 'var(--bg)', color: 'var(--text)',
+                  border: '1px solid var(--border)', borderRadius: 'var(--radius-btn)',
+                  cursor: 'pointer', fontFamily: 'inherit',
+                }}>
+                  <Pencil size={13} /> Состав
+                </button>
+              )}
+            </div>
             <div style={{ fontSize: 13, color: 'var(--muted)', marginBottom: 16 }}>
               Отметьте каждую единицу по мере сбора. Если чего-то нет — кликните «Нет в наличии».
+              {requestId && !rentDealId && ' Хотите доложить ещё — кнопка «Состав» сверху.'}
             </div>
             {initLoading && <div style={{ color: 'var(--muted)', fontSize: 13 }}>Загрузка...</div>}
             {!initLoading && selectedUnits.length > 0 && (
@@ -392,6 +449,24 @@ export default function IssuePage() {
         onConfirm={confirmMissing}
         onCancel={() => setMissingTarget(null)}
       />
+
+      {editingItems && requestId && (
+        <EditRequestItemsModal
+          requestId={requestId}
+          initialUnits={units.map(u => ({
+            id: u.id, name: u.name, category: u.category,
+            qty: u.qty || 1, serial: u.serial,
+            photo_url: (u.photos && u.photos[0]?.url) || u.photo_url || null,
+          }))}
+          onClose={() => setEditingItems(false)}
+          onSaved={async () => {
+            setEditingItems(false)
+            // Перечитываем заявку — backend переписал unit_ids, могли появиться
+            // новые units (созданные через фото) или удалиться старые.
+            await reloadRequestUnits()
+          }}
+        />
+      )}
 
       {success && (
         <div style={{

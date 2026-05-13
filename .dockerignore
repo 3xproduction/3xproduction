@@ -1,0 +1,23 @@
+node_modules
+**/node_modules
+.git
+.gitignore
+.env
+.env.*
+**/.env
+**/.env.*
+# .env.production и .env.staging нужны в образе для Vite (там VITE_API_URL + VITE_APP_ENV)
+!frontend/.env.production
+!frontend/.env.staging
+frontend/dist
+*.log
+npm-debug.log*
+.DS_Store
+desktop.ini
+Thumbs.db
+
+# Local-only
+git
+master
+prod-dump.sql
+dump-err.log

@@ -1,5 +1,6 @@
 const db = require('../db')
 const { sendPush } = require('./push')
+const { pluralRu } = require('../utils/pluralRu')
 
 async function createNotification({ user_id, type, text, entity_id, entity_type }) {
   await db.query(
@@ -27,13 +28,62 @@ async function createNotification({ user_id, type, text, entity_id, entity_type 
   }
 }
 
-// Notify all warehouse directors/deputies
-async function notifyWarehouse({ type, text, entity_id, entity_type }) {
+// Notify warehouse roles. По умолчанию — director + deputy + staff.
+// Передай `roles` чтобы ограничить круг получателей (например,
+// только директор и зам для важных событий).
+async function notifyWarehouse({ type, text, entity_id, entity_type, roles }) {
+  const targetRoles = roles && roles.length
+    ? roles
+    : ['warehouse_director', 'warehouse_deputy', 'warehouse_staff']
   const { rows } = await db.query(
-    `SELECT id FROM users WHERE role IN ('warehouse_director','warehouse_deputy','warehouse_staff')`
+    `SELECT id FROM users WHERE role = ANY($1)`,
+    [targetRoles]
   )
   for (const u of rows) {
     await createNotification({ user_id: u.id, type, text, entity_id, entity_type })
+  }
+}
+
+// Пуш при создании новой единицы — только директор и зам.
+async function notifyNewUnit(unit) {
+  await notifyWarehouse({
+    type: 'new_unit',
+    text: `У вас новое пополнение на складе — ${unit.name}. Перейдите посмотреть.`,
+    entity_id: unit.id,
+    entity_type: 'unit',
+    roles: ['warehouse_director', 'warehouse_deputy'],
+  })
+}
+
+// Память по количеству единиц без места — чтобы пушить только при
+// пересечении порога «каждые +2». Сбрасывается при рестарте контейнера —
+// при следующей проверке просто запоминается текущее значение без пуша.
+const noCellState = { last: null }
+
+// Пересчёт единиц без места. Если количество >=2 и перешагнуло
+// очередной «двойной» рубеж (2,4,6...) — шлём push директору/заму.
+async function notifyNoCellIfThresholdCrossed() {
+  try {
+    const { rows } = await db.query(
+      `SELECT COUNT(*)::int AS n FROM units WHERE cell_id IS NULL AND status = 'on_stock'`
+    )
+    const curr = rows[0]?.n || 0
+    const prev = noCellState.last
+    noCellState.last = curr
+
+    if (prev === null) return // первый вызов после рестарта — просто запомнили
+    if (curr < 2) return
+    if (Math.floor(curr / 2) <= Math.floor(prev / 2)) return // порог не перешагнут вверх
+
+    const noun = pluralRu(curr, ['поступление', 'поступления', 'поступлений'])
+    await notifyWarehouse({
+      type: 'no_cell_threshold',
+      text: `${curr} ${noun} на складе без места`,
+      entity_type: 'warehouse',
+      roles: ['warehouse_director', 'warehouse_deputy'],
+    })
+  } catch (err) {
+    console.error('notifyNoCellIfThresholdCrossed:', err.message)
   }
 }
 
@@ -73,4 +123,10 @@ async function checkOverdue() {
   }
 }
 
-module.exports = { createNotification, notifyWarehouse, checkOverdue }
+module.exports = {
+  createNotification,
+  notifyWarehouse,
+  notifyNewUnit,
+  notifyNoCellIfThresholdCrossed,
+  checkOverdue,
+}
