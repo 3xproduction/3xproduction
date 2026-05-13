@@ -36,6 +36,21 @@ STAGING_SECRETS_VER="e6qcrijrh1pmmb2l7esh"
 PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$PROJECT_ROOT"
 
+if [[ -n "$(git status --porcelain)" ]]; then
+  echo "ERROR: refusing staging deploy from a dirty worktree." >&2
+  echo "Commit, stash, or explicitly build from a reviewed tag before deploying staging." >&2
+  git status --short >&2
+  exit 1
+fi
+
+ANTHROPIC_ENV_ARGS=()
+if [[ -n "${ANTHROPIC_BASE_URL:-}" ]]; then
+  ANTHROPIC_ENV_ARGS+=(--environment "ANTHROPIC_BASE_URL=${ANTHROPIC_BASE_URL}")
+fi
+if [[ -n "${ANTHROPIC_PROXY_URL:-}" ]]; then
+  ANTHROPIC_ENV_ARGS+=(--environment "ANTHROPIC_PROXY_URL=${ANTHROPIC_PROXY_URL}")
+fi
+
 echo ">>> [1/3] Сборка $IMAGE с BUILD_MODE=staging (--no-cache)"
 docker build --no-cache --build-arg BUILD_MODE=staging -t "$IMAGE" .
 
@@ -56,6 +71,7 @@ yc serverless container revision deploy \
   --environment "S3_ENDPOINT=https://storage.yandexcloud.net" \
   --environment "S3_PUBLIC_URL=https://storage.yandexcloud.net/3xproduction-files" \
   --environment "S3_REGION=ru-central1" \
+  "${ANTHROPIC_ENV_ARGS[@]}" \
   --secret "environment-variable=DATABASE_URL,id=${STAGING_SECRETS_ID},version-id=${STAGING_SECRETS_VER},key=DATABASE_URL" \
   --secret "environment-variable=JWT_SECRET,id=${PROD_SECRETS_ID},version-id=${PROD_SECRETS_VER},key=JWT_SECRET" \
   --secret "environment-variable=ANTHROPIC_API_KEY,id=${PROD_SECRETS_ID},version-id=${PROD_SECRETS_VER},key=ANTHROPIC_API_KEY" \

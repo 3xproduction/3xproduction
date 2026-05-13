@@ -44,6 +44,14 @@ if [[ -n "$(git status --porcelain)" ]]; then
   exit 1
 fi
 
+ANTHROPIC_ENV_ARGS=()
+if [[ -n "${ANTHROPIC_BASE_URL:-}" ]]; then
+  ANTHROPIC_ENV_ARGS+=(--environment "ANTHROPIC_BASE_URL=${ANTHROPIC_BASE_URL}")
+fi
+if [[ -n "${ANTHROPIC_PROXY_URL:-}" ]]; then
+  ANTHROPIC_ENV_ARGS+=(--environment "ANTHROPIC_PROXY_URL=${ANTHROPIC_PROXY_URL}")
+fi
+
 echo ""
 echo "==================================================="
 echo " ВНИМАНИЕ: ДЕПЛОЙ В PROD"
@@ -82,6 +90,7 @@ yc serverless container revision deploy \
   --environment "S3_ENDPOINT=https://storage.yandexcloud.net" \
   --environment "S3_PUBLIC_URL=https://storage.yandexcloud.net/3xproduction-files" \
   --environment "S3_REGION=ru-central1" \
+  "${ANTHROPIC_ENV_ARGS[@]}" \
   --secret "environment-variable=DATABASE_URL,id=${PROD_SECRETS_ID},version-id=${PROD_SECRETS_VER},key=DATABASE_URL" \
   --secret "environment-variable=JWT_SECRET,id=${PROD_SECRETS_ID},version-id=${PROD_SECRETS_VER},key=JWT_SECRET" \
   --secret "environment-variable=ANTHROPIC_API_KEY,id=${PROD_SECRETS_ID},version-id=${PROD_SECRETS_VER},key=ANTHROPIC_API_KEY" \

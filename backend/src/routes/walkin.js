@@ -6,6 +6,7 @@ const { verifyJWT, checkRole } = require('../middleware/auth')
 const { uploadFile } = require('../services/r2')
 const { createIssuancePDF } = require('../services/pdf')
 const { sendEmail } = require('../services/resend')
+const { nextUnitSerial } = require('../services/unitSerial')
 
 const ALLOWED_IMAGE_TYPES = ['image/jpeg', 'image/png', 'image/webp']
 const upload = multer({
@@ -38,8 +39,21 @@ function isEmail(s) {
   return typeof s === 'string' && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(s)
 }
 
+function normalizeEmail(email) {
+  return String(email || '').trim().toLowerCase()
+}
+
+function optionalEmail(email) {
+  const normalized = normalizeEmail(email)
+  return normalized || null
+}
+
 function makeClaimToken() {
   return crypto.randomBytes(24).toString('hex')
+}
+
+function hashClaimToken(token) {
+  return crypto.createHash('sha256').update(String(token || '')).digest('hex')
 }
 
 function claimUrl(token) {
@@ -113,12 +127,15 @@ router.post('/issue', verifyJWT, checkRole(...WALKIN_ISSUER_ROLES), upload.any()
       return res.status(400).json({ error: 'ФИО и телефон получателя обязательны' })
     }
   }
-  if (director_email && !isEmail(director_email)) {
+  if (director_email && !isEmail(normalizeEmail(director_email))) {
     return res.status(400).json({ error: 'Некорректный email директора проекта' })
   }
-  if (recipient_email && !isEmail(recipient_email)) {
+  if (recipient_email && !isEmail(normalizeEmail(recipient_email))) {
     return res.status(400).json({ error: 'Некорректный email получателя' })
   }
+
+  const directorEmail = optionalEmail(director_email)
+  const recipientEmail = optionalEmail(recipient_email)
 
   let units
   try {
@@ -177,9 +194,9 @@ router.post('/issue', verifyJWT, checkRole(...WALKIN_ISSUER_ROLES), upload.any()
     if (!project_id) {
       // Если email указан — проверяем, не занят ли. При занятости — 409,
       // директор склада уберёт email и попробует снова (или передаст вручную).
-      if (director_email) {
+      if (directorEmail) {
         const { rows: dup } = await client.query(
-          `SELECT id FROM users WHERE LOWER(email) = LOWER($1)`, [director_email]
+          `SELECT id FROM users WHERE LOWER(email) = LOWER($1)`, [directorEmail]
         )
         if (dup.length) {
           await client.query('ROLLBACK')
@@ -187,22 +204,23 @@ router.post('/issue', verifyJWT, checkRole(...WALKIN_ISSUER_ROLES), upload.any()
         }
       }
       const directorClaimToken = makeClaimToken()
+      const directorClaimTokenHash = hashClaimToken(directorClaimToken)
       const claimExpires = new Date(Date.now() + CLAIM_TTL_DAYS * 24 * 60 * 60 * 1000)
       await client.query(
-        `INSERT INTO users (name, email, phone, role, project_id, is_provisional, claim_token, claim_token_expires)
+        `INSERT INTO users (name, email, phone, role, project_id, is_provisional, claim_token_hash, claim_token_expires)
          VALUES ($1, $2, $3, 'project_director', $4, true, $5, $6)`,
         [
           String(director_name).trim(),
-          director_email || null,
+          directorEmail,
           String(director_phone).trim(),
           projectIdResolved,
-          directorClaimToken,
+          directorClaimTokenHash,
           claimExpires,
         ]
       )
-      if (director_email) {
+      if (directorEmail) {
         emailsToSend.push({
-          to: director_email,
+          to: directorEmail,
           subject: `Ваш проект «${projectNameResolved}» зарегистрирован складом — 3XMedia Production`,
           html: `
             <p>Здравствуйте, ${escHtml(director_name)}.</p>
@@ -240,9 +258,9 @@ router.post('/issue', verifyJWT, checkRole(...WALKIN_ISSUER_ROLES), upload.any()
       receiverRole = ex.role
       receiverContact = ex.phone || ex.email || ''
     } else {
-      if (recipient_email) {
+      if (recipientEmail) {
         const { rows: dup } = await client.query(
-          `SELECT id FROM users WHERE LOWER(email) = LOWER($1)`, [recipient_email]
+          `SELECT id FROM users WHERE LOWER(email) = LOWER($1)`, [recipientEmail]
         )
         if (dup.length) {
           await client.query('ROLLBACK')
@@ -250,17 +268,18 @@ router.post('/issue', verifyJWT, checkRole(...WALKIN_ISSUER_ROLES), upload.any()
         }
       }
       const recipientClaimToken = makeClaimToken()
+      const recipientClaimTokenHash = hashClaimToken(recipientClaimToken)
       const claimExpires = new Date(Date.now() + CLAIM_TTL_DAYS * 24 * 60 * 60 * 1000)
       const { rows } = await client.query(
-        `INSERT INTO users (name, email, phone, role, project_id, is_provisional, claim_token, claim_token_expires)
+        `INSERT INTO users (name, email, phone, role, project_id, is_provisional, claim_token_hash, claim_token_expires)
          VALUES ($1, $2, $3, $4, $5, true, $6, $7) RETURNING id, name, role, phone, email`,
         [
           String(recipient_name).trim(),
-          recipient_email || null,
+          recipientEmail,
           String(recipient_phone).trim(),
           recipient_role,
           projectIdResolved,
-          recipientClaimToken,
+          recipientClaimTokenHash,
           claimExpires,
         ]
       )
@@ -270,9 +289,9 @@ router.post('/issue', verifyJWT, checkRole(...WALKIN_ISSUER_ROLES), upload.any()
       receiverRole = r.role
       receiverContact = r.phone || r.email || ''
       // Email получателю отправим в самом конце вместе с PDF — храним токен в closure.
-      if (recipient_email) {
+      if (recipientEmail) {
         emailsToSend.push({
-          to: recipient_email,
+          to: recipientEmail,
           subject: `Акт выдачи реквизита — проект «${projectNameResolved}» — 3XMedia Production`,
           // PDF-ссылка дозаписывается ниже после генерации.
           html: null,
@@ -284,9 +303,7 @@ router.post('/issue', verifyJWT, checkRole(...WALKIN_ISSUER_ROLES), upload.any()
 
     // ── 4. Юниты ──
     // Каждый item — либо новый (создаём), либо existing_id (берём с полки).
-    // Для serial новых — один SELECT count + in-memory инкремент.
-    const { rows: cntRows } = await client.query(`SELECT COUNT(*)::int AS cnt FROM units`)
-    let runningCount = cntRows[0]?.cnt || 0
+    // Serial numbers are allocated through an atomic counter row per prefix.
     const createdUnitIds = []
     const createdUnitsForPdf = []
 
@@ -320,9 +337,7 @@ router.post('/issue', verifyJWT, checkRole(...WALKIN_ISSUER_ROLES), upload.any()
         createdUnitsForPdf.push({ ...exu, _existing: true, _photoUrls: [] })
       } else {
         // Новая — AI-распознанная, создаём с минимумом полей.
-        runningCount += 1
-        const catPrefix = String(u.category || 'XX').slice(0, 3).toUpperCase()
-        const serial = `${catPrefix}-${String(runningCount).padStart(5, '0')}`
+        const serial = await nextUnitSerial(client, u.category)
         const qty = Number.isFinite(Number(u.qty)) && Number(u.qty) > 0 ? Number(u.qty) : 1
 
         const { rows: ins } = await client.query(

@@ -49,6 +49,13 @@ BEGIN
 
   IF NOT EXISTS (
     SELECT 1 FROM information_schema.columns
+    WHERE table_name='users' AND column_name='claim_token_hash'
+  ) THEN
+    ALTER TABLE users ADD COLUMN claim_token_hash TEXT;
+  END IF;
+
+  IF NOT EXISTS (
+    SELECT 1 FROM information_schema.columns
     WHERE table_name='users' AND column_name='claim_token_expires'
   ) THEN
     ALTER TABLE users ADD COLUMN claim_token_expires TIMESTAMPTZ;
@@ -71,14 +78,14 @@ BEGIN
   END;
 END $$;
 
--- Уникальный индекс на claim_token (быстрый lookup при /auth/claim/:token).
+-- Уникальный индекс на claim_token_hash (быстрый lookup при /auth/claim/:token).
 DO $$
 BEGIN
   IF NOT EXISTS (
     SELECT 1 FROM pg_indexes
-    WHERE schemaname='public' AND indexname='idx_users_claim_token'
+    WHERE schemaname='public' AND indexname='idx_users_claim_token_hash'
   ) THEN
-    CREATE UNIQUE INDEX idx_users_claim_token ON users(claim_token)
-      WHERE claim_token IS NOT NULL;
+    CREATE UNIQUE INDEX idx_users_claim_token_hash ON users(claim_token_hash)
+      WHERE claim_token_hash IS NOT NULL;
   END IF;
 END $$;

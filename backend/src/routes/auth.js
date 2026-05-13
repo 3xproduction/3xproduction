@@ -9,12 +9,22 @@ const SALT_ROUNDS = 12
 const CODE_TTL_MIN = 15
 const MAX_CODES_PER_HOUR = 5
 
+function normalizeEmail(email) {
+  return String(email || '').trim().toLowerCase()
+}
+
+function hashClaimToken(token) {
+  return crypto.createHash('sha256').update(String(token || '')).digest('hex')
+}
+
 // POST /auth/register  — only via invite token
 router.post('/register', async (req, res) => {
   const { token, name, email, password } = req.body
   if (!token || !name || !email || !password) {
     return res.status(400).json({ error: 'Missing fields' })
   }
+  const normalizedEmail = normalizeEmail(email)
+  if (!normalizedEmail) return res.status(400).json({ error: 'Missing fields' })
 
   try {
     // Validate invite
@@ -26,7 +36,7 @@ router.post('/register', async (req, res) => {
 
     // Check email not taken
     const { rows: existing } = await db.query(
-      `SELECT id FROM users WHERE email = $1`, [email]
+      `SELECT id FROM users WHERE LOWER(email) = LOWER($1)`, [normalizedEmail]
     )
     if (existing.length) return res.status(400).json({ error: 'Email already registered' })
 
@@ -36,7 +46,7 @@ router.post('/register', async (req, res) => {
     const { rows } = await db.query(
       `INSERT INTO users (name, email, password_hash, role, project_id, warehouse_zone)
        VALUES ($1, $2, $3, $4, $5, $6) RETURNING id, name, email, role, project_id`,
-      [name, email, password_hash, invite.role, invite.project_id, invite.warehouse_zone]
+      [name, normalizedEmail, password_hash, invite.role, invite.project_id, invite.warehouse_zone]
     )
     const user = rows[0]
 
@@ -63,12 +73,14 @@ router.post('/register', async (req, res) => {
 // проект, email (если был указан). Не отдаёт sensitive-поля.
 router.get('/claim/:token', async (req, res) => {
   try {
+    const tokenHash = hashClaimToken(req.params.token)
     const { rows } = await db.query(
       `SELECT u.id, u.name, u.email, u.phone, u.role, u.is_provisional,
               u.claim_token_expires, p.name AS project_name
        FROM users u LEFT JOIN projects p ON p.id = u.project_id
-       WHERE u.claim_token = $1`,
-      [req.params.token]
+       WHERE u.claim_token_hash = $1
+       LIMIT 1`,
+      [tokenHash]
     )
     if (!rows.length) return res.status(404).json({ error: 'Token not found' })
     const u = rows[0]
@@ -100,10 +112,13 @@ router.post('/claim/:token', async (req, res) => {
   if (password.length < 8) return res.status(400).json({ error: 'Password must be at least 8 characters' })
 
   try {
+    const tokenHash = hashClaimToken(req.params.token)
     const { rows } = await db.query(
       `SELECT id, email, role, project_id, is_provisional, claim_token_expires
-       FROM users WHERE claim_token = $1`,
-      [req.params.token]
+       FROM users
+       WHERE claim_token_hash = $1
+       LIMIT 1`,
+      [tokenHash]
     )
     if (!rows.length) return res.status(404).json({ error: 'Token not found' })
     const u = rows[0]
@@ -115,23 +130,24 @@ router.post('/claim/:token', async (req, res) => {
     // Если email не задавался при walk-in — берём из тела. Если задан и в
     // теле другой — игнорируем тело (фиксируем то что вписал склад на месте,
     // чтобы юзер не подменил данные на чужой email).
-    let finalEmail = u.email
+    let finalEmail = normalizeEmail(u.email)
     if (!finalEmail) {
-      if (!email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+      const requestedEmail = normalizeEmail(email)
+      if (!requestedEmail || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(requestedEmail)) {
         return res.status(400).json({ error: 'Email required' })
       }
       const { rows: dup } = await db.query(
-        `SELECT id FROM users WHERE LOWER(email)=LOWER($1) AND id <> $2`, [email, u.id]
+        `SELECT id FROM users WHERE LOWER(email)=LOWER($1) AND id <> $2`, [requestedEmail, u.id]
       )
       if (dup.length) return res.status(409).json({ error: 'Email already registered' })
-      finalEmail = email
+      finalEmail = requestedEmail
     }
 
     const password_hash = await bcrypt.hash(password, SALT_ROUNDS)
     await db.query(
       `UPDATE users SET password_hash = $1, email = $2,
                         is_provisional = false,
-                        claim_token = NULL, claim_token_expires = NULL
+                        claim_token = NULL, claim_token_hash = NULL, claim_token_expires = NULL
        WHERE id = $3`,
       [password_hash, finalEmail, u.id]
     )
@@ -155,13 +171,21 @@ router.post('/claim/:token', async (req, res) => {
 router.post('/login', async (req, res) => {
   const { email, password } = req.body
   if (!email || !password) return res.status(400).json({ error: 'Missing fields' })
+  const normalizedEmail = normalizeEmail(email)
+  if (!normalizedEmail) return res.status(400).json({ error: 'Missing fields' })
 
   try {
     const { rows } = await db.query(
-      `SELECT * FROM users WHERE email = $1`, [email]
+      `SELECT * FROM users
+       WHERE LOWER(email) = LOWER($1)
+       ORDER BY is_provisional ASC, created_at ASC
+       LIMIT 1`,
+      [normalizedEmail]
     )
     if (!rows.length) return res.status(401).json({ error: 'Invalid credentials' })
     const user = rows[0]
+    if (user.is_provisional) return res.status(401).json({ error: 'Invalid credentials' })
+    if (!user.password_hash) return res.status(401).json({ error: 'Invalid credentials' })
 
     const match = await bcrypt.compare(password, user.password_hash)
     if (!match) return res.status(401).json({ error: 'Invalid credentials' })
@@ -186,16 +210,25 @@ router.post('/login', async (req, res) => {
 router.post('/recover/request', async (req, res) => {
   const { email } = req.body
   if (!email) return res.status(400).json({ error: 'Missing email' })
+  const normalizedEmail = normalizeEmail(email)
+  if (!normalizedEmail) return res.status(400).json({ error: 'Missing email' })
 
   try {
-    const { rows } = await db.query(`SELECT id FROM users WHERE email = $1`, [email])
+    const { rows } = await db.query(
+      `SELECT id, email FROM users
+       WHERE LOWER(email) = LOWER($1)
+         AND COALESCE(is_provisional, false) = false
+       ORDER BY is_provisional ASC, created_at ASC
+       LIMIT 1`,
+      [normalizedEmail]
+    )
     // Always return 200 to not leak user existence
     if (!rows.length) return res.json({ ok: true })
 
     // Rate limit: max N codes per hour per email
     const { rows: recent } = await db.query(
       `SELECT COUNT(*) AS cnt FROM recover_codes WHERE email = $1 AND created_at > NOW() - INTERVAL '1 hour'`,
-      [email]
+      [normalizedEmail]
     )
     if (Number(recent[0].cnt) >= MAX_CODES_PER_HOUR) return res.json({ ok: true })
 
@@ -204,11 +237,11 @@ router.post('/recover/request', async (req, res) => {
 
     await db.query(
       `INSERT INTO recover_codes (email, code, expires_at) VALUES ($1, $2, $3)`,
-      [email, code, expires_at]
+      [normalizedEmail, code, expires_at]
     )
 
     await sendEmail({
-      to: email,
+      to: rows[0].email || normalizedEmail,
       subject: 'Код восстановления пароля — 3XMedia Production',
       html: `
         <p>Ваш код восстановления пароля:</p>
@@ -229,13 +262,15 @@ router.post('/recover/request', async (req, res) => {
 router.post('/recover/verify', async (req, res) => {
   const { email, code } = req.body
   if (!email || !code) return res.status(400).json({ error: 'Missing fields' })
+  const normalizedEmail = normalizeEmail(email)
+  if (!normalizedEmail) return res.status(400).json({ error: 'Missing fields' })
 
   try {
     const { rows } = await db.query(
       `SELECT * FROM recover_codes
        WHERE email = $1 AND code = $2 AND used = FALSE AND expires_at > NOW()
        ORDER BY created_at DESC LIMIT 1`,
-      [email, code]
+      [normalizedEmail, code]
     )
     if (!rows.length) return res.status(400).json({ error: 'Invalid or expired code' })
 
@@ -251,19 +286,31 @@ router.post('/recover/reset', async (req, res) => {
   const { email, code, password } = req.body
   if (!email || !code || !password) return res.status(400).json({ error: 'Missing fields' })
   if (password.length < 8) return res.status(400).json({ error: 'Password must be at least 8 characters' })
+  const normalizedEmail = normalizeEmail(email)
+  if (!normalizedEmail) return res.status(400).json({ error: 'Missing fields' })
 
   try {
     const { rows } = await db.query(
       `SELECT * FROM recover_codes
        WHERE email = $1 AND code = $2 AND used = FALSE AND expires_at > NOW()
        ORDER BY created_at DESC LIMIT 1`,
-      [email, code]
+      [normalizedEmail, code]
     )
     if (!rows.length) return res.status(400).json({ error: 'Invalid or expired code' })
 
     const password_hash = await bcrypt.hash(password, SALT_ROUNDS)
-    await db.query(`UPDATE users SET password_hash = $1 WHERE email = $2`, [password_hash, email])
-    await db.query(`UPDATE recover_codes SET used = TRUE WHERE email = $1 AND used = FALSE`, [email])
+    await db.query(
+      `UPDATE users SET password_hash = $1
+       WHERE id = (
+         SELECT id FROM users
+         WHERE LOWER(email) = LOWER($2)
+           AND COALESCE(is_provisional, false) = false
+         ORDER BY is_provisional ASC, created_at ASC
+         LIMIT 1
+       )`,
+      [password_hash, normalizedEmail]
+    )
+    await db.query(`UPDATE recover_codes SET used = TRUE WHERE email = $1 AND used = FALSE`, [normalizedEmail])
 
     res.json({ ok: true })
   } catch (err) {

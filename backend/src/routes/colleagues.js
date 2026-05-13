@@ -235,10 +235,11 @@ router.get('/projects/:id/units', verifyJWT, async (req, res) => {
 router.get('/responders', verifyJWT, async (req, res) => {
   const { project_id, category } = req.query
   if (!project_id) return res.status(400).json({ error: 'project_id required' })
+  if (!req.user.project_id) return res.status(400).json({ error: 'project context required' })
   const roles = responderRolesForCategory(category || 'props')
   try {
     const { rows } = await db.query(
-      `SELECT id, name, email, role
+      `SELECT id, name, role
        FROM users
        WHERE project_id = $1 AND role = ANY($2)
        ORDER BY role, name`,

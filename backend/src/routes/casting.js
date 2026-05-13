@@ -18,6 +18,7 @@ const upload = multer({
 })
 
 const ALLOWED_KINDS = ['adult', 'child', 'animal']
+const ALLOWED_STATUSES = ['considering', 'approved', 'rejected']
 
 const anthropic = createAnthropicClient()
 
@@ -115,10 +116,11 @@ function pickFieldsForInsert(body) {
 router.post('/', verifyJWT, checkRole(...ALLOWED_ROLES), async (req, res) => {
   if (!req.body?.name) return res.status(400).json({ error: 'Name required' })
   const safeKind = ALLOWED_KINDS.includes(req.body.kind) ? req.body.kind : 'adult'
+  const safeStatus = ALLOWED_STATUSES.includes(req.body.status) ? req.body.status : 'considering'
   const { cols, params, placeholders } = pickFieldsForInsert(req.body)
   // фиксированные поля: kind, status, project_id, created_by
   cols.push('kind'); params.push(safeKind); placeholders.push(`$${params.length}`)
-  cols.push('status'); params.push(req.body.status || 'considering'); placeholders.push(`$${params.length}`)
+  cols.push('status'); params.push(safeStatus); placeholders.push(`$${params.length}`)
   cols.push('project_id'); params.push(req.body.project_id || null); placeholders.push(`$${params.length}`)
   cols.push('created_by'); params.push(req.user.id); placeholders.push(`$${params.length}`)
   try {
@@ -153,6 +155,7 @@ router.put('/:id', verifyJWT, checkRole(...ALLOWED_ROLES), async (req, res) => {
     params.push(req.body.kind); sets.push(`kind = $${params.length}`)
   }
   if (req.body.status !== undefined) {
+    if (!ALLOWED_STATUSES.includes(req.body.status)) return res.status(400).json({ error: 'Invalid status' })
     params.push(req.body.status); sets.push(`status = $${params.length}`)
   }
   if (!sets.length) return res.status(400).json({ error: 'No fields' })

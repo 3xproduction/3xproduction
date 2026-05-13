@@ -296,7 +296,7 @@ app.post('/admin/reset-docs', require('./middleware/auth').verifyJWT, async (req
     await db.query('DELETE FROM documents')
     res.json({ ok: true, message: 'Cleared documents and lists' })
   } catch (err) {
-    console.error(err)
+    logger.error({ err }, 'admin reset docs failed')
     res.status(500).json({ error: 'Server error' })
   }
 })
@@ -322,7 +322,7 @@ app.post('/admin/cleanup-dupes', require('./middleware/auth').verifyJWT, async (
     `)
     res.json({ ok: true, deleted: rows.length })
   } catch (err) {
-    console.error(err)
+    logger.error({ err }, 'admin cleanup dupes failed')
     res.status(500).json({ error: 'Server error' })
   }
 })
@@ -343,7 +343,7 @@ app.post('/projects/:id/rebuild-positions', require('./middleware/auth').verifyJ
         WHERE pl.project_id = $1 AND pli.source IN ('kpp', 'scenario', 'ai')
       ) RETURNING id
     `, [pid])
-    console.log(`[REBUILD] Deleted ${deleted.length} auto-imported items`)
+    logger.info({ deleted: deleted.length }, 'rebuild positions deleted auto-imported items')
 
     // 2. Clear and rebuild scenes table for this project
     await db.query(`DELETE FROM scenes WHERE project_id = $1`, [pid])
@@ -458,12 +458,12 @@ app.post('/projects/:id/rebuild-positions', require('./middleware/auth').verifyJ
         await db.query(`INSERT INTO ai_tasks (project_id, document_id, task_type, params) VALUES ($1,$2,'cross_scenes',$3)`,
           [pid, sdoc.id, JSON.stringify({ seriesNum, fullSceneTexts: fullSceneTexts.substring(0, 17000) })])
       }
-      console.log(`[REBUILD] Enqueued ${scenarioDocs.length * 2} AI tasks`)
+      logger.info({ tasks: scenarioDocs.length * 2 }, 'rebuild positions enqueued AI tasks')
     }
 
     res.json({ ok: true, deleted: deleted.length, imported: totalImported, documents: docs.length })
   } catch (err) {
-    console.error('[REBUILD]', err)
+    logger.error({ err }, 'rebuild positions failed')
     res.status(500).json({ error: 'Server error' })
   }
 })
@@ -490,7 +490,7 @@ app.post('/admin/backfill-scenes', require('./middleware/auth').verifyJWT, async
     }
     res.json({ ok: true, scenes_upserted: total, documents_processed: docs.length })
   } catch (err) {
-    console.error('[BACKFILL]', err)
+    logger.error({ err }, 'backfill scenes failed')
     res.status(500).json({ error: 'Server error' })
   }
 })
@@ -501,7 +501,7 @@ app.get('/projects', require('./middleware/auth').verifyJWT, async (req, res) =>
     const { rows } = await db.query(`SELECT id, name, created_at FROM projects ORDER BY name`)
     res.json({ projects: rows })
   } catch (err) {
-    console.error(err)
+    logger.error({ err }, 'projects list failed')
     res.status(500).json({ error: 'Server error' })
   }
 })
@@ -518,7 +518,7 @@ app.post('/projects', require('./middleware/auth').verifyJWT, checkRole('produce
     )
     res.status(201).json({ project: rows[0] })
   } catch (err) {
-    console.error(err)
+    logger.error({ err }, 'project create failed')
     res.status(500).json({ error: 'Server error' })
   }
 })
@@ -532,7 +532,7 @@ app.patch('/projects/:id', require('./middleware/auth').verifyJWT, checkRole('pr
     if (!rows.length) return res.status(404).json({ error: 'Not found' })
     res.json({ project: rows[0] })
   } catch (err) {
-    console.error(err)
+    logger.error({ err }, 'project rename failed')
     res.status(500).json({ error: 'Server error' })
   }
 })
@@ -541,6 +541,15 @@ app.patch('/projects/:id', require('./middleware/auth').verifyJWT, checkRole('pr
 app.delete('/projects/:id', require('./middleware/auth').verifyJWT, checkRole('producer'), async (req, res) => {
   const { move_docs_to } = req.body || {}
   try {
+    const { rows: historyRows } = await db.query(
+      `SELECT 1 FROM unit_history WHERE project_id = $1 LIMIT 1`,
+      [req.params.id]
+    )
+    if (historyRows.length) {
+      return res.status(409).json({
+        error: 'Project has unit movement history and cannot be deleted',
+      })
+    }
     if (move_docs_to) {
       await db.query(`UPDATE documents SET project_id = $1 WHERE project_id = $2`, [move_docs_to, req.params.id])
       await db.query(`UPDATE production_lists SET project_id = $1 WHERE project_id = $2`, [move_docs_to, req.params.id])
@@ -550,7 +559,7 @@ app.delete('/projects/:id', require('./middleware/auth').verifyJWT, checkRole('p
     await db.query(`DELETE FROM projects WHERE id = $1`, [req.params.id])
     res.json({ ok: true })
   } catch (err) {
-    console.error(err)
+    logger.error({ err }, 'project delete failed')
     res.status(500).json({ error: 'Server error' })
   }
 })
@@ -587,7 +596,7 @@ app.post('/documents/:id/reimport', require('./middleware/auth').verifyJWT, chec
     }
     res.json({ ok: true, imported })
   } catch (err) {
-    console.error(err)
+    logger.error({ err }, 'document reimport failed')
     res.status(500).json({ error: 'Server error' })
   }
 })
@@ -618,7 +627,7 @@ app.post('/projects/:id/fix-dates', require('./middleware/auth').verifyJWT, chec
     }
     res.json({ ok: true, updated, total_without_dates: items.length })
   } catch (err) {
-    console.error(err)
+    logger.error({ err }, 'project reimport failed')
     res.status(500).json({ error: 'Server error' })
   }
 })
@@ -631,7 +640,7 @@ app.post('/projects/:id/reattach-scenarios', require('./middleware/auth').verify
     const { textMap: sceneTextMap } = await getSceneLookupMaps(pid)
     if (!Object.keys(sceneTextMap).length) return res.json({ ok: true, updated: 0, message: 'No scenario text in scenes table' })
 
-    console.log(`[REATTACH] Scene text map from scenes table: ${Object.keys(sceneTextMap).length} entries`)
+    logger.info({ entries: Object.keys(sceneTextMap).length }, 'reattach scenarios loaded scene text map')
 
     const { rows: allItems } = await db.query(
       `SELECT pli.id, pli.scene, pli.note FROM production_list_items pli
@@ -650,10 +659,10 @@ app.post('/projects/:id/reattach-scenarios', require('./middleware/auth').verify
       await db.query(`UPDATE production_list_items SET note = $1 WHERE id = $2`, [newNote, item.id])
       updated++
     }
-    console.log(`[REATTACH] Updated ${updated} items with scenario text`)
+    logger.info({ updated }, 'reattach scenarios updated items')
     res.json({ ok: true, updated, total_items: allItems.length, scene_keys: Object.keys(sceneTextMap).length })
   } catch (err) {
-    console.error(err)
+    logger.error({ err }, 'reattach scenarios failed')
     res.status(500).json({ error: 'Server error' })
   }
 })
@@ -678,7 +687,7 @@ app.post('/push/subscribe', verifyJWT, async (req, res) => {
     )
     res.json({ ok: true })
   } catch (err) {
-    console.error(err)
+    logger.error({ err }, 'push subscribe failed')
     res.status(500).json({ error: 'Server error' })
   }
 })
@@ -702,7 +711,7 @@ app.get('/notifications', verifyJWT, async (req, res) => {
     const { rows } = await db.query(q, [req.user.id])
     res.json({ notifications: rows })
   } catch (err) {
-    console.error(err)
+    logger.error({ err }, 'notifications list failed')
     res.status(500).json({ error: 'Server error' })
   }
 })
@@ -768,16 +777,16 @@ async function processAiTask() {
         `UPDATE ai_tasks SET status = 'completed', completed_at = NOW() WHERE id = $1`,
         [task.id]
       )
-      console.log(`[AI-WORKER] Completed task ${task.task_type} (${task.id})`)
+      logger.info({ taskId: task.id, taskType: task.task_type }, 'AI worker completed task')
     } catch (err) {
       await db.query(
         `UPDATE ai_tasks SET status = 'failed', error = $1 WHERE id = $2`,
         [err.message, task.id]
       )
-      console.error(`[AI-WORKER] Failed task ${task.task_type} (${task.id}): ${err.message}`)
+      logger.error({ err, taskId: task.id, taskType: task.task_type }, 'AI worker failed task')
     }
   } catch (err) {
-    console.error('[AI-WORKER] Worker error:', err.message)
+    logger.error({ err }, 'AI worker error')
   }
 }
 
@@ -914,7 +923,7 @@ ${existingList}
     projectNamesSet.add(sugNameLower)
   }
 
-  console.log(`[AI-WORKER] Imported ${aiImported} AI items for project ${task.project_id}`)
+  logger.info({ imported: aiImported, projectId: task.project_id }, 'AI worker imported project items')
 }
 
 async function processCrossScenes(task, params) {
@@ -932,7 +941,7 @@ async function processCrossScenes(task, params) {
     [JSON.stringify(crossScenes), task.document_id]
   )
   await db.query(`UPDATE ai_tasks SET result = $1 WHERE id = $2`, [JSON.stringify(crossScenes), task.id])
-  console.log(`[AI-WORKER] Found ${crossScenes.length} cross-scene items`)
+  logger.info({ count: crossScenes.length }, 'AI worker found cross-scene items')
 }
 
 async function processExpandSynonyms(task) {
@@ -985,7 +994,7 @@ ${itemNames.join(', ')}
     [JSON.stringify(synonyms), task.document_id]
   )
   await db.query(`UPDATE ai_tasks SET result = $1 WHERE id = $2`, [JSON.stringify(synonyms), task.id])
-  console.log(`[AI-WORKER] Generated synonyms for ${Object.keys(synonyms).length} items`)
+  logger.info({ count: Object.keys(synonyms).length }, 'AI worker generated synonyms')
 }
 
 async function processGenerateUnitTags(task, params) {
@@ -997,14 +1006,14 @@ async function processGenerateUnitTags(task, params) {
   if (!rows.length) throw new Error(`Unit ${unitId} not found`)
 
   const unit = rows[0]
-  console.log(`[AI-WORKER] Generating 100 tags for unit: ${unit.name}`)
+  logger.info({ unitId, unitName: unit.name }, 'AI worker generating unit tags')
   const tags = await generateUnitTags({
     name: unit.name,
     category: unit.category,
     description: unit.description || '',
     period: unit.period || '',
   })
-  console.log(`[AI-WORKER] Got ${tags.length} tags for "${unit.name}"`)
+  logger.info({ unitId, unitName: unit.name, tags: tags.length }, 'AI worker generated unit tags')
 
   await db.query(`UPDATE units SET search_tags = $1 WHERE id = $2`, [tags, unitId])
   await db.query(`UPDATE ai_tasks SET result = $1 WHERE id = $2`, [JSON.stringify(tags), task.id])

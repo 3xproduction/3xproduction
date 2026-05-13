@@ -9,6 +9,7 @@ const { notifyNewUnit, notifyNoCellIfThresholdCrossed } = require('../services/n
 const { unitMissingFields, canSeeMissingUnitData } = require('../utils/unitMissingFields')
 const { buildSearchQuery, normalizeSearchText, compactSearchText, normalizedSqlText, compactSqlText } = require('../services/searchService')
 const { createAnthropicClient } = require('../services/anthropicClient')
+const { nextUnitSerial } = require('../services/unitSerial')
 const logger = require('../logger')
 
 // Validate that a unit move to target cell is allowed.
@@ -402,10 +403,7 @@ router.post('/', verifyJWT, async (req, res) => {
     // Auto-generate inventory number if not provided
     let inventorySerial = serial
     if (!inventorySerial) {
-      const catPrefix = (category || 'XX').slice(0, 3).toUpperCase()
-      const { rows: countRows } = await db.query(`SELECT COUNT(*)::int AS cnt FROM units`)
-      const nextNum = (countRows[0]?.cnt || 0) + 1
-      inventorySerial = `${catPrefix}-${String(nextNum).padStart(5, '0')}`
+      inventorySerial = await nextUnitSerial(db, category)
     }
 
     const { rows } = await db.query(
