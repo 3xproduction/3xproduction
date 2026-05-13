@@ -85,7 +85,12 @@
   -moz-osx-font-smoothing: grayscale;
 }
 
-body { min-height: 100vh; }
+body {
+  min-height: 100vh;
+  -webkit-tap-highlight-color: transparent;
+  -webkit-text-size-adjust: 100%;
+  text-size-adjust: 100%;
+}
 #root { min-height: 100vh; }
 
 a { text-decoration: none; color: inherit; }
@@ -149,10 +154,14 @@ input, textarea, select {
   .grid-3 { grid-template-columns: 1fr; }
 }
 
-/* ── Mobile overflow fix ── */
-html, body { overflow-x: hidden; max-width: 100%; }
+/* ── Mobile overflow fix ──
+   Используем overflow-x: clip (а не hidden), потому что hidden на body
+   создаёт scroll-контекст и ломает position: sticky на дочерних страницах
+   (sticky-шапки .units-sticky / .dash-head / .team-sticky перестают липнуть).
+   `clip` обрезает горизонтальный overflow без создания scroll-контейнера. */
+html, body { overflow-x: clip; max-width: 100%; }
 @media (max-width: 768px) {
-  .page { overflow-x: hidden; }
+  .page { overflow-x: clip; }
   * { min-width: 0; box-sizing: border-box; }
 
   /* Страницы часто пишут inline padding '24px 32px' / '28px 32px' и

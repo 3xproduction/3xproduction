@@ -170,6 +170,10 @@ export const ROLES = {
     ownLists: ['makeup'],
     seePurchaseReport: true,
   },
+  extra_worker: {
+    label: 'Доп. рабочий',
+    world: 'production',
+  },
   stunt_coordinator: {
     label: 'Постановщик трюков',
     world: 'production',
