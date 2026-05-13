@@ -60,6 +60,7 @@ router.get('/:id/cells', verifyJWT, async (req, res) => {
          u.id                AS unit_id,
          u.name              AS unit_name,
          u.status            AS unit_status,
+         u.qty               AS unit_qty,
          p.url               AS photo_url
        FROM warehouse_sections sec
        LEFT JOIN cells c ON c.section_id = sec.id
@@ -111,6 +112,7 @@ router.get('/:id/cells', verifyJWT, async (req, res) => {
           unit_id:     r.unit_id,
           unit_name:   r.unit_name,
           unit_status: r.unit_status,
+          unit_qty:    r.unit_qty == null ? null : Number(r.unit_qty),
           photo_url:   r.photo_url,
         })
       }

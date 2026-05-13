@@ -3,6 +3,7 @@ const multer = require('multer')
 const db = require('../db')
 const { verifyJWT } = require('../middleware/auth')
 const { uploadFile } = require('../services/r2')
+const { createAnthropicClient } = require('../services/anthropicClient')
 
 const ALLOWED_MEDIA_TYPES = ['image/jpeg', 'image/png', 'image/webp', 'video/mp4', 'video/webm', 'video/quicktime']
 const upload = multer({
@@ -76,8 +77,7 @@ router.post('/recognize', verifyJWT, upload.single('photo'), async (req, res) =>
   if (!process.env.ANTHROPIC_API_KEY) return res.status(500).json({ error: 'AI not configured' })
   try {
     const sharp = require('sharp')
-    const Anthropic = require('@anthropic-ai/sdk')
-    const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY, baseURL: 'https://anthropic-proxy.pavelbelov590.workers.dev' })
+    const client = createAnthropicClient()
     const resized = await sharp(req.file.buffer).resize(800, 800, { fit: 'inside', withoutEnlargement: true }).jpeg({ quality: 70 }).toBuffer()
     const response = await client.messages.create({
       model: 'claude-haiku-4-5', max_tokens: 1024,

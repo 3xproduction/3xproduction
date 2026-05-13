@@ -1,12 +1,20 @@
 const { S3Client, PutObjectCommand, DeleteObjectCommand } = require('@aws-sdk/client-s3')
 const crypto = require('crypto')
 const path   = require('path')
+const sharp  = require('sharp')
+const logger = require('../logger')
 
 const endpoint = (process.env.S3_ENDPOINT || '').trim()
 const accessKeyId = (process.env.S3_ACCESS_KEY_ID || '').trim()
 const secretAccessKey = (process.env.S3_SECRET_ACCESS_KEY || '').trim()
 
-console.log('S3 config:', { endpoint, region: process.env.S3_REGION, bucket: process.env.S3_BUCKET_NAME, hasKey: !!accessKeyId, hasSecret: !!secretAccessKey })
+logger.debug({
+  endpoint,
+  region: process.env.S3_REGION,
+  bucket: process.env.S3_BUCKET_NAME,
+  hasKey: !!accessKeyId,
+  hasSecret: !!secretAccessKey,
+}, 'S3 config loaded')
 
 const s3 = new S3Client({
   region: (process.env.S3_REGION || 'auto').trim(),
@@ -37,6 +45,44 @@ async function deleteFile(url) {
   }))
 }
 
+// Загружает оригинал + сжатый 400px JPEG-thumbnail. Используется только для
+// картинок (видео грузим через uploadFile). Возвращает { url, thumbUrl }.
+// Если sharp падает (битый файл) — thumb опускается, возвращаем { url, thumbUrl: null }.
+async function uploadImageWithThumb(buffer, originalName, folder = 'uploads') {
+  const url = await uploadFile(buffer, originalName, folder)
+  let thumbUrl = null
+  try {
+    const thumbBuf = await sharp(buffer)
+      .rotate()
+      .resize(400, 400, { fit: 'inside', withoutEnlargement: true })
+      .jpeg({ quality: 80, mozjpeg: true })
+      .toBuffer()
+    const base = path.basename(originalName, path.extname(originalName)) || 'photo'
+    thumbUrl = await uploadFile(thumbBuf, `${base}_thumb.jpg`, folder)
+  } catch (err) {
+    logger.warn({ err, file: originalName }, 'thumb generation failed')
+  }
+  return { url, thumbUrl }
+}
+
+// Делает thumb из переданного buffer и кладёт в указанный folder. Возвращает URL
+// либо null если sharp не справился. Используется при regen-bg для существующих
+// фото.
+async function makeThumbFromBuffer(buffer, originalName, folder = 'uploads') {
+  try {
+    const thumbBuf = await sharp(buffer)
+      .rotate()
+      .resize(400, 400, { fit: 'inside', withoutEnlargement: true })
+      .jpeg({ quality: 80, mozjpeg: true })
+      .toBuffer()
+    const base = path.basename(originalName, path.extname(originalName)) || 'photo'
+    return await uploadFile(thumbBuf, `${base}_thumb.jpg`, folder)
+  } catch (err) {
+    logger.warn({ err, file: originalName }, 'thumb generation failed')
+    return null
+  }
+}
+
 function getContentType(ext) {
   const map = {
     '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.png': 'image/png', '.webp': 'image/webp',
@@ -46,4 +92,4 @@ function getContentType(ext) {
   return map[ext.toLowerCase()] || 'application/octet-stream'
 }
 
-module.exports = { uploadFile, deleteFile }
+module.exports = { uploadFile, deleteFile, uploadImageWithThumb, makeThumbFromBuffer }

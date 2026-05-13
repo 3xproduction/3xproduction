@@ -4,6 +4,28 @@ const SEARCH_CONFIG = 'ru_search'
 
 const WAREHOUSE_ROLES = ['warehouse_director', 'warehouse_deputy', 'warehouse_staff']
 
+function normalizeSearchText(value) {
+  return String(value || '')
+    .toLowerCase()
+    .replace(/ё/g, 'е')
+    .replace(/[-\u2010-\u2015\u2212]+/g, ' ')
+    .replace(/[^a-zа-я0-9]+/gi, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+}
+
+function compactSearchText(value) {
+  return normalizeSearchText(value).replace(/\s+/g, '')
+}
+
+function normalizedSqlText(expr) {
+  return `trim(regexp_replace(replace(lower(coalesce((${expr})::text, '')), 'ё', 'е'), '[^a-zа-я0-9]+', ' ', 'g'))`
+}
+
+function compactSqlText(expr) {
+  return `regexp_replace(replace(lower(coalesce((${expr})::text, '')), 'ё', 'е'), '[^a-zа-я0-9]+', '', 'g')`
+}
+
 // Check pg_trgm availability once at startup
 let hasTrgm = null
 async function checkTrgm() {
@@ -64,12 +86,13 @@ async function expandWithSynonyms(term) {
 function sanitizeTerms(terms) {
   const result = new Set()
   for (const t of terms) {
-    if (t.includes(' ')) {
-      for (const word of t.split(/\s+/)) {
+    const normalized = normalizeSearchText(t)
+    if (normalized.includes(' ')) {
+      for (const word of normalized.split(/\s+/)) {
         if (word.length > 1) result.add(word)
       }
-    } else {
-      result.add(t)
+    } else if (normalized.length > 1) {
+      result.add(normalized)
     }
   }
   return [...result]
@@ -77,8 +100,10 @@ function sanitizeTerms(terms) {
 
 // ── Build tsquery with synonym expansion ───────────────────────────
 async function buildSearchQuery(rawQuery) {
-  const tokens = rawQuery.trim().split(/\s+/).filter(t => t.length > 1)
-  if (!tokens.length) return { tsqueryStr: null, originalQuery: rawQuery.trim(), tokens: [], closeSynonyms: [] }
+  const originalQuery = normalizeSearchText(rawQuery)
+  const compactQuery = compactSearchText(rawQuery)
+  const tokens = originalQuery.split(/\s+/).filter(t => t.length > 1)
+  if (!tokens.length) return { tsqueryStr: null, originalQuery, compactQuery, tokens: [], closeSynonyms: [] }
 
   const groups = []
   let allCloseSynonyms = []
@@ -88,7 +113,7 @@ async function buildSearchQuery(rawQuery) {
     allCloseSynonyms = [...allCloseSynonyms, ...close]
 
     const allTerms = sanitizeTerms(all)
-    const lowerToken = token.toLowerCase()
+    const lowerToken = normalizeSearchText(token)
     const parts = allTerms.slice(0, 50).map(t => {
       const safe = t.replace(/'/g, "''")
       return t === lowerToken ? `'${safe}':*` : `'${safe}'`
@@ -103,7 +128,8 @@ async function buildSearchQuery(rawQuery) {
 
   return {
     tsqueryStr,
-    originalQuery: rawQuery.trim(),
+    originalQuery,
+    compactQuery,
     tokens,
     closeSynonyms: closeSanitized,
   }
@@ -129,12 +155,20 @@ function buildTableQuery(table, selectFields, nameField, extraJoins, extraWhere,
 const RANK_THRESHOLD = 0.5
 
 function ftsWhere(alias, nameField, tsqIdx, rawIdx) {
+  const normalizedName = normalizedSqlText(nameField)
+  const compactName = compactSqlText(nameField)
   return {
     where: `(
       ts_rank_cd(${alias}.search_vector, to_tsquery('${SEARCH_CONFIG}', $${tsqIdx})) > ${RANK_THRESHOLD}
-      OR ${nameField} ILIKE '%' || $${rawIdx} || '%'
+      OR ${normalizedName} LIKE '%' || $${rawIdx} || '%'
+      OR ${compactName} LIKE '%' || regexp_replace($${rawIdx}, '[^a-zа-я0-9]+', '', 'g') || '%'
     )`,
-    order: `ts_rank_cd(${alias}.search_vector, to_tsquery('${SEARCH_CONFIG}', $${tsqIdx})) DESC`,
+    order: `CASE
+               WHEN ${normalizedName} LIKE '%' || $${rawIdx} || '%' THEN 2000
+               WHEN ${compactName} LIKE '%' || regexp_replace($${rawIdx}, '[^a-zа-я0-9]+', '', 'g') || '%' THEN 1600
+               ELSE 0
+             END
+             + ts_rank_cd(${alias}.search_vector, to_tsquery('${SEARCH_CONFIG}', $${tsqIdx})) DESC`,
   }
 }
 
@@ -164,6 +198,7 @@ async function searchAll(rawQuery, user, { limit = 30, categories = null } = {})
                ts_rank_cd(u.search_vector, to_tsquery('${SEARCH_CONFIG}', $1)) AS rank
         FROM units u
         WHERE ${where} AND u.status != 'written_off'
+          AND COALESCE(u.is_admin_stock, false) = false
         ORDER BY ${order}
         LIMIT $3
       `, [tsqueryStr, originalQuery, entityLimit])
@@ -272,6 +307,141 @@ async function searchAll(rawQuery, user, { limit = 30, categories = null } = {})
     })())
   }
 
+  // ── 8a. PROJECTS — поиск по названию проекта ──
+  // Видны warehouse-ролям (всем) и production (только свой).
+  if (shouldSearch('project')) {
+    promises.push((async () => {
+      const params = [`%${originalQuery}%`, entityLimit]
+      let extra = ''
+      if (!isWarehouse && !isProducer && projectId) {
+        params.push(projectId); extra = `AND p.id = $${params.length}`
+      }
+      const { rows } = await db.query(`
+        SELECT p.id, p.name AS title,
+               COALESCE(
+                 (SELECT count(*) FROM users WHERE project_id = p.id), 0
+               )::text || ' человек' AS subtitle,
+               '' AS snippet,
+               1.0 AS rank
+        FROM projects p
+        WHERE p.name ILIKE $1 ${extra}
+        ORDER BY p.name
+        LIMIT $2
+      `, params)
+      return rows.map(r => ({
+        ...r, entityType: 'project',
+        url: isWarehouse ? `/issued?project=${r.id}` : '/production',
+      }))
+    })())
+  }
+
+  // ── 8b. USERS — поиск по ФИО ──
+  // Warehouse-роли видят всех. Производство — только своих.
+  if (shouldSearch('user')) {
+    promises.push((async () => {
+      const params = [`%${originalQuery}%`, entityLimit]
+      let extra = ''
+      if (!isWarehouse && projectId) {
+        params.push(projectId); extra = `AND u.project_id = $${params.length}`
+      }
+      const { rows } = await db.query(`
+        SELECT u.id, u.name AS title,
+               COALESCE(p.name, '') AS subtitle,
+               u.role || COALESCE(' · ' || u.phone, '') AS snippet,
+               1.0 AS rank
+        FROM users u LEFT JOIN projects p ON p.id = u.project_id
+        WHERE u.name ILIKE $1 ${extra}
+        ORDER BY u.name
+        LIMIT $2
+      `, params)
+      return rows.map(r => ({ ...r, entityType: 'user', url: '/team' }))
+    })())
+  }
+
+  // ── 8c. ISSUANCES — поиск по получателю + проекту ──
+  // Только warehouse_director/deputy видят все.
+  if (shouldSearch('issuance') && (role === 'warehouse_director' || role === 'warehouse_deputy')) {
+    promises.push((async () => {
+      const { rows } = await db.query(`
+        SELECT iss.id,
+               rcv.name || ' · ' || COALESCE(p.name, 'без проекта') AS title,
+               'Выдача от ' || to_char(iss.issued_at, 'DD.MM.YYYY')
+                 || ' · до ' || to_char(iss.deadline, 'DD.MM.YYYY')
+                 || CASE WHEN iss.return_requested_at IS NOT NULL THEN ' · возврат запрошен' ELSE '' END
+                 AS subtitle,
+               '' AS snippet,
+               1.0 AS rank
+        FROM issuances iss
+        JOIN users rcv ON rcv.id = iss.received_by
+        LEFT JOIN projects p ON p.id = rcv.project_id
+        WHERE rcv.name ILIKE $1 OR p.name ILIKE $1
+        ORDER BY iss.issued_at DESC
+        LIMIT $2
+      `, [`%${originalQuery}%`, entityLimit])
+      return rows.map(r => ({ ...r, entityType: 'issuance', url: '/issued' }))
+    })())
+  }
+
+  // ── 8d. REQUESTS — поиск заявок: warehouse видят все, остальные — свои. ──
+  if (shouldSearch('request') && (isWarehouse || isProducer || projectId)) {
+    promises.push((async () => {
+      const params = [`%${originalQuery}%`, entityLimit]
+      let extra = ''
+      if (!isWarehouse && !isProducer && projectId) {
+        params.push(projectId); extra = `AND req_user.project_id = $${params.length}`
+      }
+      const { rows } = await db.query(`
+        SELECT req.id,
+               req_user.name || ' · ' || COALESCE(p.name, '') AS title,
+               'Заявка · ' || req.status::text
+                 || COALESCE(' · до ' || to_char(req.deadline, 'DD.MM.YYYY'), '') AS subtitle,
+               array_length(req.unit_ids, 1)::text || ' единиц' AS snippet,
+               CASE
+                 WHEN req.status='new' THEN 1.5
+                 WHEN req.status='collecting' THEN 1.3
+                 WHEN req.status='ready' THEN 1.1
+                 ELSE 0.5
+               END AS rank
+        FROM requests req
+        JOIN users req_user ON req_user.id = req.requester_id
+        LEFT JOIN projects p ON p.id = req_user.project_id
+        WHERE (req_user.name ILIKE $1 OR p.name ILIKE $1) ${extra}
+        ORDER BY req.created_at DESC
+        LIMIT $2
+      `, params)
+      return rows.map(r => ({ ...r, entityType: 'request', url: '/requests' }))
+    })())
+  }
+
+  // ── 9. CASTING — карточки актёров.
+  // Доступ: только производственные роли с правом на /casting (producer,
+  // project_director, ams_assistant). Склад НЕ должен видеть ФИО/телефоны
+  // актёров через глобальный поиск.
+  const CASTING_ALLOWED_ROLES = ['producer', 'project_director', 'ams_assistant']
+  if (shouldSearch('casting') && CASTING_ALLOWED_ROLES.includes(role)) {
+    promises.push((async () => {
+      const { where, order } = ftsWhere('c', 'c.name', 1, 2)
+      const KIND_LABEL = `CASE c.kind
+          WHEN 'adult' THEN 'Взрослый'
+          WHEN 'child' THEN 'Ребёнок'
+          WHEN 'animal' THEN 'Животное'
+          ELSE c.kind END`
+      const { rows } = await db.query(`
+        SELECT c.id, c.name AS title,
+               ${KIND_LABEL} || COALESCE(' · ' || c.role_name, '') AS subtitle,
+               left(coalesce(c.description, c.notes, c.search_tags, ''), 200) AS snippet,
+               c.kind, c.status,
+               (SELECT url FROM casting_photos cp WHERE cp.card_id = c.id ORDER BY cp.created_at LIMIT 1) AS photo_url,
+               ts_rank_cd(c.search_vector, to_tsquery('${SEARCH_CONFIG}', $1)) AS rank
+        FROM casting_cards c WHERE ${where} ORDER BY ${order} LIMIT $3
+      `, [tsqueryStr, originalQuery, entityLimit])
+      return rows.map(r => ({
+        ...r, entityType: 'casting',
+        url: `/production/casting?card=${r.id}`,
+      }))
+    })())
+  }
+
   // ── 8. RENT DEALS ──
   if (shouldSearch('rent') && (role === 'warehouse_director' || role === 'warehouse_deputy' || isProducer)) {
     promises.push((async () => {
@@ -318,4 +488,14 @@ async function searchAll(rawQuery, user, { limit = 30, categories = null } = {})
   }
 }
 
-module.exports = { expandWithSynonyms, buildSearchQuery, searchAll, checkTrgm, SEARCH_CONFIG }
+module.exports = {
+  expandWithSynonyms,
+  buildSearchQuery,
+  searchAll,
+  checkTrgm,
+  normalizeSearchText,
+  compactSearchText,
+  normalizedSqlText,
+  compactSqlText,
+  SEARCH_CONFIG,
+}
