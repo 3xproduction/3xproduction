@@ -17,7 +17,7 @@ prev 622c1f5 2026-04-23 16:24:15 +0300 feat: PWA + pino logger + prod-mode harde
 
 ## Active Deployment Snapshot
 
-Последний пользовательски подтверждённый cloud-релиз: 2026-05-12.
+Последний пользовательски подтверждённый cloud-релиз: 2026-05-13.
 
 ```text
 staging xproduction-test: test-v2.86, revision bbackcngjtmkpiq3p91d, digest sha256:a261282364c74e389901d418a3594f7ef5de556496a292201b7c79b078d1a769
