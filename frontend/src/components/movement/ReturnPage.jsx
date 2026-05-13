@@ -117,14 +117,6 @@ export default function ReturnPage() {
 
   const canWriteoff = ['warehouse_director', 'warehouse_deputy', 'warehouse_staff'].includes(user?.role)
 
-  function setPhoto(unitId, idx, file) {
-    setPhotos(p => {
-      const arr = [...(p[unitId] || [null, null, null])]
-      arr[idx] = file
-      return { ...p, [unitId]: arr }
-    })
-  }
-
   const selectedUnits = units.filter(u => selected.has(u.id))
 
   async function handleReturn(signatureData) {

@@ -5,7 +5,6 @@ import ProductionLayout from './ProductionLayout'
 import Badge from '../shared/Badge'
 import UnitCardModal from '../shared/UnitCardModal'
 import { documents as docsApi } from '../../services/api'
-import { useAuth } from '../../hooks/useAuth'
 
 const TYPE_LABELS = { kpp: 'КПП', scenario: 'Сценарий', callsheet: 'Вызывной' }
 
@@ -49,7 +48,6 @@ export default function DocumentViewer() {
   const [searchParams] = useSearchParams()
   const sceneFromUrl = searchParams.get('scene')
   const navigate = useNavigate()
-  const { user } = useAuth()
   const [doc, setDoc] = useState(null)
   const [loading, setLoading] = useState(true)
   const [search, setSearch] = useState('')
@@ -107,7 +105,7 @@ export default function DocumentViewer() {
     return d.scene_changes || d
   }, [doc?.delta])
 
-  const { days, characters, platforms, modes, intNats } = useMemo(() => {
+  const { characters, platforms, modes, intNats } = useMemo(() => {
     if (!content?.scenes) return { days: [], characters: [], platforms: [], modes: [], intNats: [] }
     const d = new Set(), c = new Set(), p = new Set(), m = new Set(), n = new Set()
     for (const s of content.scenes) {

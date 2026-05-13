@@ -17,12 +17,9 @@ export default function WarehouseAnalyticsPage() {
 
   const totals = data?.totals || {}
   const assetVal = data?.asset_valuation || {}
-  const byCategory = data?.by_category || []
-  const topRequested = data?.top_requested || []
   const dynamics = data?.issuance_dynamics || []
   const idleUnits = data?.idle_units || []
 
-  const maxCat = Math.max(...byCategory.map(c => Number(c.total)), 1)
   const maxDyn = Math.max(...dynamics.map(d => Number(d.issuances)), 1)
 
   const MOVEMENT = [

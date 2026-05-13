@@ -98,8 +98,6 @@ export default function PublicWarehousePage() {
   const [showSuccess, setShowSuccess] = useState(false)
   const [authError, setAuthError] = useState('')
   const [selectedUnit, setSelectedUnit] = useState(null)
-  const [activePhoto, setActivePhoto] = useState(0)
-  const [lightbox, setLightbox] = useState(null)
   const [debouncedSearch, setDebouncedSearch] = useState('')
   const [allCategories, setAllCategories] = useState([])
   const searchTimer = useRef(null)

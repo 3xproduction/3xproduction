@@ -9,7 +9,6 @@ import UnitCardModal from '../shared/UnitCardModal'
 import ConfirmModal from '../shared/ConfirmModal'
 import { useAuth } from '../../hooks/useAuth'
 import { ROLES } from '../../constants/roles'
-import { categoryLabel } from '../../constants/categories'
 
 const ruStemmer = newStemmer('russian')
 
@@ -59,7 +58,6 @@ export default function DocumentsPage() {
   const navigate = useNavigate()
   const { user } = useAuth()
   const role = user?.role || ''
-  const allowedFirst = ROLES[role]?.readDocs?.[0] || 'kpp'
   const [tab, setTab] = useState('my_list')
 
   // Doc state
@@ -124,7 +122,7 @@ export default function DocumentsPage() {
     ? Object.fromEntries(Object.entries(DOC_TYPES).filter(([k]) => allowedDocs.includes(k)))
     : DOC_TYPES
 
-  const [projectsList, setProjectsList] = useState([])
+  const [, setProjectsList] = useState([])
   const [selectedProjectId, setSelectedProjectId] = useState(user?.project_id || null)
   const isProducer = role === 'producer'
   const projectId = selectedProjectId

@@ -395,7 +395,7 @@ function RentReturnModal({ deal, onClose, onDone }) {
   const [conditions, setConditions] = useState({})
   const [damages, setDamages] = useState({})
   const [photos, setPhotos] = useState({})
-  const [renterSignature, setRenterSignature] = useState(null)
+  const [, setRenterSignature] = useState(null)
   const [acceptorStamped, setAcceptorStamped] = useState(false)
   const [returnSuccess, setReturnSuccess] = useState(false)
   const [loading, setLoading] = useState(false)
@@ -412,15 +412,7 @@ function RentReturnModal({ deal, onClose, onDone }) {
     }).finally(() => setUnitsLoading(false))
   }, [deal])
 
-  function setPhoto(unitId, idx, file) {
-    setPhotos(p => {
-      const arr = [...(p[unitId] || [null, null])]
-      arr[idx] = file
-      return { ...p, [unitId]: arr }
-    })
-  }
-
-  async function handleReturn(acceptorSignature) {
+  async function handleReturn() {
     setLoading(true)
     try {
       const allNotes = Object.entries(damages)
@@ -585,7 +577,7 @@ function RentReturnModal({ deal, onClose, onDone }) {
                 <div style={{ color: 'var(--muted)', fontSize: 13 }}>Нажмите для подтверждения</div>
               )}
             </div>
-            <Button fullWidth disabled={!acceptorStamped || loading} onClick={() => handleReturn('stamp')}>
+            <Button fullWidth disabled={!acceptorStamped || loading} onClick={handleReturn}>
               {loading ? 'Оформление...' : 'Оформить возврат'}
             </Button>
             <Button variant="secondary" fullWidth style={{ marginTop: 8 }} onClick={() => setStep(2)}>Назад</Button>
@@ -728,7 +720,7 @@ function ReviewModal({ deal, onClose, onDone }) {
 }
 
 function NewDeal({ onDone }) {
-  const [dealType, setDealType] = useState('out')
+  const [dealType] = useState('out')
   const [cpType, setCpType] = useState('person')
   const [form, setForm] = useState({ name: '', contact: '', email: '' })
   const [availableUnits, setAvailableUnits] = useState([])
@@ -738,12 +730,10 @@ function NewDeal({ onDone }) {
   const [dateEnd, setDateEnd] = useState('')
   const [step, setStep] = useState(1)
   const [loading, setLoading] = useState(false)
-  const [signLink, setSignLink] = useState('')
-  const [copied, setCopied] = useState(false)
-  const [warehouseList, setWarehouseList] = useState([])
-  const [whFilter, setWhFilter] = useState('')
+  const [, setWarehouseList] = useState([])
+  const [whFilter] = useState('')
   const [unitSearch, setUnitSearch] = useState('')
-  const [unitCat, setUnitCat] = useState('all')
+  const [unitCat] = useState('all')
   const [dealPhotos, setDealPhotos] = useState([])
   const [renterSig, setRenterSig] = useState(null)
   const [issuerStamped, setIssuerStamped] = useState(false)
@@ -754,10 +744,6 @@ function NewDeal({ onDone }) {
     unitsApi.list({ status: 'on_stock' }).then(data => setAvailableUnits(data.units || []))
     warehousesApi.list().then(d => setWarehouseList(d.warehouses || []))
   }, [])
-
-  function setDealPhoto(i, file) {
-    setDealPhotos(p => { const a = [...p]; a[i] = file; return a })
-  }
 
   const filteredUnits = availableUnits.filter(u => {
     const matchWh = !whFilter || String(u.warehouse_id) === whFilter
@@ -816,13 +802,6 @@ function NewDeal({ onDone }) {
     } finally {
       setLoading(false)
     }
-  }
-
-  function copyLink() {
-    navigator.clipboard.writeText(signLink).then(() => {
-      setCopied(true)
-      setTimeout(() => setCopied(false), 2000)
-    })
   }
 
   return (

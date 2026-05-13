@@ -8,7 +8,6 @@ export function useNotifications() {
   const { token } = useAuth()
   const [items, setItems]       = useState([])
   const [unreadCount, setUnreadCount] = useState(0)
-  const [loading, setLoading]   = useState(false)
 
   const fetch = useCallback(async () => {
     if (!token) return
@@ -37,5 +36,5 @@ export function useNotifications() {
     setUnreadCount(0)
   }
 
-  return { items, unreadCount, loading, markRead, markAllRead, refresh: fetch }
+  return { items, unreadCount, loading: false, markRead, markAllRead, refresh: fetch }
 }
