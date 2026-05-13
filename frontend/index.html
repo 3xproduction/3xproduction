@@ -5,7 +5,7 @@
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
     <link rel="manifest" href="/manifest.webmanifest" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, viewport-fit=cover" />
     <meta name="theme-color" content="#0A0A0A" />
     <meta name="mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-capable" content="yes" />
@@ -13,6 +13,16 @@
     <meta name="apple-mobile-web-app-title" content="3X ТРИИКС МЕДИА" />
     <meta name="description" content="Склад реквизита для кинопроизводства" />
     <title>3X ТРИИКС МЕДИА</title>
+    <script>
+      const isLocalHost = location.hostname === 'localhost' || location.hostname === '127.0.0.1'
+      const isStagingBuild = '%VITE_APP_ENV%' === 'staging'
+      if (isLocalHost || isStagingBuild) {
+        document.querySelector('link[rel="manifest"]').href = '/manifest.dev.webmanifest'
+        document.querySelector('meta[name="theme-color"]').content = '#FF8C00'
+        document.querySelector('meta[name="apple-mobile-web-app-title"]').content = '3X DEV'
+        document.title = '3X DEV'
+      }
+    </script>
   </head>
   <body>
     <div id="root"></div>
