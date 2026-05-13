@@ -6,9 +6,10 @@ import { useState, useEffect } from 'react'
 import Button from '../shared/Button'
 import Badge from '../shared/Badge'
 import { useToast } from '../shared/Toast'
-import { colleagues as colleaguesApi } from '../../services/api'
+import { colleagues as colleaguesApi, projectUnits as projectUnitsApi } from '../../services/api'
 import { categoryLabel } from '../../constants/categories'
 import { ROLES } from '../../constants/roles'
+import { useNotifications } from '../../hooks/useNotifications'
 
 const STATUS_LABEL = {
   pending:   'Ожидает',
@@ -29,23 +30,55 @@ export default function LoanRequestsSection() {
   const [dir, setDir] = useState('incoming')  // incoming | outgoing
   const [list, setList] = useState([])
   const [loading, setLoading] = useState(true)
+  // Входящие запросы возврата на основной склад от warehouse/producer.
+  const [whReturns, setWhReturns] = useState([])
   const toast = useToast()
+  // Когда юзер заходит сюда — это и есть «прочитал». Гасим непрочитанные
+  // loan-уведомления, чтобы цифорка у вкладки «Запросы» в хабе очистилась.
+  const { items: notifs, markRead } = useNotifications()
 
   function reload() {
     setLoading(true)
-    colleaguesApi.listRequests(dir)
-      .then(d => setList(d.requests || []))
+    Promise.all([
+      colleaguesApi.listRequests(dir),
+      // Только для incoming-направления: проект может видеть, что у них просят вернуть.
+      dir === 'incoming'
+        ? projectUnitsApi.listReturnRequests('incoming', 'pending').catch(() => ({ requests: [] }))
+        : Promise.resolve({ requests: [] }),
+    ])
+      .then(([loans, wh]) => {
+        setList(loans.requests || [])
+        setWhReturns(wh.requests || [])
+      })
       .finally(() => setLoading(false))
   }
   useEffect(reload, [dir])
+
+  useEffect(() => {
+    notifs
+      .filter(n => !n.read && ['project_loan_request', 'warehouse_return_request'].includes(n.entity_type))
+      .forEach(n => markRead(n.id).catch(() => {}))
+    // markRead — стабильная функция, в deps не кладём (иначе цикл при не-memoized identity)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [notifs])
 
   async function act(fn, successMsg) {
     try {
       await fn()
       toast?.(successMsg, 'success')
       reload()
+      window.dispatchEvent(new Event('project-warehouse-requests-changed'))
     } catch (e) {
-      toast?.(e.message || 'Ошибка', 'error')
+      // 409 — заявка успела измениться (другой ответственный принял/отклонил,
+      // запросчик отменил и т.п.). Показываем человеку что произошло и
+      // принудительно перерисовываем список — иначе кнопка осталась бы со
+      // stale-данными и второй клик дал бы тот же 409.
+      if (e?.status === 409 || e?.status === 404) {
+        toast?.(e.message || 'Заявка уже обработана', 'error')
+        reload()
+      } else {
+        toast?.(e?.message || 'Ошибка', 'error')
+      }
     }
   }
 
@@ -70,19 +103,58 @@ export default function LoanRequestsSection() {
         ))}
       </div>
 
+      {/* Входящие запросы возврата на основной склад (warehouse/producer → проект) */}
+      {dir === 'incoming' && whReturns.length > 0 && (
+        <div style={{ marginBottom: 18 }}>
+          <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 8, color: 'var(--text)' }}>
+            ⏳ Просят вернуть на основной склад · {whReturns.length}
+          </div>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+            {whReturns.map(r => {
+              const dl = r.deadline ? new Date(r.deadline).toLocaleDateString() : '—'
+              const overdue = r.deadline && new Date(r.deadline) < new Date()
+              return (
+                <div key={r.id} style={{
+                  background: 'var(--white)', border: '1px solid var(--border)', borderRadius: 10,
+                  padding: 12, display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap',
+                }}>
+                  {r.unit_photo ? (
+                    <img src={r.unit_photo} alt="" style={{ width: 44, height: 44, borderRadius: 8, objectFit: 'cover', flexShrink: 0 }} />
+                  ) : (
+                    <div style={{ width: 44, height: 44, borderRadius: 8, background: 'var(--bg)', flexShrink: 0,
+                      display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 20 }}>📦</div>
+                  )}
+                  <div style={{ minWidth: 0, flex: 1 }}>
+                    <div style={{ fontSize: 13, fontWeight: 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{r.unit_name}</div>
+                    <div style={{ fontSize: 11, color: 'var(--muted)' }}>
+                      {categoryLabel(r.unit_category)} · просит {r.requested_by_name || '—'}
+                      {' · срок: '}<strong style={{ color: overdue ? 'var(--red)' : 'var(--text)' }}>{dl}</strong>
+                    </div>
+                  </div>
+                  <Badge color="amber">Нужно вернуть</Badge>
+                  <Button onClick={() => act(() => projectUnitsApi.confirmReturn(r.id), 'Вернули')}>
+                    Вернули
+                  </Button>
+                </div>
+              )
+            })}
+          </div>
+        </div>
+      )}
+
       {loading ? (
         <div style={{ padding: 40, textAlign: 'center', color: 'var(--muted)' }}>Загрузка...</div>
-      ) : list.length === 0 ? (
+      ) : list.length === 0 && (dir !== 'incoming' || whReturns.length === 0) ? (
         <div style={{ padding: 40, textAlign: 'center', color: 'var(--muted)' }}>
           {dir === 'incoming' ? 'Нет запросов от других проектов.' : 'Вы не отправляли запросы.'}
         </div>
-      ) : (
+      ) : list.length > 0 ? (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
           {list.map(r => (
             <LoanCard key={r.id} req={r} direction={dir} act={act} />
           ))}
         </div>
-      )}
+      ) : null}
     </div>
   )
 }
@@ -138,8 +210,8 @@ function LoanCard({ req, direction, act }) {
           <div style={{ display: 'flex', gap: 8, marginTop: 10, flexWrap: 'wrap' }}>
             {isIncoming && req.status === 'pending' && (
               <>
-                <Button onClick={() => act(() => colleaguesApi.acceptRequest(req.id), 'Получено')}>
-                  Принять и выдать
+                <Button onClick={() => act(() => colleaguesApi.acceptRequest(req.id), 'Выдано')}>
+                  Выдать
                 </Button>
                 <Button variant="secondary" onClick={() => act(() => colleaguesApi.rejectRequest(req.id), 'Отклонено')}>
                   Отклонить
@@ -153,7 +225,7 @@ function LoanCard({ req, direction, act }) {
             )}
             {isIncoming && req.status === 'accepted' && (
               <Button variant="secondary" onClick={() => act(() => colleaguesApi.returnRequest(req.id), 'Возвращено')}>
-                Принять возврат
+                Вернули
               </Button>
             )}
 
@@ -165,7 +237,7 @@ function LoanCard({ req, direction, act }) {
             {!isIncoming && req.status === 'accepted' && (
               <>
                 <Button onClick={() => act(() => colleaguesApi.returnRequest(req.id), 'Возвращено')}>
-                  Вернуть владельцу
+                  Вернули
                 </Button>
                 {!extensionPending && (
                   <ExtendButton req={req} act={act} />

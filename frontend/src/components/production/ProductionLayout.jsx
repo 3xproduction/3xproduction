@@ -31,10 +31,10 @@ function canSeeProjectWarehouse(role) {
 // ── Горизонтальные табы раздела (под topbar) ──
 // Экспортируются на случай, если понадобятся в других местах.
 export const PRODUCER_WAREHOUSE_TABS = [
-  { to: '/production/warehouse',         label: 'Склад',         match: /^\/production\/warehouse/ },
+  { to: '/production/warehouse',         label: 'Каталог',       match: /^\/production\/warehouse/ },
   { to: '/production/project-warehouse', label: 'Склад проекта', match: /^\/production\/project-warehouse/ },
-  { to: '/production/requests',          label: 'Заявки',        match: /^\/production\/requests/ },
-  { to: '/production/rent',              label: 'Аренда',        match: /^\/production\/rent/ },
+  { to: '/production/cells',             label: 'Склады',        match: /^\/production\/cells/ },
+  { to: '/production/requests',          label: 'Движение',      match: /^\/production\/requests/ },
   { to: '/production/decorations',       label: 'Декорации',     match: /^\/production\/decorations/ },
 ]
 export const PRODUCER_ANALYTICS_TABS = [
@@ -58,6 +58,7 @@ export const PRODUCER_PROJECTS_TABS = [
 export const STAFF_WAREHOUSE_TABS = [
   { to: '/production/warehouse',         label: 'Склад',         match: /^\/production\/warehouse/ },
   { to: '/production/project-warehouse', label: 'Склад проекта', match: /^\/production\/project-warehouse/ },
+  { to: '/production/admin-stock',       label: 'Админка',       match: /^\/production\/admin-stock/ },
   { to: '/production/requests',          label: 'Заявки',        match: /^\/production\/requests/ },
   { to: '/production/decorations',       label: 'Декорации',     match: /^\/production\/decorations/ },
   { to: '/debts',                        label: 'Долги',         match: /^\/debts/ },
@@ -76,7 +77,7 @@ function getRailNav(role) {
     // документы всё равно проектный контент. Отдельного rail-пункта нет.
     return [
       { key: 'warehouse', to: '/production/warehouse', icon: Package, label: 'Склад',
-        match: /^\/production\/(warehouse|project-warehouse|requests|rent|decorations)/ },
+        match: /^\/production\/(warehouse|project-warehouse|cells|requests|rent|decorations)/ },
       { key: 'analytics', to: '/analytics/producer', icon: BarChart2, label: 'Аналитика',
         match: /^\/(analytics\/producer|production\/acts|assets|debts|writeoffs)/ },
       { key: 'base', to: '/production/locations', icon: MapPin, label: 'Продакшн-база',
@@ -96,7 +97,7 @@ function getRailNav(role) {
   if (isProjectHead || canSeeProjectWarehouse(role)) {
     items.push({
       key: 'warehouse', to: '/production/warehouse', icon: Package, label: 'Склад',
-      match: /^\/production\/(warehouse|project-warehouse|requests|decorations)|^\/(debts|writeoffs)/,
+      match: /^\/production\/(warehouse|project-warehouse|admin-stock|requests|decorations)|^\/(debts|writeoffs)/,
     })
   }
   if (isProjectHead || role === 'ams_assistant' || role === 'location_manager') {
@@ -130,7 +131,17 @@ function getInitials(name = '') {
 
 const css = `
 /* ── Root ── */
-.pl-root { display: flex; min-height: 100vh; background: var(--paper); }
+/* DEV/STAGING-баннер (App.jsx) измеряет реальную высоту и кладёт её в
+   --devenv-banner-h. --top-offset = max(safe-area, banner-h): когда баннер
+   есть, он сам включает safe-area в padding-top, и topbar отступает на полную
+   высоту баннера. Без баннера — обычный safe-area. */
+.pl-root {
+  display: flex; min-height: 100vh; background: var(--paper);
+  --top-offset: max(env(safe-area-inset-top, 0px), var(--devenv-banner-h, 0px));
+  --topbar-h: calc(56px + var(--top-offset));
+  --tabs-h: 0px;
+  --page-sticky-top: calc(var(--topbar-h) + var(--tabs-h));
+}
 
 /* ── Rail (desktop, 64px) ── */
 .pl-rail {
@@ -241,11 +252,12 @@ const css = `
 .pl-topbar {
   position: fixed;
   top: var(--impersonate-offset, 0px); left: 64px; right: 0;
-  height: 56px;
+  height: var(--topbar-h);
+  padding-top: var(--top-offset);
   background: var(--ink-950);
   border-bottom: 1px solid var(--sidebar-border);
   display: flex; align-items: center;
-  padding: 0 20px;
+  padding-left: 20px; padding-right: 20px;
   gap: 14px;
   z-index: 90;
 }
@@ -357,7 +369,7 @@ const css = `
 /* ── Main content ── */
 .pl-main {
   margin-left: 64px;
-  padding-top: 56px;
+  padding-top: var(--topbar-h);
   flex: 1;
   min-height: 100vh;
 }
@@ -379,13 +391,19 @@ const css = `
   display: none;
   position: fixed;
   top: var(--impersonate-offset, 0px); left: 0; right: 0;
-  height: 52px;
+  /* +2px к высоте + sticky-элементы под mtop поднимаются на -1px (3px
+     перекрытия). Граница между dark mtop и белыми табами под ним и так
+     чёткая — рамка border-bottom: rgba(255,255,255,0.07) выглядела как
+     полупрозрачная серая полоска и убрана. */
+  height: calc(var(--topbar-h) + 2px);
+  padding-top: var(--top-offset);
   background: var(--ink-950);
-  border-bottom: 1px solid var(--sidebar-border);
   align-items: center;
-  padding: 0 12px;
+  padding-left: 12px; padding-right: 12px;
   gap: 8px;
   z-index: 200;
+  transform: translate3d(0, 0, 0);
+  will-change: transform;
 }
 .pl-mtop-logo { display: flex; align-items: center; gap: 8px; cursor: pointer; flex-shrink: 0; }
 .pl-mtop-proj {
@@ -406,6 +424,9 @@ const css = `
 .pl-mtop-actions { display: flex; gap: 2px; margin-left: auto; flex-shrink: 0; }
 
 /* ── Mobile bottom nav ── */
+/* iOS Safari квиркс: position:fixed внутри flex-контейнера прыгает при
+   rubber-band скролле. Принудительно создаём GPU-layer через translate3d
+   + will-change — отсекает контекст и элемент «клеится» к viewport. */
 .pl-mnav {
   display: none;
   position: fixed; bottom: 0; left: 0; right: 0;
@@ -413,6 +434,10 @@ const css = `
   border-top: 1px solid var(--border);
   z-index: 200;
   padding: 6px 0 max(6px, env(safe-area-inset-bottom));
+  transform: translate3d(0, 0, 0);
+  will-change: transform;
+  -webkit-backface-visibility: hidden;
+  backface-visibility: hidden;
 }
 .pl-mnav-inner { display: flex; justify-content: space-around; align-items: center; }
 .pl-mnav-item {
@@ -650,11 +675,12 @@ const css = `
   .pl-topbar { display: none !important; }
   .pl-main   {
     margin-left: 0 !important;
-    padding-top: 52px;
+    padding-top: var(--topbar-h);
     padding-bottom: calc(76px + env(safe-area-inset-bottom, 0px));
   }
   .pl-mtop   { display: flex !important; }
   .pl-mnav   { display: block !important; }
+  .pl-root   { --topbar-h: calc(52px + var(--top-offset)); }
 }
 `
 
