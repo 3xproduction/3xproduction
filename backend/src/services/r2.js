@@ -60,7 +60,7 @@ async function uploadImageWithThumb(buffer, originalName, folder = 'uploads') {
     const base = path.basename(originalName, path.extname(originalName)) || 'photo'
     thumbUrl = await uploadFile(thumbBuf, `${base}_thumb.jpg`, folder)
   } catch (err) {
-    console.warn(`thumb generation failed for ${originalName}:`, err?.message || err)
+    logger.warn({ err, file: originalName }, 'thumb generation failed')
   }
   return { url, thumbUrl }
 }
@@ -78,7 +78,7 @@ async function makeThumbFromBuffer(buffer, originalName, folder = 'uploads') {
     const base = path.basename(originalName, path.extname(originalName)) || 'photo'
     return await uploadFile(thumbBuf, `${base}_thumb.jpg`, folder)
   } catch (err) {
-    console.warn(`thumb generation failed for ${originalName}:`, err?.message || err)
+    logger.warn({ err, file: originalName }, 'thumb generation failed')
     return null
   }
 }
