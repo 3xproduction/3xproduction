@@ -1,10 +1,7 @@
-const Anthropic = require('@anthropic-ai/sdk')
 const { ALL_CATEGORIES } = require('../constants/roleConfig')
+const { createAnthropicClient } = require('./anthropicClient')
 
-const client = new Anthropic({
-  apiKey: process.env.ANTHROPIC_API_KEY,
-  baseURL: 'https://anthropic-proxy.pavelbelov590.workers.dev',
-})
+const client = createAnthropicClient()
 const MODEL = 'claude-haiku-4-5'
 
 const SYSTEM_PROMPT = `Ты — система анализа кинопроизводственных документов.

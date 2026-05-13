@@ -49,6 +49,12 @@ function alreadyHandled(status) {
   }
 }
 
+function canRespondToLoanRequest(user, request) {
+  if (String(request.from_project_id) !== String(user.project_id)) return false
+  if (request.responder_id && String(request.responder_id) === String(user.id)) return true
+  return responderRolesForCategory(request.unit_category || request.category).includes(user.role)
+}
+
 // GET /colleagues/projects — все существующие проекты, кроме своего.
 // available_count = own + from_warehouse + from_project. Считаем тремя
 // независимыми запросами с GROUP BY, чтобы избежать PG-плановых ловушек
@@ -313,6 +319,17 @@ router.post('/requests', verifyJWT, async (req, res) => {
     )
     if (dup.length) return res.status(400).json({ error: 'Запрос уже отправлен, ожидает ответа' })
 
+    if (responder_id) {
+      const roles = responderRolesForCategory(unit.category)
+      const { rows: responders } = await db.query(
+        `SELECT id FROM users WHERE id = $1 AND project_id = $2 AND role = ANY($3)`,
+        [responder_id, holderProjectId, roles]
+      )
+      if (!responders.length) {
+        return res.status(400).json({ error: 'Недопустимый ответственный для этой категории' })
+      }
+    }
+
     const { rows } = await db.query(
       `INSERT INTO project_loan_requests
          (unit_id, from_project_id, to_project_id, requested_by, responder_id, deadline, comment)
@@ -428,13 +445,16 @@ router.get('/requests', verifyJWT, async (req, res) => {
 router.post('/requests/:id/accept', verifyJWT, async (req, res) => {
   try {
     const { rows } = await db.query(
-      `SELECT * FROM project_loan_requests WHERE id = $1`,
+      `SELECT r.*, u.category AS unit_category
+       FROM project_loan_requests r
+       JOIN units u ON u.id = r.unit_id
+       WHERE r.id = $1`,
       [req.params.id]
     )
     if (!rows.length) return res.status(404).json({ error: 'Заявка не найдена' })
     const r = rows[0]
     if (r.status !== 'pending') return res.status(409).json(alreadyHandled(r.status))
-    if (String(r.from_project_id) !== String(req.user.project_id)) {
+    if (!canRespondToLoanRequest(req.user, r)) {
       return res.status(403).json({ error: 'Forbidden' })
     }
 
@@ -502,13 +522,16 @@ router.post('/requests/:id/accept', verifyJWT, async (req, res) => {
 router.post('/requests/:id/reject', verifyJWT, async (req, res) => {
   try {
     const { rows } = await db.query(
-      `SELECT * FROM project_loan_requests WHERE id = $1`,
+      `SELECT r.*, u.category AS unit_category
+       FROM project_loan_requests r
+       JOIN units u ON u.id = r.unit_id
+       WHERE r.id = $1`,
       [req.params.id]
     )
     if (!rows.length) return res.status(404).json({ error: 'Заявка не найдена' })
     const r = rows[0]
     if (r.status !== 'pending') return res.status(409).json(alreadyHandled(r.status))
-    if (String(r.from_project_id) !== String(req.user.project_id)) {
+    if (!canRespondToLoanRequest(req.user, r)) {
       return res.status(403).json({ error: 'Forbidden' })
     }
     await db.query(
@@ -643,7 +666,10 @@ router.post('/requests/:id/extend', verifyJWT, async (req, res) => {
 router.post('/requests/:id/approve-extension', verifyJWT, async (req, res) => {
   try {
     const { rows } = await db.query(
-      `SELECT * FROM project_loan_requests WHERE id = $1`,
+      `SELECT r.*, u.category AS unit_category
+       FROM project_loan_requests r
+       JOIN units u ON u.id = r.unit_id
+       WHERE r.id = $1`,
       [req.params.id]
     )
     if (!rows.length) return res.status(404).json({ error: 'Заявка не найдена' })
@@ -652,7 +678,7 @@ router.post('/requests/:id/approve-extension', verifyJWT, async (req, res) => {
     if (!r.extension_requested) {
       return res.status(409).json({ error: 'Запрос продления уже обработан', currentStatus: r.status })
     }
-    if (String(r.from_project_id) !== String(req.user.project_id)) {
+    if (!canRespondToLoanRequest(req.user, r)) {
       return res.status(403).json({ error: 'Forbidden' })
     }
     await db.query(

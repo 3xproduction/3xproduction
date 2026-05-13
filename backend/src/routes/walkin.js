@@ -231,6 +231,10 @@ router.post('/issue', verifyJWT, checkRole(...WALKIN_ISSUER_ROLES), upload.any()
         await client.query('ROLLBACK')
         return res.status(400).json({ error: 'Получатель привязан к другому проекту' })
       }
+      if (!WALKIN_RECEIVER_ROLES.has(ex.role)) {
+        await client.query('ROLLBACK')
+        return res.status(400).json({ error: 'Недопустимая роль получателя' })
+      }
       receivedById = ex.id
       receiverName = ex.name
       receiverRole = ex.role

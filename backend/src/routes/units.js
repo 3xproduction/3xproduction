@@ -1,6 +1,5 @@
 const router = require('express').Router()
 const multer = require('multer')
-const Anthropic = require('@anthropic-ai/sdk')
 const sharp = require('sharp')
 const db     = require('../db')
 const { verifyJWT, checkRole } = require('../middleware/auth')
@@ -9,6 +8,8 @@ const { CATEGORIES_BY_STORAGE } = require('../constants/storageRules')
 const { notifyNewUnit, notifyNoCellIfThresholdCrossed } = require('../services/notifications')
 const { unitMissingFields, canSeeMissingUnitData } = require('../utils/unitMissingFields')
 const { buildSearchQuery, normalizeSearchText, compactSearchText, normalizedSqlText, compactSqlText } = require('../services/searchService')
+const { createAnthropicClient } = require('../services/anthropicClient')
+const logger = require('../logger')
 
 // Validate that a unit move to target cell is allowed.
 // Категорийные ограничения убраны — пользователь сам решает что куда класть.
@@ -32,10 +33,7 @@ const upload = multer({
   },
 })
 
-const anthropic = new Anthropic({
-  apiKey: process.env.ANTHROPIC_API_KEY,
-  baseURL: 'https://anthropic-proxy.pavelbelov590.workers.dev',
-})
+const anthropic = createAnthropicClient()
 
 const DIRECTOR_ROLES = ['warehouse_director', 'warehouse_deputy']
 const PENDING_REQUEST_DETAIL_ROLES = new Set(['warehouse_director', 'warehouse_deputy', 'warehouse_staff'])
@@ -254,21 +252,21 @@ router.get('/', verifyJWT, async (req, res) => {
   }
 })
 
-// GET /units/ai-test — test Anthropic API connectivity (public for debugging)
-router.get('/ai-test', async (req, res) => {
+// GET /units/ai-test — test Anthropic API connectivity for warehouse admins.
+router.get('/ai-test', verifyJWT, checkRole('warehouse_director', 'warehouse_deputy'), async (req, res) => {
   const start = Date.now()
   try {
-    console.log('ai-test: starting, API key present:', !!process.env.ANTHROPIC_API_KEY)
+    logger.debug({ hasApiKey: !!process.env.ANTHROPIC_API_KEY }, 'ai-test starting')
     const response = await anthropic.messages.create({
       model: 'claude-haiku-4-5',
       max_tokens: 20,
       messages: [{ role: 'user', content: 'say ok' }],
     })
-    console.log('ai-test: success in', Date.now() - start, 'ms')
+    logger.debug({ ms: Date.now() - start }, 'ai-test success')
     res.json({ ok: true, text: response.content[0]?.text, ms: Date.now() - start })
   } catch (err) {
-    console.error('ai-test: error in', Date.now() - start, 'ms:', err.message)
-    res.status(500).json({ error: err.message, code: err.status, ms: Date.now() - start })
+    logger.warn({ err, ms: Date.now() - start }, 'ai-test failed')
+    res.status(500).json({ error: 'AI test failed', code: err.status, ms: Date.now() - start })
   }
 })
 
@@ -493,6 +491,9 @@ router.get('/:id', verifyJWT, async (req, res) => {
     if (!rows.length) return res.status(404).json({ error: 'Unit not found' })
 
     const unit = rows[0]
+    if (unit.is_admin_stock && !canAccessAdminStock(req.user)) {
+      return res.status(404).json({ error: 'Unit not found' })
+    }
     // GET /units/:id отдаём всем — из списков единицы и так отфильтрованы;
     // прямой доступ нужен для открытия карточки из долгов/списаний, которые
     // привязаны к проекту пользователя.
@@ -954,6 +955,10 @@ router.post('/bulk-delete', verifyJWT, checkRole('warehouse_director', 'warehous
     }
 
     // Clean up related records
+    for (const id of ids) {
+      await client.query(`UPDATE requests   SET unit_ids = array_remove(unit_ids, $1::uuid) WHERE $1::uuid = ANY(unit_ids)`, [id])
+      await client.query(`UPDATE rent_deals SET unit_ids = array_remove(unit_ids, $1::uuid) WHERE $1::uuid = ANY(unit_ids)`, [id])
+    }
     await client.query(`DELETE FROM debts WHERE unit_id = ANY($1)`, [ids])
     await client.query(`DELETE FROM approvals WHERE unit_id = ANY($1)`, [ids])
     await client.query(`DELETE FROM unit_history WHERE unit_id = ANY($1)`, [ids])

@@ -37,6 +37,13 @@ PROD_SECRETS_VER="e6ql8rotr793rvoqaf8t"
 PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$PROJECT_ROOT"
 
+if [[ -n "$(git status --porcelain)" ]]; then
+  echo "ERROR: refusing prod deploy from a dirty worktree." >&2
+  echo "Commit, stash, or explicitly build from a reviewed tag before deploying prod." >&2
+  git status --short >&2
+  exit 1
+fi
+
 echo ""
 echo "==================================================="
 echo " ВНИМАНИЕ: ДЕПЛОЙ В PROD"

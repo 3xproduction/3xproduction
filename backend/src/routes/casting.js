@@ -1,10 +1,10 @@
 const router = require('express').Router()
 const multer = require('multer')
 const sharp = require('sharp')
-const Anthropic = require('@anthropic-ai/sdk')
 const db = require('../db')
 const { verifyJWT, checkRole } = require('../middleware/auth')
 const { uploadFile } = require('../services/r2')
+const { createAnthropicClient } = require('../services/anthropicClient')
 
 const ALLOWED_ROLES = ['producer', 'project_director', 'ams_assistant']
 
@@ -19,10 +19,7 @@ const upload = multer({
 
 const ALLOWED_KINDS = ['adult', 'child', 'animal']
 
-const anthropic = new Anthropic({
-  apiKey: process.env.ANTHROPIC_API_KEY,
-  baseURL: 'https://anthropic-proxy.pavelbelov590.workers.dev',
-})
+const anthropic = createAnthropicClient()
 
 // GET /casting
 router.get('/', verifyJWT, checkRole(...ALLOWED_ROLES), async (req, res) => {

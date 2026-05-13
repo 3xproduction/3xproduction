@@ -215,6 +215,7 @@ const authLimiter = rateLimit({ windowMs: 15 * 60_000, max: 10, standardHeaders:
 app.use('/auth/login', authLimiter)
 app.use('/auth/register', authLimiter)
 app.use('/auth/recover', authLimiter)
+app.use('/auth/claim', authLimiter)
 
 // Serve frontend SPA for browser navigation (before API routes)
 const frontendDist = path.join(__dirname, '../../frontend/dist')
