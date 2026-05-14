@@ -4,6 +4,7 @@ const db     = require('../db')
 const { verifyJWT, checkRole } = require('../middleware/auth')
 const { uploadFile } = require('../services/r2')
 const { createNotification, notifyWarehouse } = require('../services/notifications')
+const { nextUnitSerial } = require('../services/unitSerial')
 
 const ALLOWED_IMAGE_TYPES = ['image/jpeg', 'image/png', 'image/webp']
 const upload = multer({
@@ -151,19 +152,16 @@ router.post('/:id/items', verifyJWT, upload.any(), async (req, res) => {
     }
 
     // Создание новых единиц из распознанных AI-карточек.
-    // Подход тот же что в walkin.js: один SELECT count + in-memory increment для serial.
+    // Serial numbers are allocated through the same atomic per-prefix counter
+    // used by regular warehouse and walk-in creation.
     const createdIds = []
     if (parsedNew.length) {
-      const { rows: cntRows } = await client.query(`SELECT COUNT(*)::int AS cnt FROM units`)
-      let runningCount = cntRows[0]?.cnt || 0
       for (const u of parsedNew) {
         if (!u || !u.name || !u.category) {
           await client.query('ROLLBACK')
           return res.status(400).json({ error: 'new_units: name/category required' })
         }
-        runningCount += 1
-        const catPrefix = String(u.category || 'XX').slice(0, 3).toUpperCase()
-        const serial = `${catPrefix}-${String(runningCount).padStart(5, '0')}`
+        const serial = await nextUnitSerial(client, u.category)
         const qty = Number.isFinite(Number(u.qty)) && Number(u.qty) > 0 ? Number(u.qty) : 1
 
         const { rows: ins } = await client.query(

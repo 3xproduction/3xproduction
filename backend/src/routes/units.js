@@ -944,6 +944,21 @@ router.post('/bulk-delete', verifyJWT, checkRole('warehouse_director', 'warehous
   try {
     await client.query('BEGIN')
 
+    const { rows: unitRows } = await client.query(
+      `SELECT id, is_admin_stock FROM units WHERE id = ANY($1)`,
+      [ids]
+    )
+    const requestedIds = new Set(ids.map(String))
+    if (unitRows.length !== requestedIds.size) {
+      await client.query('ROLLBACK')
+      return res.status(404).json({ error: 'Some units not found' })
+    }
+    const forbiddenAdminUnit = unitRows.find(unit => unit.is_admin_stock && !canAccessAdminStock(req.user))
+    if (forbiddenAdminUnit) {
+      await client.query('ROLLBACK')
+      return res.status(403).json({ error: 'Forbidden' })
+    }
+
     // Delete photos from R2 for all units
     const { rows: photos } = await client.query(
       `SELECT url FROM unit_photos WHERE unit_id = ANY($1)`, [ids]

@@ -22,6 +22,14 @@ const ALLOWED_STATUSES = ['considering', 'approved', 'rejected']
 
 const anthropic = createAnthropicClient()
 
+function applyCastingProjectScope(req, alias, params) {
+  if (req.user.role === 'producer') return ''
+  const projectId = req.user.project_id || null
+  if (!projectId) return ' AND 1=0'
+  params.push(projectId)
+  return ` AND ${alias}.project_id = $${params.length}`
+}
+
 // GET /casting
 router.get('/', verifyJWT, checkRole(...ALLOWED_ROLES), async (req, res) => {
   const { status, gender, kind, search } = req.query
@@ -31,6 +39,7 @@ router.get('/', verifyJWT, checkRole(...ALLOWED_ROLES), async (req, res) => {
         (SELECT url FROM casting_photos cp WHERE cp.card_id = c.id ORDER BY cp.created_at LIMIT 1) AS photo_url
       FROM casting_cards c WHERE 1=1`
     const params = []
+    q += applyCastingProjectScope(req, 'c', params)
     if (status) { params.push(status); q += ` AND c.status = $${params.length}` }
     if (gender) { params.push(gender); q += ` AND c.gender = $${params.length}` }
     if (kind && ALLOWED_KINDS.includes(kind)) { params.push(kind); q += ` AND c.kind = $${params.length}` }
@@ -71,7 +80,10 @@ router.get('/', verifyJWT, checkRole(...ALLOWED_ROLES), async (req, res) => {
 // GET /casting/:id
 router.get('/:id', verifyJWT, checkRole(...ALLOWED_ROLES), async (req, res) => {
   try {
-    const { rows: [card] } = await db.query(`SELECT * FROM casting_cards WHERE id = $1`, [req.params.id])
+    const params = [req.params.id]
+    let q = `SELECT c.* FROM casting_cards c WHERE c.id = $1`
+    q += applyCastingProjectScope(req, 'c', params)
+    const { rows: [card] } = await db.query(q, params)
     if (!card) return res.status(404).json({ error: 'Not found' })
     const { rows: photos } = await db.query(`SELECT * FROM casting_photos WHERE card_id = $1 ORDER BY created_at`, [req.params.id])
     res.json({ ...card, photos })
@@ -117,11 +129,17 @@ router.post('/', verifyJWT, checkRole(...ALLOWED_ROLES), async (req, res) => {
   if (!req.body?.name) return res.status(400).json({ error: 'Name required' })
   const safeKind = ALLOWED_KINDS.includes(req.body.kind) ? req.body.kind : 'adult'
   const safeStatus = ALLOWED_STATUSES.includes(req.body.status) ? req.body.status : 'considering'
+  const safeProjectId = req.user.role === 'producer'
+    ? (req.body.project_id || req.user.project_id || null)
+    : (req.user.project_id || null)
+  if (req.user.role !== 'producer' && !safeProjectId) {
+    return res.status(400).json({ error: 'Project required' })
+  }
   const { cols, params, placeholders } = pickFieldsForInsert(req.body)
   // фиксированные поля: kind, status, project_id, created_by
   cols.push('kind'); params.push(safeKind); placeholders.push(`$${params.length}`)
   cols.push('status'); params.push(safeStatus); placeholders.push(`$${params.length}`)
-  cols.push('project_id'); params.push(req.body.project_id || null); placeholders.push(`$${params.length}`)
+  cols.push('project_id'); params.push(safeProjectId); placeholders.push(`$${params.length}`)
   cols.push('created_by'); params.push(req.user.id); placeholders.push(`$${params.length}`)
   try {
     const { rows } = await db.query(
@@ -161,8 +179,14 @@ router.put('/:id', verifyJWT, checkRole(...ALLOWED_ROLES), async (req, res) => {
   if (!sets.length) return res.status(400).json({ error: 'No fields' })
   params.push(req.params.id)
   try {
+    let where = `id = $${params.length}`
+    if (req.user.role !== 'producer') {
+      if (!req.user.project_id) return res.status(400).json({ error: 'Project required' })
+      params.push(req.user.project_id)
+      where += ` AND project_id = $${params.length}`
+    }
     const { rows } = await db.query(
-      `UPDATE casting_cards SET ${sets.join(', ')} WHERE id = $${params.length} RETURNING *`,
+      `UPDATE casting_cards SET ${sets.join(', ')} WHERE ${where} RETURNING *`,
       params
     )
     if (!rows.length) return res.status(404).json({ error: 'Not found' })
@@ -176,7 +200,10 @@ router.put('/:id', verifyJWT, checkRole(...ALLOWED_ROLES), async (req, res) => {
 // DELETE /casting/:id
 router.delete('/:id', verifyJWT, checkRole(...ALLOWED_ROLES), async (req, res) => {
   try {
-    await db.query(`DELETE FROM casting_cards WHERE id = $1`, [req.params.id])
+    const params = [req.params.id]
+    let q = `DELETE FROM casting_cards c WHERE c.id = $1`
+    q += applyCastingProjectScope(req, 'c', params)
+    await db.query(q, params)
     res.json({ ok: true })
   } catch (err) {
     console.error(err)
@@ -187,6 +214,11 @@ router.delete('/:id', verifyJWT, checkRole(...ALLOWED_ROLES), async (req, res) =
 // POST /casting/:id/photos
 router.post('/:id/photos', verifyJWT, checkRole(...ALLOWED_ROLES), upload.array('photos', 10), async (req, res) => {
   try {
+    const params = [req.params.id]
+    let q = `SELECT c.id FROM casting_cards c WHERE c.id = $1`
+    q += applyCastingProjectScope(req, 'c', params)
+    const { rows: cards } = await db.query(q, params)
+    if (!cards.length) return res.status(404).json({ error: 'Not found' })
     const urls = []
     for (const file of req.files || []) {
       const url = await uploadFile(file.buffer, file.originalname, 'casting')
@@ -203,7 +235,15 @@ router.post('/:id/photos', verifyJWT, checkRole(...ALLOWED_ROLES), upload.array(
 // DELETE /casting/:id/photos/:photoId
 router.delete('/:id/photos/:photoId', verifyJWT, checkRole(...ALLOWED_ROLES), async (req, res) => {
   try {
-    await db.query(`DELETE FROM casting_photos WHERE id = $1 AND card_id = $2`, [req.params.photoId, req.params.id])
+    const params = [req.params.photoId, req.params.id]
+    let q = `
+      DELETE FROM casting_photos cp
+      USING casting_cards c
+      WHERE cp.id = $1
+        AND cp.card_id = $2
+        AND c.id = cp.card_id`
+    q += applyCastingProjectScope(req, 'c', params)
+    await db.query(q, params)
     res.json({ ok: true })
   } catch (err) {
     console.error(err)

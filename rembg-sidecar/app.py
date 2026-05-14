@@ -36,7 +36,9 @@ if DEFAULT_MODEL not in _SESSIONS:
 
 # Секрет для бэкенда — без него endpoint 401. Yandex SC `allow-unauthenticated`
 # нужен (мы ходим без IAM-токена), но фактический gate — наш form-field.
-_SECRET = os.environ.get("INTERNAL_SECRET", "")
+_SECRET = os.environ.get("INTERNAL_SECRET", "").strip()
+if not _SECRET:
+    raise RuntimeError("INTERNAL_SECRET is required for rembg-sidecar")
 
 app = FastAPI(title="rembg-sidecar", version="1.8")
 
@@ -66,7 +68,7 @@ async def remove_bg(
 ):
     # YC Serverless Container иногда режет custom X-*-headers до контейнера.
     # Секрет шлём form-field'ом — гарантированно проходит.
-    if _SECRET and secret != _SECRET:
+    if secret != _SECRET:
         raise HTTPException(status_code=401, detail="bad_secret")
 
     raw = await photo.read()

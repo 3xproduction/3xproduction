@@ -1258,6 +1258,7 @@ router.post('/walkin-return', verifyJWT, checkRole(...ROLES), upload.any(), asyn
     // 1. Какие issuance относятся к этим юнитам у данного юзера?
     const { rows: openRows } = await client.query(`
       SELECT iss.id AS issuance_id, u.id AS unit_id, u.name, u.serial, u.qty,
+             req.project_id AS request_project_id,
              (SELECT url FROM unit_photos WHERE unit_id = u.id AND type='stock'
                 ORDER BY created_at LIMIT 1) AS photo_url
       FROM issuances iss
@@ -1294,7 +1295,7 @@ router.post('/walkin-return', verifyJWT, checkRole(...ROLES), upload.any(), asyn
 
     // 3. Получатель + проект (для PDF).
     const { rows: rcvRows } = await client.query(
-      `SELECT u.name, u.role, u.phone, u.email, p.name AS project_name
+      `SELECT u.name, u.role, u.phone, u.email, u.project_id, p.name AS project_name
        FROM users u LEFT JOIN projects p ON p.id = u.project_id WHERE u.id=$1`,
       [user_id]
     )
@@ -1348,8 +1349,18 @@ router.post('/walkin-return', verifyJWT, checkRole(...ROLES), upload.any(), asyn
             [u.unit_id, req.user.id, returnId]
           )
         } else if (cond === 'debt') {
-          // status='on_stock' — debt enum'а у units нет (urok 043).
-          await client.query(`UPDATE units SET status='on_stock' WHERE id=$1`, [u.unit_id])
+          await client.query(`UPDATE units SET status='debt' WHERE id=$1`, [u.unit_id])
+          await client.query(
+            `INSERT INTO debts (user_id, unit_id, issuance_id, project_id, reason)
+             VALUES ($1,$2,$3,$4,$5)`,
+            [
+              user_id,
+              u.unit_id,
+              issuanceId,
+              u.request_project_id || rcv.project_id || null,
+              condition_notes || 'Не возвращено при walk-in возврате',
+            ]
+          )
           await client.query(
             `INSERT INTO unit_history (unit_id, action, user_id, return_id) VALUES ($1, 'Долг', $2, $3)`,
             [u.unit_id, req.user.id, returnId]

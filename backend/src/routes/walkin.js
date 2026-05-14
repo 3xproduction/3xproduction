@@ -68,6 +68,53 @@ function escHtml(s) {
   ))
 }
 
+// POST /walkin/users/:id/resend-claim — regenerate and resend a claim link for
+// a provisional user if the original best-effort email failed after issue commit.
+router.post('/users/:id/resend-claim', verifyJWT, checkRole(...WALKIN_ISSUER_ROLES), async (req, res) => {
+  try {
+    const { rows } = await db.query(
+      `SELECT u.id, u.name, u.email, u.role, u.is_provisional, p.name AS project_name
+         FROM users u
+         LEFT JOIN projects p ON p.id = u.project_id
+        WHERE u.id = $1`,
+      [req.params.id]
+    )
+    if (!rows.length) return res.status(404).json({ error: 'User not found' })
+    const user = rows[0]
+    if (!user.is_provisional) return res.status(400).json({ error: 'User already activated' })
+    if (!user.email) return res.status(400).json({ error: 'User has no email' })
+
+    const claimToken = makeClaimToken()
+    const claimTokenHash = hashClaimToken(claimToken)
+    const claimExpires = new Date(Date.now() + CLAIM_TTL_DAYS * 24 * 60 * 60 * 1000)
+    await db.query(
+      `UPDATE users
+          SET claim_token_hash = $1,
+              claim_token_expires = $2
+        WHERE id = $3`,
+      [claimTokenHash, claimExpires, user.id]
+    )
+
+    const projectName = user.project_name || 'проект'
+    await sendEmail({
+      to: user.email,
+      subject: `Активация аккаунта — ${projectName} — 3XMedia Production`,
+      html: `
+        <p>Здравствуйте, ${escHtml(user.name)}.</p>
+        <p>Для проекта <b>«${escHtml(projectName)}»</b> создан аккаунт в 3XMedia Production.</p>
+        <p>Активируйте его и установите пароль:</p>
+        <p><a href="${claimUrl(claimToken)}" style="display:inline-block;background:#1f2937;color:#fff;padding:10px 20px;border-radius:6px;text-decoration:none;">Активировать аккаунт</a></p>
+        <p style="color:#6b7280;font-size:13px;">Ссылка действительна ${CLAIM_TTL_DAYS} дней.</p>
+      `,
+    })
+
+    res.json({ ok: true })
+  } catch (err) {
+    console.error('walkin resend claim failed:', err?.message || err)
+    res.status(502).json({ error: 'Claim email was not sent; retry later' })
+  }
+})
+
 // Найти юнит по photos_<temp_id> (frontend генерит temp UUID на каждое фото).
 function buildFilesByField(files) {
   const out = {}
@@ -392,9 +439,9 @@ router.post('/issue', verifyJWT, checkRole(...WALKIN_ISSUER_ROLES), upload.any()
     // ── 5. Synthetic request (status=issued) — чтобы issuance имел request_id
     // и существующие join'ы issuances → requests → unit_ids работали для walk-in. ──
     const { rows: reqRows } = await client.query(
-      `INSERT INTO requests (unit_ids, requester_id, status, deadline)
-       VALUES ($1, $2, 'issued', $3) RETURNING id`,
-      [createdUnitIds, receivedById, deadline]
+      `INSERT INTO requests (unit_ids, requester_id, status, deadline, project_id)
+       VALUES ($1, $2, 'issued', $3, $4) RETURNING id`,
+      [createdUnitIds, receivedById, deadline, projectIdResolved]
     )
     const synthRequestId = reqRows[0].id
 
