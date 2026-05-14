@@ -1,17 +1,15 @@
 param(
   [Parameter(Mandatory = $true, Position = 0)]
-  [string]$Version
+  [string]$Version,
+  [switch]$SkipClaude
 )
 
 $ErrorActionPreference = "Stop"
 $Root = Resolve-Path (Join-Path $PSScriptRoot "..")
 Set-Location $Root
 
-$gateArgs = @(
-  "-ExecutionPolicy", "Bypass",
-  "-File", (Join-Path $PSScriptRoot "pre-deploy-check.ps1"),
-  "-RunClaude"
-)
+$gateArgs = @("-ExecutionPolicy", "Bypass", "-File", (Join-Path $PSScriptRoot "pre-deploy-check.ps1"))
+if ($SkipClaude) { $gateArgs += "-SkipClaude" } else { $gateArgs += "-RunClaude" }
 & powershell @gateArgs
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
