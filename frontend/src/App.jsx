@@ -81,6 +81,20 @@ function ProductionRoute({ children }) {
   return children
 }
 
+function ProductionHomeRedirect() {
+  const { user, loading } = useAuth()
+  if (loading) return null
+  return <Navigate to={user?.role === 'costume_designer' ? '/production/project-warehouse?tab=my' : '/production/documents'} replace />
+}
+
+function NotForCostumeDesigner({ children }) {
+  const { user } = useAuth()
+  if (user?.role === 'costume_designer') {
+    return <Navigate to="/production/project-warehouse?tab=my" replace />
+  }
+  return children
+}
+
 function ImpersonateBanner() {
   const { login } = useAuth()
   const producerToken = sessionStorage.getItem('producer_token')
@@ -257,8 +271,8 @@ function App() {
         <Route path="/vehicles"                element={<PrivateRoute><VehiclesPage /></PrivateRoute>} />
 
         {/* Production routes */}
-        <Route path="/production" element={<Navigate to="/production/documents" replace />} />
-        <Route path="/production/"element={<Navigate to="/production/documents" replace />} />
+        <Route path="/production" element={<ProductionHomeRedirect />} />
+        <Route path="/production/" element={<ProductionHomeRedirect />} />
         {/* Раздел «Движение» у продюсера — единый список «Проект → Получатель → Единицы»
             (тот же IssuedByProjectsPage, но фильтр по своему проекту, без партнёрской аренды).
             Другие production-роли (project_director, ams_assistant и т.д.) пока видят прежнюю
@@ -271,11 +285,11 @@ function App() {
         <Route path="/production/cells/:warehouseId/type/:type"        element={<ProductionRoute><CellsTypeView world="production" /></ProductionRoute>} />
         <Route path="/production/cells/:warehouseId/hall/:hallId"      element={<ProductionRoute><CellsHallView world="production" /></ProductionRoute>} />
         <Route path="/production/cells/:warehouseId/section/:sectionId" element={<ProductionRoute><CellsSectionView world="production" /></ProductionRoute>} />
-        <Route path="/production/documents"    element={<ProductionRoute><DocumentsPage /></ProductionRoute>} />
-        <Route path="/production/documents/:projectId/:docId" element={<ProductionRoute><DocumentViewer /></ProductionRoute>} />
+        <Route path="/production/documents"    element={<ProductionRoute><NotForCostumeDesigner><DocumentsPage /></NotForCostumeDesigner></ProductionRoute>} />
+        <Route path="/production/documents/:projectId/:docId" element={<ProductionRoute><NotForCostumeDesigner><DocumentViewer /></NotForCostumeDesigner></ProductionRoute>} />
         <Route path="/production/lists"        element={<Navigate to="/production/documents" replace />} />
         <Route path="/production/warehouse"    element={<ProductionRoute><WarehouseViewPage /></ProductionRoute>} />
-        <Route path="/production/admin-stock"  element={<ProductionRoute><AdminStockPage /></ProductionRoute>} />
+        <Route path="/production/admin-stock"  element={<ProductionRoute><NotForCostumeDesigner><AdminStockPage /></NotForCostumeDesigner></ProductionRoute>} />
         {/* Хаб «Склад проекта» с 4 вкладками. Доступен и warehouse_director/deputy,
             поэтому просто PrivateRoute (хаб сам выбирает layout по роли). */}
         <Route path="/production/project-warehouse" element={<PrivateRoute><ProjectWarehouseHub /></PrivateRoute>} />
@@ -286,7 +300,7 @@ function App() {
         <Route path="/production/rent"            element={<ProductionRoute><RentPage /></ProductionRoute>} />
         <Route path="/production/acts"            element={<ProductionRoute><ActsPage /></ProductionRoute>} />
         <Route path="/production/locations"       element={<ProductionRoute><LocationsPage /></ProductionRoute>} />
-        <Route path="/production/decorations"     element={<ProductionRoute><DecorationsPage /></ProductionRoute>} />
+        <Route path="/production/decorations"     element={<ProductionRoute><NotForCostumeDesigner><DecorationsPage /></NotForCostumeDesigner></ProductionRoute>} />
         <Route path="/production/vehicles"        element={<ProductionRoute><VehiclesPage /></ProductionRoute>} />
         <Route path="/production/casting"         element={<ProductionRoute><CastingPage /></ProductionRoute>} />
         <Route path="/production/staff"          element={<ProductionRoute><StaffPage /></ProductionRoute>} />

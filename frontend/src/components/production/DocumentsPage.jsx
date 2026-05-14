@@ -49,7 +49,7 @@ const HIDE_LIST_TYPES_ROLES = ['set_admin']
 const UPLOAD_KPP_ROLES = [
   'producer', 'project_director', 'project_deputy_upload', 'director', 'assistant_director', 'first_assistant_director',
   'production_designer', 'art_director_assistant',
-  'props_master', 'props_assistant', 'decorator', 'costumer', 'costume_designer', 'costume_assistant',
+  'props_master', 'props_assistant', 'decorator', 'costumer', 'costume_assistant',
   'makeup_artist', 'stunt_coordinator', 'pyrotechnician',
 ]
 const UPLOAD_CALLSHEET_ROLES = [...UPLOAD_KPP_ROLES, 'set_admin']

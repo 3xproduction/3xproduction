@@ -28,7 +28,7 @@ const { ALL_CATEGORIES, ROLE_CATEGORIES, SEE_ALL_ROLES } = require('../constants
 const UPLOAD_KPP_ROLES = [
   'producer', 'project_director', 'project_deputy_upload', 'director', 'assistant_director',
   'production_designer', 'art_director_assistant',
-  'props_master', 'props_assistant', 'decorator', 'costumer', 'costume_designer', 'costume_assistant',
+  'props_master', 'props_assistant', 'decorator', 'costumer', 'costume_assistant',
   'makeup_artist', 'stunt_coordinator', 'pyrotechnician', 'location_manager',
 ]
 const UPLOAD_CALLSHEET_ROLES = [

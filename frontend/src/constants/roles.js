@@ -156,9 +156,9 @@ export const ROLES = {
   costume_designer: {
     label: 'Художник по костюмам',
     world: 'production',
-    uploadKpp: true,
-    uploadScenario: true,
-    uploadCallsheet: true,
+    uploadKpp: false,
+    uploadScenario: false,
+    uploadCallsheet: false,
     ownLists: ['costumes'],
   },
   costume_assistant: {

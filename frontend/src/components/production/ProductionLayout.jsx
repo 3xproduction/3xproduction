@@ -65,12 +65,15 @@ export const STAFF_WAREHOUSE_TABS = [
   { to: '/writeoffs',                    label: 'Списания',      match: /^\/writeoffs/ },
 ]
 export const PROJECT_DIRECTOR_WAREHOUSE_TABS = STAFF_WAREHOUSE_TABS
+const COSTUME_DESIGNER_ROLE = 'costume_designer'
+const COSTUME_DESIGNER_HIDDEN_TABS = new Set(['/production/admin-stock', '/production/decorations'])
 
 // ── Rail-навигация по ролям ──
 // Паттерн зеркалит WarehouseLayout: group.match — regex на URL-семью,
 // чтобы один пункт подсвечивался для всех вложенных страниц.
 function getRailNav(role) {
   const docs = { key: 'docs', to: '/production/documents', icon: FileText, label: 'Записи', match: /^\/production\/documents/ }
+  const canSeeRecords = role !== COSTUME_DESIGNER_ROLE
 
   if (role === 'producer') {
     // У продюсера «Записи» вынесены в раздел «Проекты» как вкладка —
@@ -92,12 +95,14 @@ function getRailNav(role) {
   const isProjectHead = role === 'project_director'
     || role === 'project_deputy' || role === 'project_deputy_upload'
 
-  const items = [docs]
+  const items = canSeeRecords ? [docs] : []
 
   if (isProjectHead || canSeeProjectWarehouse(role)) {
     items.push({
       key: 'warehouse', to: '/production/warehouse', icon: Package, label: 'Склад',
-      match: /^\/production\/(warehouse|project-warehouse|admin-stock|requests|decorations)|^\/(debts|writeoffs)/,
+      match: role === COSTUME_DESIGNER_ROLE
+        ? /^\/production\/(warehouse|project-warehouse|requests)|^\/(debts|writeoffs)/
+        : /^\/production\/(warehouse|project-warehouse|admin-stock|requests|decorations)|^\/(debts|writeoffs)/,
     })
   }
   if (isProjectHead || role === 'ams_assistant' || role === 'location_manager') {
@@ -733,6 +738,10 @@ export default function ProductionLayout({ children }) {
   const canPublicLink = !!ROLES[role]?.canPublicLink
   const canCreateProjectUnit = PROJECT_UNIT_CREATOR_ROLES.has(role) && !!user?.project_id
   const showFab = role === 'producer' || role === 'project_director' || canCreateProjectUnit
+  const canSeeRecords = role !== COSTUME_DESIGNER_ROLE
+  const staffWarehouseTabs = role === COSTUME_DESIGNER_ROLE
+    ? STAFF_WAREHOUSE_TABS.filter(tab => !COSTUME_DESIGNER_HIDDEN_TABS.has(tab.to))
+    : STAFF_WAREHOUSE_TABS
 
   // Блок body-scroll на время открытых оверлеев mobile/ui
   useBodyLock(burger || qaOpen || projOpen || showNewProject || showInvite || !!publicLink)
@@ -902,9 +911,11 @@ export default function ProductionLayout({ children }) {
                         <LinkIcon size={16} /> {publicLinkLoading ? 'Генерация…' : 'Партнёрская ссылка'}
                       </button>
                     )}
-                    <button className="pl-qa-item" onClick={() => quickNav('/production/documents')}>
-                      <FileText size={16} /> К документам
-                    </button>
+                    {canSeeRecords && (
+                      <button className="pl-qa-item" onClick={() => quickNav('/production/documents')}>
+                        <FileText size={16} /> К документам
+                      </button>
+                    )}
                   </div>
                 )}
               </div>
@@ -1016,7 +1027,7 @@ export default function ProductionLayout({ children }) {
           {role === 'producer' && <SectionTabs items={PRODUCER_ANALYTICS_TABS} />}
           {role === 'producer' && <SectionTabs items={PRODUCER_PROJECTS_TABS} />}
           {role !== 'producer' && canSeeProjectWarehouse(role) &&
-            <SectionTabs items={STAFF_WAREHOUSE_TABS} />}
+            <SectionTabs items={staffWarehouseTabs} />}
           {(role === 'producer' || role === 'project_director'
              || role === 'project_deputy' || role === 'project_deputy_upload'
              || role === 'ams_assistant' || role === 'location_manager') &&
@@ -1095,10 +1106,12 @@ export default function ProductionLayout({ children }) {
                   {publicLinkLoading ? 'Генерация…' : 'Партнёрская ссылка'}
                 </button>
               )}
-              <button className="pl-qa-sheet-item" onClick={() => quickNav('/production/documents')}>
-                <div className="pl-qa-sheet-icon"><FileText size={18} /></div>
-                К документам
-              </button>
+              {canSeeRecords && (
+                <button className="pl-qa-sheet-item" onClick={() => quickNav('/production/documents')}>
+                  <div className="pl-qa-sheet-icon"><FileText size={18} /></div>
+                  К документам
+                </button>
+              )}
             </div>
           </div>
         )}

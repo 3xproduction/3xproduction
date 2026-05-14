@@ -54,6 +54,8 @@ export default function AddUnitModal({
   const isProjectMode = mode === 'project'
   const isAdminMode = mode === 'admin'
   const isDetachedStockMode = isProjectMode || isAdminMode
+  const isCostumeDesigner = user?.role === 'costume_designer'
+  const hideProjectPurchaseProof = isProjectMode && isCostumeDesigner
   const isDirector = ['warehouse_director', 'warehouse_deputy'].includes(user?.role)
   const canSeeSource = ['warehouse_director', 'warehouse_deputy', 'producer'].includes(user?.role)
 
@@ -208,7 +210,7 @@ export default function AddUnitModal({
     if (!isDetachedStockMode && isDirector && !form.valuation) { setAddError('Укажите стоимость единицы'); return }
     if (isProjectMode && form.purchase_mode === 'purchased') {
       if (!form.purchase_price) { setAddError('Укажите цену покупки'); return }
-      if (!receiptFile) { setAddError('Прикрепите фото чека'); return }
+      if (!hideProjectPurchaseProof && !receiptFile) { setAddError('Прикрепите фото чека'); return }
     }
     setAdding(true)
     setAddError('')
@@ -217,7 +219,7 @@ export default function AddUnitModal({
       if (isDetachedStockMode) {
         // 1. Загрузка чека (для purchased). В админке чек опциональный.
         let receiptUrl = null
-        if (form.purchase_mode === 'purchased' && receiptFile) {
+        if (form.purchase_mode === 'purchased' && receiptFile && !hideProjectPurchaseProof) {
           const fd = new FormData()
           fd.append('receipt', receiptFile)
           const r = isAdminMode
@@ -234,10 +236,11 @@ export default function AddUnitModal({
           description: form.description || null,
           qty: Number(form.qty) || 1,
           period: form.period || null,
+          source: form.purchase_mode === 'purchased' ? 'Покупка' : 'С общего склада',
           purchased: form.purchase_mode === 'purchased',
           purchase_price: form.purchase_mode === 'purchased' ? purchasePrice : null,
           purchase_date:  form.purchase_mode === 'purchased' ? form.purchase_date : null,
-          vendor:         form.purchase_mode === 'purchased' ? (form.vendor || null) : null,
+          vendor:         form.purchase_mode === 'purchased' && !hideProjectPurchaseProof ? (form.vendor || null) : null,
           receipt_url:    receiptUrl,
           valuation: form.purchase_mode === 'purchased' && purchasePrice ? purchasePrice : null,
         }
@@ -593,13 +596,13 @@ export default function AddUnitModal({
           <>
             <div style={{ fontWeight: 600, fontSize: 16, marginBottom: 6 }}>Источник</div>
             <div style={{ fontSize: 13, color: 'var(--muted)', marginBottom: 16 }}>
-              {isAdminMode ? 'Покупка для административного цеха или запас без чека' : 'Куплено для проекта или своё/найденное'}
+              {isAdminMode ? 'Покупка для административного цеха или запас без чека' : 'Куплено для проекта или с общего склада'}
             </div>
 
             <div style={{ display: 'flex', gap: 8, marginBottom: 14 }}>
               {[
                 { k: 'purchased', icon: <Receipt size={14} />, label: isAdminMode ? 'Куплено в Админку' : 'Куплено для проекта', hint: isAdminMode ? 'Чек можно приложить' : 'С чеком' },
-                { k: 'own',       icon: <Gift size={14} />,    label: isAdminMode ? 'Запас без покупки' : 'Своё / найденное', hint: 'Без чека' },
+                { k: 'own',       icon: <Gift size={14} />,    label: isAdminMode ? 'Запас без покупки' : 'С общего склада', hint: 'Без чека' },
               ].map(opt => (
                 <button key={opt.k} onClick={() => setForm(f => ({ ...f, purchase_mode: opt.k }))}
                   style={{
@@ -629,24 +632,28 @@ export default function AddUnitModal({
                       style={{ width: '100%', height: 38, padding: '0 10px', border: '1px solid var(--border)', borderRadius: 'var(--radius-btn)', fontSize: 13, background: 'var(--white)', boxSizing: 'border-box' }} />
                   </div>
                 </div>
-                <FL>Магазин / поставщик</FL>
-                <FI value={form.vendor} onChange={v => setForm(f => ({ ...f, vendor: v }))} placeholder="Леруа Мерлен" />
-                <FL>Фото чека {isAdminMode ? '' : '*'}</FL>
-                {receiptPreview ? (
-                  <div style={{ position: 'relative', display: 'inline-block', marginBottom: 4 }}>
-                    <img src={receiptPreview} alt="" style={{ maxWidth: 140, maxHeight: 140, borderRadius: 8, border: '1px solid var(--border)' }} />
-                    <button onClick={() => { setReceiptFile(null); setReceiptPreview('') }}
-                      style={{ position: 'absolute', top: -6, right: -6, width: 22, height: 22, borderRadius: '50%',
-                        border: 'none', background: 'var(--red)', color: '#fff', cursor: 'pointer' }}>×</button>
-                  </div>
-                ) : (
-                  <button onClick={() => receiptRef.current?.click()}
-                    style={{ padding: '10px 16px', borderRadius: 8, border: '1.5px dashed var(--border)',
-                      background: 'var(--white)', cursor: 'pointer', fontSize: 13 }}>
-                    📷 Прикрепить чек
-                  </button>
+                {!hideProjectPurchaseProof && (
+                  <>
+                    <FL>Магазин / поставщик</FL>
+                    <FI value={form.vendor} onChange={v => setForm(f => ({ ...f, vendor: v }))} placeholder="Леруа Мерлен" />
+                    <FL>Фото чека {isAdminMode ? '' : '*'}</FL>
+                    {receiptPreview ? (
+                      <div style={{ position: 'relative', display: 'inline-block', marginBottom: 4 }}>
+                        <img src={receiptPreview} alt="" style={{ maxWidth: 140, maxHeight: 140, borderRadius: 8, border: '1px solid var(--border)' }} />
+                        <button onClick={() => { setReceiptFile(null); setReceiptPreview('') }}
+                          style={{ position: 'absolute', top: -6, right: -6, width: 22, height: 22, borderRadius: '50%',
+                            border: 'none', background: 'var(--red)', color: '#fff', cursor: 'pointer' }}>×</button>
+                      </div>
+                    ) : (
+                      <button onClick={() => receiptRef.current?.click()}
+                        style={{ padding: '10px 16px', borderRadius: 8, border: '1.5px dashed var(--border)',
+                          background: 'var(--white)', cursor: 'pointer', fontSize: 13 }}>
+                        📷 Прикрепить чек
+                      </button>
+                    )}
+                    <input ref={receiptRef} type="file" accept="image/*" capture="environment" style={{ display: 'none' }} onChange={onReceiptSelected} />
+                  </>
                 )}
-                <input ref={receiptRef} type="file" accept="image/*" capture="environment" style={{ display: 'none' }} onChange={onReceiptSelected} />
               </div>
             )}
 
@@ -675,7 +682,7 @@ export default function AddUnitModal({
             <div style={{ display: 'flex', gap: 8 }}>
               <Button variant="secondary" fullWidth onClick={() => setAddStep(2)}>Назад</Button>
               <Button fullWidth disabled={adding ||
-                (form.purchase_mode === 'purchased' && isProjectMode && (!form.purchase_price || !receiptFile))}
+                (form.purchase_mode === 'purchased' && isProjectMode && (!form.purchase_price || (!hideProjectPurchaseProof && !receiptFile)))}
                 onClick={handleAdd}>
                 {adding ? 'Сохранение...' : 'Добавить'}
               </Button>

@@ -92,6 +92,15 @@ function canWriteToProject(user) {
   return PROJECT_WRITER_ROLES.has(user.role)
 }
 
+function normalizeProjectUnitSource(source) {
+  if (!source) return null
+  const value = String(source).trim()
+  if (!value) return null
+  const low = value.toLowerCase()
+  if (low.includes('сво') || low.includes('найден')) return 'С общего склада'
+  return value.slice(0, 120)
+}
+
 // GET /project-units?project_id=&category=&source=
 // РљР°С‚Р°Р»РѕРі СЃРєР»Р°РґР° РїСЂРѕРµРєС‚Р° вЂ” РѕР±СЉРµРґРёРЅСЏРµС‚ С‚СЂРё РёСЃС‚РѕС‡РЅРёРєР°:
 //   1. own            вЂ” СЃРѕР±СЃС‚РІРµРЅРЅС‹Рµ (is_project_kept=true, project_id=me)
@@ -227,22 +236,25 @@ router.post('/', verifyJWT, async (req, res) => {
 
   const { name, category, description, qty, condition, period,
           purchased, purchase_price, purchase_date, vendor, receipt_url,
-          valuation, serial } = req.body
+          valuation, serial, source } = req.body
 
   if (!name || !category) return res.status(400).json({ error: 'Name and category required' })
-  if (purchased && (!receipt_url || !purchase_price)) {
-    return res.status(400).json({ error: 'For purchased items receipt and price are required' })
+  const isCostumeDesigner = req.user.role === 'costume_designer'
+  if (purchased && (!purchase_price || (!isCostumeDesigner && !receipt_url))) {
+    return res.status(400).json({ error: isCostumeDesigner ? 'For purchased items price is required' : 'For purchased items receipt and price are required' })
   }
 
   try {
+    const cleanVendor = isCostumeDesigner ? null : (vendor || null)
+    const cleanReceiptUrl = isCostumeDesigner ? null : (receipt_url || null)
     // Project-kept units use status='on_stock' conceptually (owned and in-use)
     // but carry is_project_kept=true and no cell/warehouse.
     const { rows } = await db.query(
       `INSERT INTO units
          (name, category, serial, description, qty, condition, period,
           valuation, status, is_project_kept, project_id, created_by,
-          purchased, purchase_price, purchase_date, vendor, receipt_url)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,'on_stock',true,$9,$10,$11,$12,$13,$14,$15) RETURNING *`,
+          purchased, purchase_price, purchase_date, vendor, receipt_url, source)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,'on_stock',true,$9,$10,$11,$12,$13,$14,$15,$16) RETURNING *`,
       [
         name, category, serial || null, description || null,
         qty || 1, condition || null, period || null,
@@ -251,8 +263,9 @@ router.post('/', verifyJWT, async (req, res) => {
         Boolean(purchased),
         purchase_price || null,
         purchase_date || null,
-        vendor || null,
-        receipt_url || null,
+        cleanVendor,
+        cleanReceiptUrl,
+        normalizeProjectUnitSource(source),
       ]
     )
     await db.query(
@@ -576,6 +589,9 @@ router.put('/:id', verifyJWT, async (req, res) => {
     }
     const { name, category, serial, description, qty, condition, period,
             valuation, purchased, purchase_price, purchase_date, vendor, receipt_url } = req.body
+    const isCostumeDesigner = req.user.role === 'costume_designer'
+    const cleanVendor = isCostumeDesigner ? null : (vendor || null)
+    const cleanReceiptUrl = isCostumeDesigner ? null : (receipt_url || null)
     const { rows } = await db.query(
       `UPDATE units SET name=$1, category=$2, serial=$3, description=$4, qty=$5,
         condition=$6, period=$7, valuation=$8, purchased=$9,
@@ -584,7 +600,7 @@ router.put('/:id', verifyJWT, async (req, res) => {
       [name, category, serial || null, description || null, qty || 1,
        condition || null, period || null, valuation || null,
        Boolean(purchased), purchase_price || null, purchase_date || null,
-       vendor || null, receipt_url || null, req.params.id]
+       cleanVendor, cleanReceiptUrl, req.params.id]
     )
     res.json({ unit: rows[0] })
   } catch (err) {
