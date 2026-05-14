@@ -25,6 +25,7 @@ const RECEIVER_ROLE_OPTIONS = [
   { value: 'props_master',            label: 'Реквизитор' },
   { value: 'props_assistant',         label: 'Ассистент по реквизиту' },
   { value: 'costumer',                label: 'Костюмер' },
+  { value: 'costume_designer',        label: 'Художник по костюмам' },
   { value: 'costume_assistant',       label: 'Ассистент по костюмам' },
   { value: 'decorator',               label: 'Декоратор' },
   { value: 'extra_worker',            label: 'Доп. рабочий' },

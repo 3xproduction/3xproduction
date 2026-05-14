@@ -190,6 +190,24 @@ function fmtMoney(n) {
   return fmtNum(n) + ' ₽'
 }
 
+function isCommonStockWithoutPlace(u) {
+  return u?.status === 'on_stock'
+    && !u.cell_id
+    && !u.pavilion_id
+    && !u.is_project_kept
+    && !u.is_admin_stock
+}
+
+function formatReceiptLocation(u) {
+  const parts = []
+  if (u?.warehouse_name) parts.push(u.warehouse_name)
+  if (u?.hall_name) parts.push(u.hall_name)
+  if (u?.section_name) parts.push(u.section_name)
+  if (u?.cell_custom || u?.cell_code) parts.push(u.cell_custom || u.cell_code)
+  if (isCommonStockWithoutPlace(u)) parts.push('Без места')
+  return parts.join(' · ') || 'Без места'
+}
+
 const today = new Date().toLocaleDateString('ru-RU', { weekday: 'long', day: 'numeric', month: 'long' })
 
 export default function DashboardPage() {
@@ -254,7 +272,7 @@ export default function DashboardPage() {
         issued:   sumUnitQty(commonUnits.filter(u => u.status === 'issued')),
         overdue:  sumUnitQty(commonUnits.filter(u => u.status === 'overdue')),
         pending:  sumUnitQty(commonUnits.filter(u => u.status === 'pending')),
-        no_cell:  sumUnitQty(commonUnits.filter(u => u.status === 'on_stock' && !u.cell_id)),
+        no_cell:  sumUnitQty(commonUnits.filter(isCommonStockWithoutPlace)),
         assets_value: assetsValue,
       })
     }).catch(() => {})
@@ -350,7 +368,7 @@ export default function DashboardPage() {
     {
       label: 'Выдано', value: fmtNum(stats.issued),
       Icon: ArrowRightLeft, bg: 'var(--bg-secondary)', color: 'var(--ink-900)',
-      onClick: () => navigate('/issued'),
+      onClick: () => navigate('/issued?view=issued'),
     },
     {
       label: 'Не вернули', value: fmtNum(notReturned.total),
@@ -546,7 +564,7 @@ export default function DashboardPage() {
           <div className="dash-card">
             <div className="dash-card-head">
               <span className="dash-card-title">Выданы</span>
-              <button className="dash-card-link" onClick={() => navigate('/issued')}>
+              <button className="dash-card-link" onClick={() => navigate('/issued?view=issued')}>
                 Все <ChevronRight size={12} />
               </button>
             </div>
@@ -619,9 +637,7 @@ export default function DashboardPage() {
                   <div style={{ minWidth: 0, flex: 1 }}>
                     <div className="dash-row-title">{u.name}</div>
                     <div className="dash-row-sub">
-                      {u.warehouse_name || '—'}
-                      {u.cell_custom || u.cell_code ? ` · ${u.cell_custom || u.cell_code}` : ''}
-                      {' · '}{timeAgo(u.created_at)}
+                      {formatReceiptLocation(u)} · {timeAgo(u.created_at)}
                     </div>
                   </div>
                   <ChevronRight size={14} style={{ color: 'var(--subtle)', flexShrink: 0 }} />

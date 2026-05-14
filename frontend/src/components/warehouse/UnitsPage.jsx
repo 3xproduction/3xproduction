@@ -44,6 +44,15 @@ function formatLocation(u, { full = false } = {}) {
     const t = SECTION_TYPE_RU[u.section_type] || ''
     parts.push(t ? `${t} ${u.section_name}` : u.section_name)
   }
+  if (
+    u.status === 'on_stock'
+    && !u.cell_id
+    && !u.pavilion_id
+    && !u.is_project_kept
+    && !u.is_admin_stock
+  ) {
+    parts.push('Без места')
+  }
   return parts.join(' · ')
 }
 
@@ -752,7 +761,7 @@ export default function UnitsPage() {
                       <Badge color={STATUS_COLOR[u.status]}>{STATUS_LABEL[u.status]}</Badge>
                     </div>
                     <UnitMissingDataBadge unit={u} role={user?.role} />
-                    {u.status === 'on_stock' && (u.warehouse_address || u.warehouse_name) && (
+                    {u.status === 'on_stock' && formatLocation(u) && (
                       <TruncTip
                         as="div"
                         style={{ fontSize: 10, fontWeight: 500, color: 'var(--muted)', marginTop: 4 }}
@@ -868,14 +877,14 @@ export default function UnitsPage() {
                     </div>
                     <div style={{ fontSize: 12, color: 'var(--muted)', marginTop: 2, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{u.serial ? `${u.serial} · ` : ''}{categoryLabel(u.category)}</div>
                     <UnitMissingDataBadge unit={u} role={user?.role} compact />
-                    {(u.warehouse_address || u.warehouse_name) && (
+                    {formatLocation(u) && (
                       <div className="units-row-loc-mobile" title={formatLocation(u, { full: true })}>
                         {formatLocation(u)}
                       </div>
                     )}
                   </div>
                   <div className="units-row-loc-side" style={{ fontSize: 12, color: 'var(--muted)', textAlign: 'right', flexShrink: 0, maxWidth: 220, overflow: 'hidden' }}>
-                    {(u.warehouse_address || u.warehouse_name) && (
+                    {formatLocation(u) && (
                       <div style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
                            title={formatLocation(u, { full: true })}>
                         {formatLocation(u)}
@@ -917,7 +926,7 @@ export default function UnitsPage() {
                   <div style={{ flex: 1, minWidth: 0, fontSize: 13, fontWeight: 500, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', color: isWrittenOff ? 'var(--muted)' : 'var(--text)', textDecoration: isWrittenOff ? 'line-through' : 'none' }}>{u.name}</div>
                   {u.serial && <span style={{ fontSize: 12, color: 'var(--muted)', flexShrink: 0 }}>{u.serial}</span>}
                   <span style={{ fontSize: 12, color: 'var(--muted)', flexShrink: 0 }}>{categoryLabel(u.category)}</span>
-                  {u.status === 'on_stock' && (u.warehouse_address || u.warehouse_name) && (
+                  {u.status === 'on_stock' && formatLocation(u) && (
                     <span style={{ fontSize: 11, color: 'var(--muted)', flexShrink: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: 220 }}
                           title={formatLocation(u, { full: true })}>
                       {formatLocation(u)}

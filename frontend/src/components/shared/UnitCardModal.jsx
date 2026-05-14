@@ -518,6 +518,14 @@ export default function UnitCardModal({ unitId, onClose, onChanged, debt, writeo
     ? `${sectionTypeRu ? sectionTypeRu + ' ' : ''}«${unit.section_name}»`
     : null
   const pavLabel = unit.pavilion_id ? (unit.pavilion_name || 'Павильон') : null
+  const cellLabel = unit.cell_custom || unit.cell_code || null
+  const isCommonStockWithoutPlace =
+    unit.status === 'on_stock'
+    && !unit.cell_id
+    && !unit.pavilion_id
+    && !unit.is_project_kept
+    && !unit.is_admin_stock
+  const positionLabel = cellLabel || (isCommonStockWithoutPlace ? 'Без места' : null)
   const statusDot = STATUS_DOT[unit.status] || 'var(--muted)'
   const missingDataFields = getUnitMissingFields(unit, user?.role)
 
@@ -857,6 +865,7 @@ export default function UnitCardModal({ unitId, onClose, onChanged, debt, writeo
                     {unit.warehouse_name && <Row label="Склад" value={unit.warehouse_name} />}
                     {unit.hall_name  && <Row label="Зал" value={unit.hall_name} />}
                     {sectionLabel    && <Row label={sectionTypeRu || 'Секция'} value={unit.section_name} />}
+                    {positionLabel   && <Row label="Положение" value={positionLabel} />}
                     {pavLabel        && <Row label="Павильон" value={pavLabel} />}
                     {editAll ? (
                       <>

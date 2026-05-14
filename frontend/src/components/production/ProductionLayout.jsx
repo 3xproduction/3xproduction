@@ -121,9 +121,16 @@ function getRailNav(role) {
   return items
 }
 
-// Мобильный bottom-bar: первые 3 основные ссылки + центральный FAB «Создать»
-// (или «Записи» для ролей без быстрых действий) + «Профиль» / «Ещё».
-const MOBILE_SHOW_FAB_ROLES = new Set(['producer', 'project_director'])
+// Мобильный bottom-bar: первые 2 основные ссылки + центральный FAB «Создать»
+// для ролей, у которых на мобилке скрыта верхняя кнопка пополнения склада проекта.
+const PROJECT_UNIT_CREATOR_ROLES = new Set([
+  'project_director', 'director',
+  'production_designer', 'art_director_assistant',
+  'first_assistant_director', 'assistant_director',
+  'props_master', 'props_assistant',
+  'costumer', 'costume_designer', 'costume_assistant',
+  'decorator', 'makeup_artist',
+])
 
 function getInitials(name = '') {
   return name.split(' ').map(w => w[0]).join('').slice(0, 2).toUpperCase()
@@ -724,7 +731,8 @@ export default function ProductionLayout({ children }) {
     && location.pathname !== '/'
     && nav[0]?.to !== location.pathname
   const canPublicLink = !!ROLES[role]?.canPublicLink
-  const showFab = MOBILE_SHOW_FAB_ROLES.has(role)
+  const canCreateProjectUnit = PROJECT_UNIT_CREATOR_ROLES.has(role) && !!user?.project_id
+  const showFab = role === 'producer' || role === 'project_director' || canCreateProjectUnit
 
   // Блок body-scroll на время открытых оверлеев mobile/ui
   useBodyLock(burger || qaOpen || projOpen || showNewProject || showInvite || !!publicLink)
@@ -862,7 +870,7 @@ export default function ProductionLayout({ children }) {
           </nav>
 
           <div className="pl-rail-bottom">
-            {(role === 'producer' || role === 'project_director') && (
+            {showFab && (
               <div ref={qaRef} style={{ position: 'relative' }}>
                 <button
                   className="pl-rail-btn pl-rail-quick"
@@ -879,9 +887,16 @@ export default function ProductionLayout({ children }) {
                         <FolderOpen size={16} /> Новый проект
                       </button>
                     )}
-                    <button className="pl-qa-item" onClick={() => { setQaOpen(false); setShowInvite(true) }}>
-                      <UserPlus size={16} /> Пригласить участника
-                    </button>
+                    {canCreateProjectUnit && (
+                      <button className="pl-qa-item" onClick={() => quickNav('/production/project-warehouse?tab=my&add=1')}>
+                        <Package size={16} /> Добавить в склад проекта
+                      </button>
+                    )}
+                    {(role === 'producer' || role === 'project_director') && (
+                      <button className="pl-qa-item" onClick={() => { setQaOpen(false); setShowInvite(true) }}>
+                        <UserPlus size={16} /> Пригласить участника
+                      </button>
+                    )}
                     {canPublicLink && (
                       <button className="pl-qa-item" onClick={generatePublicLink} disabled={publicLinkLoading}>
                         <LinkIcon size={16} /> {publicLinkLoading ? 'Генерация…' : 'Партнёрская ссылка'}
@@ -1060,6 +1075,12 @@ export default function ProductionLayout({ children }) {
                 <button className="pl-qa-sheet-item" onClick={() => { setQaOpen(false); setShowNewProject(true) }}>
                   <div className="pl-qa-sheet-icon"><FolderOpen size={18} /></div>
                   Новый проект
+                </button>
+              )}
+              {canCreateProjectUnit && (
+                <button className="pl-qa-sheet-item" onClick={() => quickNav('/production/project-warehouse?tab=my&add=1')}>
+                  <div className="pl-qa-sheet-icon"><Package size={18} /></div>
+                  Добавить в склад проекта
                 </button>
               )}
               {(role === 'producer' || role === 'project_director') && (

@@ -23,7 +23,7 @@ const PROPS_RESPONDER_ROLES = [
   'props_master', 'props_assistant',
 ]
 const COSTUMES_RESPONDER_ROLES = [
-  'project_director', 'production_designer', 'costumer', 'costume_assistant',
+  'project_director', 'production_designer', 'costumer', 'costume_designer', 'costume_assistant',
 ]
 const COSTUME_CATEGORIES = new Set(['costumes', 'shoes', 'jewelry', 'accessories', 'clothing'])
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
@@ -42,7 +42,7 @@ const PROJECT_WRITER_ROLES = new Set([
   'production_designer', 'art_director_assistant',
   'first_assistant_director', 'assistant_director',
   'props_master', 'props_assistant',
-  'costumer', 'costume_assistant',
+  'costumer', 'costume_designer', 'costume_assistant',
   'decorator', 'makeup_artist', 'extra_worker',
 ])
 
@@ -134,8 +134,7 @@ router.get('/', verifyJWT, async (req, res) => {
         UNION ALL
 
         -- 2. Р’С‹РґР°РЅРѕ СЃ РѕР±С‰РµРіРѕ СЃРєР»Р°РґР° РЅР° СЌС‚РѕС‚ РїСЂРѕРµРєС‚ (С„РёР·РёС‡РµСЃРєРё РЅР° СЂСѓРєР°С…).
-        -- РСЃС‚РѕС‡РЅРёРє СЃРІСЏР·Рё РїСЂРѕРµРєС‚Р° вЂ” receiver.project_id (Р° РЅРµ requests.project_id),
-        -- С‚.Рє. walk-in РІС‹РґР°С‡Рё Рё С‡Р°СЃС‚СЊ legacy-Р·Р°СЏРІРѕРє РЅРµ РёРјРµСЋС‚ project_id РІ requests.
+        -- requests.project_id wins; receiver.project_id is only a fallback for legacy/walk-in rows.
         SELECT fw.unit_id, 'from_warehouse',
                NULL, NULL, NULL,
                fw.issuance_id, fw.issued_at, fw.deadline,
@@ -146,8 +145,9 @@ router.get('/', verifyJWT, async (req, res) => {
           FROM units u
           JOIN requests req  ON u.id = ANY(req.unit_ids)
           JOIN issuances iss ON iss.request_id = req.id
-          JOIN users rcv     ON rcv.id = iss.received_by AND rcv.project_id = $1
+          JOIN users rcv     ON rcv.id = iss.received_by
           WHERE u.status IN ('issued','overdue')
+            AND COALESCE(req.project_id, rcv.project_id) = $1
             AND u.on_loan_to_project_id IS NULL
             AND NOT EXISTS (SELECT 1 FROM returns r WHERE r.issuance_id = iss.id)
           ORDER BY u.id, iss.issued_at DESC NULLS LAST
@@ -804,15 +804,16 @@ router.get('/projects', verifyJWT, async (req, res) => {
          WHERE is_project_kept = true AND status != 'written_off' AND project_id IS NOT NULL
          GROUP BY project_id`),
       db.query(
-        `SELECT rcv.project_id AS pid, COUNT(DISTINCT u.id)::int AS cnt
+        `SELECT COALESCE(req.project_id, rcv.project_id) AS pid, COUNT(DISTINCT u.id)::int AS cnt
          FROM issuances iss
-         JOIN users rcv     ON rcv.id = iss.received_by AND rcv.project_id IS NOT NULL
+         JOIN users rcv     ON rcv.id = iss.received_by
          JOIN requests req  ON req.id = iss.request_id
          JOIN units u       ON u.id = ANY(req.unit_ids)
          WHERE u.status IN ('issued','overdue')
+           AND COALESCE(req.project_id, rcv.project_id) IS NOT NULL
            AND u.on_loan_to_project_id IS NULL
            AND NOT EXISTS (SELECT 1 FROM returns r WHERE r.issuance_id = iss.id)
-         GROUP BY rcv.project_id`),
+         GROUP BY COALESCE(req.project_id, rcv.project_id)`),
       db.query(
         `SELECT on_loan_to_project_id AS pid, COUNT(*)::int AS cnt
          FROM units WHERE on_loan_to_project_id IS NOT NULL

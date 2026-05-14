@@ -353,6 +353,7 @@ router.post('/seed-test', (req, res, next) => {
       { email: 'test.production_designer@3x.test',name: 'Анна Новикова',     role: 'production_designer', project_id: projectId },
       { email: 'test.props_master@3x.test',       name: 'Сергей Морозов',    role: 'props_master',        project_id: projectId },
       { email: 'test.costumer@3x.test',           name: 'Елена Волкова',     role: 'costumer',            project_id: projectId },
+      { email: 'test.costume_designer@3x.test',   name: 'Варя Орлова',       role: 'costume_designer',    project_id: projectId },
     ]
 
     const results = []

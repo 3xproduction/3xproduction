@@ -58,8 +58,8 @@ export default function CellsIndex({ world = 'warehouse' } = {}) {
     if (warehouseId && warehouses.some(w => String(w.id) === String(warehouseId))) return
     const preferredName = localStorage.getItem('warehouse')
     const target = warehouses.find(w => w.name === preferredName) || warehouses[0]
-    navigate(`${cellsBase}/${target.id}`, { replace: true })
-  }, [warehouseId, warehouses, warehousesLoading, navigate])
+    navigate(`${cellsBase}/${target.id}`, { replace: true, state: location.state })
+  }, [warehouseId, warehouses, warehousesLoading, navigate, cellsBase, location.state])
 
   // Мобильный bottom-sheet со списком складов — chips слишком громоздкие
   // на узких экранах, ставим одну кнопку-чип + sheet.
@@ -84,7 +84,13 @@ export default function CellsIndex({ world = 'warehouse' } = {}) {
     unitsApi.list({ status: 'on_stock' })
       .then(d => {
         const all = (d.units || []).filter(u => u && u.id)
-        setNoPlaceUnits(all.filter(u => !u.cell_id && !u.pavilion_id))
+        setNoPlaceUnits(all.filter(u =>
+          u.status === 'on_stock'
+          && !u.cell_id
+          && !u.pavilion_id
+          && !u.is_project_kept
+          && !u.is_admin_stock
+        ))
       })
       .catch(() => setNoPlaceUnits([]))
       .finally(() => setNoPlaceLoading(false))

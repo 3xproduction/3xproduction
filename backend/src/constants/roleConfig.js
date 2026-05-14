@@ -17,6 +17,7 @@ const ROLE_CATEGORIES = {
   props_assistant:          ['props', 'art_fill', 'dummy', 'auto', 'decoration', 'pyrotechnics', 'costumes'],
   decorator:                ['decoration', 'props', 'art_fill', 'dummy', 'consultant'],
   costumer:                 ['costumes'],
+  costume_designer:         ['costumes'],
   costume_assistant:        ['costumes'],
   makeup_artist:            ['makeup'],
   stunt_coordinator:        ['stunts'],

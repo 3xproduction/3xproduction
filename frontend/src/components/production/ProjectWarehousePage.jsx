@@ -6,6 +6,7 @@
 // Бэкенд: GET /project-units возвращает UNION ALL с полем `source`.
 
 import React, { useState, useEffect } from 'react'
+import { useSearchParams } from 'react-router-dom'
 import { Plus, Send, Trash2, MoreVertical, Package } from 'lucide-react'
 import ProductionLayout from './ProductionLayout'
 import Badge from '../shared/Badge'
@@ -26,7 +27,7 @@ const ROLES_CAN_ADD = new Set([
   'production_designer', 'art_director_assistant',
   'first_assistant_director', 'assistant_director',
   'props_master', 'props_assistant',
-  'costumer', 'costume_assistant',
+  'costumer', 'costume_designer', 'costume_assistant',
   'decorator', 'makeup_artist',
 ])
 // Роли, которые могут переключаться между складами всех проектов.
@@ -53,6 +54,7 @@ function SourceBadge({ unit }) {
 export default function ProjectWarehousePage({ embedded = false }) {
   const { user } = useAuth()
   const toast = useToast()
+  const [searchParams, setSearchParams] = useSearchParams()
   const [units, setUnits] = useState([])
   const [loading, setLoading] = useState(true)
   const [category, setCategory] = useState('all')
@@ -102,7 +104,21 @@ export default function ProjectWarehousePage({ embedded = false }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [canViewAnyProject])
 
+  useEffect(() => {
+    if (!activeProjectId && user?.project_id) setActiveProjectId(user.project_id)
+  }, [activeProjectId, user?.project_id])
+
   useEffect(() => { if (activeProjectId) reload(activeProjectId) }, [activeProjectId])
+
+  useEffect(() => {
+    if (searchParams.get('add') !== '1') return
+    if (!user?.id) return
+    if (user?.project_id && !activeProjectId) return
+    if (canAdd) setShowAdd(true)
+    const next = new URLSearchParams(searchParams)
+    next.delete('add')
+    setSearchParams(next, { replace: true })
+  }, [searchParams, setSearchParams, activeProjectId, canAdd, user?.id, user?.project_id])
 
   // Закрыть мини-меню при клике вне
   useEffect(() => {

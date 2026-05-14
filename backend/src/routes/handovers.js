@@ -8,7 +8,7 @@ const { verifyJWT } = require('../middleware/auth')
 const PROJECT_WRITER_ROLES = new Set([
   'producer', 'project_director', 'director',
   'props_master', 'props_assistant',
-  'costumer', 'costume_assistant',
+  'costumer', 'costume_designer', 'costume_assistant',
 ])
 
 // POST /handovers — create a new handover act (snapshot of project inventory).

@@ -78,6 +78,7 @@ export default function NoPlaceList({ units, loading, onOpenCard }) {
                   {[
                     u.category ? categoryLabel(u.category) : null,
                     u.serial || null,
+                    u.warehouse_name || null,
                   ].filter(Boolean).join(' · ') || '—'}
                 </div>
               </div>

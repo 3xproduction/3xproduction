@@ -22,6 +22,7 @@ const COSTUMES_RESPONDER_ROLES = [
   'project_director',
   'production_designer',
   'costumer',
+  'costume_designer',
   'costume_assistant',
 ]
 const COSTUME_CATEGORIES = new Set(['costumes', 'shoes', 'jewelry', 'accessories', 'clothing'])
@@ -84,15 +85,16 @@ router.get('/projects', verifyJWT, async (req, res) => {
         // u.on_loan_to_project_id IS NULL — единицы, переданные другому проекту
         // через colleagues-loan, не должны числиться у issuance-проекта (они
         // физически у другого проекта и считаются там как from_project).
-        `SELECT rcv.project_id AS pid, COUNT(DISTINCT u.id)::int AS cnt
+        `SELECT COALESCE(req.project_id, rcv.project_id) AS pid, COUNT(DISTINCT u.id)::int AS cnt
          FROM issuances iss
-         JOIN users rcv     ON rcv.id = iss.received_by AND rcv.project_id IS NOT NULL
+         JOIN users rcv     ON rcv.id = iss.received_by
          JOIN requests req  ON req.id = iss.request_id
          JOIN units u       ON u.id = ANY(req.unit_ids)
          WHERE u.status IN ('issued','overdue')
+           AND COALESCE(req.project_id, rcv.project_id) IS NOT NULL
            AND u.on_loan_to_project_id IS NULL
            AND NOT EXISTS (SELECT 1 FROM returns r WHERE r.issuance_id = iss.id)
-         GROUP BY rcv.project_id`),
+         GROUP BY COALESCE(req.project_id, rcv.project_id)`),
       db.query(
         `SELECT on_loan_to_project_id AS pid, COUNT(*)::int AS cnt
          FROM units WHERE on_loan_to_project_id IS NOT NULL
@@ -155,10 +157,11 @@ router.get('/projects/:id/units', verifyJWT, async (req, res) => {
                iss.issued_at
         FROM units u
         JOIN issuances iss ON true
-        JOIN users rcv     ON rcv.id = iss.received_by AND rcv.project_id = $1
+        JOIN users rcv     ON rcv.id = iss.received_by
         JOIN requests req  ON req.id = iss.request_id
         WHERE u.id = ANY(req.unit_ids)
           AND u.status IN ('issued','overdue')
+          AND COALESCE(req.project_id, rcv.project_id) = $1
           AND u.on_loan_to_project_id IS NULL
           AND NOT EXISTS (SELECT 1 FROM returns r WHERE r.issuance_id = iss.id)
 
@@ -290,12 +293,12 @@ router.post('/requests', verifyJWT, async (req, res) => {
     } else if (unit.status === 'issued' || unit.status === 'overdue') {
       // Активная выдача со склада → проект держателя через issuance.received_by.
       const { rows: issRows } = await db.query(
-        `SELECT rcv.project_id
+        `SELECT COALESCE(req.project_id, rcv.project_id) AS project_id
          FROM issuances iss
          JOIN users rcv     ON rcv.id = iss.received_by
          JOIN requests req  ON req.id = iss.request_id
          WHERE $1::uuid = ANY(req.unit_ids)
-           AND rcv.project_id IS NOT NULL
+           AND COALESCE(req.project_id, rcv.project_id) IS NOT NULL
            AND NOT EXISTS (SELECT 1 FROM returns r WHERE r.issuance_id = iss.id)
          ORDER BY iss.issued_at DESC LIMIT 1`,
         [unit_id]
@@ -346,11 +349,11 @@ router.post('/requests', verifyJWT, async (req, res) => {
        LEFT JOIN projects p ON p.id = u.project_id WHERE u.id = $1`,
       [req.user.id]
     )
-    const fromLabel = requester[0]
+    const requesterLabel = requester[0]
       ? [requester[0].project_name, requester[0].name].filter(Boolean).join(' · ')
       : ''
 
-    const notifyText = `Запрос единицы «${unit.name}»${fromLabel ? ` от ${fromLabel}` : ''}`
+    const notifyText = `Запрос единицы «${unit.name}»${requesterLabel ? ` от ${requesterLabel}` : ''}`
     const notifyPayload = {
       type: 'loan_request',
       text: notifyText,
@@ -376,7 +379,7 @@ router.post('/requests', verifyJWT, async (req, res) => {
     // ответственность другого проекта, а issuance со склада остаётся прежний).
     // Для own тоже шлём — склад полезно знать про межпроектные передачи.
     const whText = sourceLabel === 'from_warehouse'
-      ? `Запрос на передачу выданной единицы «${unit.name}»${fromLabel ? ` к ${fromLabel}` : ''}`
+      ? `Запрос на передачу выданной единицы «${unit.name}»${requesterLabel ? ` к ${requesterLabel}` : ''}`
       : notifyText
     const { rows: whAdmins } = await db.query(
       `SELECT id FROM users WHERE role IN ('warehouse_director','warehouse_deputy')`

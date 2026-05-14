@@ -13,7 +13,7 @@ import { getHomeRoute } from '../../utils/getHomeRoute'
 const ROLE_GROUPS = [
   { label: 'Склад', roles: ['warehouse_director', 'warehouse_deputy', 'warehouse_staff'], color: 'blue' },
   { label: 'Режиссура', roles: ['director', 'first_assistant_director', 'assistant_director', 'project_director', 'project_deputy', 'project_deputy_upload', 'set_admin'], color: 'purple' },
-  { label: 'Художники', roles: ['production_designer', 'art_director_assistant', 'decorator', 'props_master', 'props_assistant', 'costumer', 'costume_assistant', 'makeup_artist'], color: 'green' },
+  { label: 'Художники', roles: ['production_designer', 'art_director_assistant', 'decorator', 'props_master', 'props_assistant', 'costumer', 'costume_designer', 'costume_assistant', 'makeup_artist'], color: 'green' },
   { label: 'Трюки и эффекты', roles: ['stunt_coordinator', 'pyrotechnician'], color: 'orange' },
   { label: 'Камера и звук', roles: ['dop', 'gaffer', 'camera_mechanic', 'playback'], color: 'cyan' },
   { label: 'Прочие', roles: ['casting_director', 'casting_assistant', 'ams_assistant', 'location_manager', 'driver'], color: 'gray' },

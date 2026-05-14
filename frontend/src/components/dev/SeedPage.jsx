@@ -12,6 +12,7 @@ const ROLE_LABELS = {
   production_designer: 'Художник-постановщик',
   props_master:        'Реквизитор',
   costumer:            'Костюмер',
+  costume_designer:    'Художник по костюмам',
 }
 
 export default function SeedPage() {

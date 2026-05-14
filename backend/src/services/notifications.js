@@ -65,7 +65,13 @@ const noCellState = { last: null }
 async function notifyNoCellIfThresholdCrossed() {
   try {
     const { rows } = await db.query(
-      `SELECT COUNT(*)::int AS n FROM units WHERE cell_id IS NULL AND status = 'on_stock'`
+      `SELECT COUNT(*)::int AS n
+         FROM units
+        WHERE cell_id IS NULL
+          AND pavilion_id IS NULL
+          AND status = 'on_stock'
+          AND COALESCE(is_project_kept, false) = false
+          AND COALESCE(is_admin_stock, false) = false`
     )
     const curr = rows[0]?.n || 0
     const prev = noCellState.last

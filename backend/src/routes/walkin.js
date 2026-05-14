@@ -27,6 +27,7 @@ const WALKIN_RECEIVER_ROLES = new Set([
   'props_master',
   'props_assistant',
   'costumer',
+  'costume_designer',
   'costume_assistant',
   'decorator',
   'extra_worker',

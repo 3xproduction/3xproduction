@@ -92,8 +92,14 @@ export default function ProjectWarehouseHub() {
 
   return (
     <Layout>
-      <div style={{ padding: '24px 32px' }}>
-        <h1 style={{ fontSize: 22, fontWeight: 700, marginBottom: 14 }}>Склад проекта</h1>
+      <style>{`
+        @media (max-width: 768px) {
+          .pwh-page { padding: 16px 12px !important; }
+          .pwh-title { font-size: 20px !important; margin-bottom: 12px !important; }
+        }
+      `}</style>
+      <div className="pwh-page" style={{ padding: '24px 32px' }}>
+        <h1 className="pwh-title" style={{ fontSize: 22, fontWeight: 700, marginBottom: 14 }}>Склад проекта</h1>
 
         {/* Tabs — для директора склада показываем только один экран без вкладок */}
         {!colleaguesOnly && (
