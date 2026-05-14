@@ -63,10 +63,14 @@ echo "   [ ] Бэкап prod-БД сделан?"
 echo "   [ ] Эта версия проверена на staging?"
 echo "   [ ] Сейчас не пиковое время?"
 echo ""
-read -r -p " Продолжить деплой? (yes/no): " CONFIRM
-if [[ "$CONFIRM" != "yes" ]]; then
-  echo "Отменено."
-  exit 1
+if [[ "${PROD_DEPLOY_CONFIRMED:-}" == "yes" ]]; then
+  echo " Продолжить деплой? yes (guarded wrapper)"
+else
+  read -r -p " Продолжить деплой? (yes/no): " CONFIRM
+  if [[ "$CONFIRM" != "yes" ]]; then
+    echo "Отменено."
+    exit 1
+  fi
 fi
 
 echo ">>> [1/3] Сборка $IMAGE (--no-cache, BUILD_MODE=production)"

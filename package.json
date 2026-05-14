@@ -8,6 +8,7 @@
     "review:fast": "powershell -ExecutionPolicy Bypass -File scripts/claude-fast-review.ps1",
     "review:claude": "powershell -ExecutionPolicy Bypass -File scripts/claude-review.ps1",
     "gate": "powershell -ExecutionPolicy Bypass -File scripts/pre-deploy-check.ps1",
-    "deploy:staging:guarded": "powershell -ExecutionPolicy Bypass -File scripts/deploy-staging-guarded.ps1"
+    "deploy:staging:guarded": "powershell -ExecutionPolicy Bypass -File scripts/deploy-staging-guarded.ps1",
+    "deploy:prod:guarded": "powershell -ExecutionPolicy Bypass -File scripts/deploy-prod-guarded.ps1"
   }
 }
