@@ -48,6 +48,30 @@ const PROJECT_WRITER_ROLES = new Set([
 
 const WAREHOUSE_DIRECTOR_ROLES = new Set(['warehouse_director', 'warehouse_deputy'])
 const PROJECT_INTAKE_ROLES = new Set(['warehouse_director', 'warehouse_deputy'])
+
+async function createCellInSection(client, sectionId) {
+  const { rows: countRows } = await client.query(
+    `SELECT COUNT(*)::int AS n FROM cells WHERE section_id = $1`,
+    [sectionId]
+  )
+  let next = (countRows[0].n || 0) + 1
+  for (let attempt = 0; attempt < 10; attempt++) {
+    try {
+      const { rows } = await client.query(
+        `INSERT INTO cells (section_id, code) VALUES ($1, $2) RETURNING id`,
+        [sectionId, String(next)]
+      )
+      return rows[0].id
+    } catch (err) {
+      if (err.code === '23505') {
+        next += 1
+        continue
+      }
+      throw err
+    }
+  }
+  throw new Error('Could not allocate cell code')
+}
 // Р РѕР»Рё, РєРѕС‚РѕСЂС‹Рј СЂР°Р·СЂРµС€РµРЅРѕ РїРµСЂРµРјРµС‰Р°С‚СЊ РµРґРёРЅРёС†С‹ СЃ С†РµРЅС‚СЂР°Р»СЊРЅРѕРіРѕ СЃРєР»Р°РґР° РЅР° СЃРєР»Р°Рґ РїСЂРѕРµРєС‚Р°.
 // Р’РєР»СЋС‡Р°РµС‚ РєР»Р°РґРѕРІС‰РёРєРѕРІ (staff) вЂ” РїРѕ С‚СЂРµР±РѕРІР°РЅРёСЋ Р·Р°РєР°Р·С‡РёРєР°.
 const MOVE_TO_PROJECT_ROLES = new Set([
@@ -346,9 +370,15 @@ router.post('/intake-to-warehouse-photo', verifyJWT, upload.fields([
   { name: 'photos', maxCount: 10 },
 ]), async (req, res) => {
   if (!PROJECT_INTAKE_ROLES.has(req.user.role)) return res.status(403).json({ error: 'Forbidden' })
-  const { project_id, name, category, description, qty, condition, period, dimensions, valuation, source, comment } = req.body || {}
+  const {
+    project_id, name, category, description, qty, condition, period, dimensions,
+    valuation, source, comment, warehouse_id, section_id, cell_id,
+  } = req.body || {}
   if (!project_id) return res.status(400).json({ error: 'project_id required' })
   if (!name || !category) return res.status(400).json({ error: 'Name and category required' })
+  for (const [field, value] of Object.entries({ warehouse_id, section_id, cell_id })) {
+    if (value && !UUID_RE.test(String(value))) return res.status(400).json({ error: `${field} is invalid` })
+  }
   const photoFiles = [
     ...((req.files && req.files.photo) || []),
     ...((req.files && req.files.photos) || []),
@@ -362,6 +392,66 @@ router.post('/intake-to-warehouse-photo', verifyJWT, upload.fields([
   try {
     await client.query('BEGIN')
 
+    let targetWarehouseId = warehouse_id || null
+    let targetCellId = cell_id || null
+
+    if (targetWarehouseId) {
+      const { rows: whRows } = await client.query(
+        `SELECT id FROM warehouses WHERE id = $1`,
+        [targetWarehouseId]
+      )
+      if (!whRows.length) {
+        await client.query('ROLLBACK')
+        return res.status(400).json({ error: 'Warehouse not found' })
+      }
+    }
+
+    if (section_id) {
+      const { rows: secRows } = await client.query(
+        `SELECT id, warehouse_id, type FROM warehouse_sections WHERE id = $1`,
+        [section_id]
+      )
+      if (!secRows.length) {
+        await client.query('ROLLBACK')
+        return res.status(400).json({ error: 'Section not found' })
+      }
+      const section = secRows[0]
+      if (section.type === 'hall') {
+        await client.query('ROLLBACK')
+        return res.status(400).json({ error: 'Cannot place a unit directly into a hall' })
+      }
+      if (targetWarehouseId && String(section.warehouse_id) !== String(targetWarehouseId)) {
+        await client.query('ROLLBACK')
+        return res.status(400).json({ error: 'Section does not belong to warehouse' })
+      }
+      targetWarehouseId = section.warehouse_id
+      if (!targetCellId) targetCellId = await createCellInSection(client, section.id)
+    }
+
+    if (targetCellId) {
+      const { rows: cellRows } = await client.query(
+        `SELECT c.id, c.section_id, sec.warehouse_id
+           FROM cells c
+           JOIN warehouse_sections sec ON sec.id = c.section_id
+          WHERE c.id = $1`,
+        [targetCellId]
+      )
+      if (!cellRows.length) {
+        await client.query('ROLLBACK')
+        return res.status(400).json({ error: 'Cell not found' })
+      }
+      const targetCell = cellRows[0]
+      if (section_id && String(targetCell.section_id) !== String(section_id)) {
+        await client.query('ROLLBACK')
+        return res.status(400).json({ error: 'Cell does not belong to section' })
+      }
+      if (targetWarehouseId && String(targetCell.warehouse_id) !== String(targetWarehouseId)) {
+        await client.query('ROLLBACK')
+        return res.status(400).json({ error: 'Cell does not belong to warehouse' })
+      }
+      targetWarehouseId = targetCell.warehouse_id
+    }
+
     const catPrefix = String(category || 'XX').slice(0, 3).toUpperCase()
     const serial = `${catPrefix}-${crypto.randomUUID().slice(0, 8).toUpperCase()}`
     const safeQty = Number.isFinite(Number(qty)) && Number(qty) > 0 ? Number(qty) : 1
@@ -371,8 +461,8 @@ router.post('/intake-to-warehouse-photo', verifyJWT, upload.fields([
 
     const { rows: ins } = await client.query(
       `INSERT INTO units (name, category, serial, qty, description, condition, period, dimensions, valuation, source,
-                          status, is_project_kept, project_id, created_by, created_via)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,'on_stock',false,NULL,$11,'project_intake')
+                          warehouse_id, cell_id, status, is_project_kept, project_id, created_by, created_via)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,'on_stock',false,NULL,$13,'project_intake')
        RETURNING *`,
       [
         String(name).trim().slice(0, 200),
@@ -385,6 +475,8 @@ router.post('/intake-to-warehouse-photo', verifyJWT, upload.fields([
         dimensions ? String(dimensions).slice(0, 200) : null,
         valuation ? Number(valuation) : null,
         projectSource,
+        targetWarehouseId,
+        targetCellId,
         req.user.id,
       ]
     )

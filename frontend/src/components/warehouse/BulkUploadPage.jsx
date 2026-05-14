@@ -11,10 +11,10 @@
 // НЕ заполняется AI: valuation, dimensions.
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useLocation, useNavigate } from 'react-router-dom'
-import { Camera, Trash2, AlertCircle, Check, Loader2, GitMerge, X, Sparkles } from 'lucide-react'
+import { Camera, Trash2, AlertCircle, Check, Loader2, GitMerge, X, Sparkles, MapPin } from 'lucide-react'
 import WarehouseLayout from './WarehouseLayout'
 import Button from '../shared/Button'
-import { projectUnits as projectUnitsApi, units as unitsApi } from '../../services/api'
+import { projectUnits as projectUnitsApi, units as unitsApi, warehouses as warehousesApi } from '../../services/api'
 import { ACTIVE_CATEGORIES, categoryLabel } from '../../constants/categories'
 import { CLOTHING_SIZES_INT, CLOTHING_SIZES_RU, SHOE_SIZES, IS_SIZED_CAT, IS_SHOES_CAT } from '../../constants/clothingSizes'
 import { removeBgWhite, preloadBgModel, describeBgError, describeBgSkipped } from '../../utils/removeBg'
@@ -31,6 +31,7 @@ const MAX_PHOTOS_PER_CARD = 5
 // добавляются.
 const MAX_PHOTOS_FOR_MERGE_SOURCE = 1
 const UNDO_TIMEOUT_MS = 6000
+const SECTION_TYPE_LABEL = { shelf: 'Полка', hanger: 'Вешалка', place: 'Место' }
 
 async function compressImage(file) {
   if (file.type === 'image/jpeg' && file.size < 500_000) return file
@@ -97,6 +98,15 @@ function uniqueById(items) {
     out.push(item)
   }
   return out
+}
+
+function sectionStorageLabel(section, allSections = []) {
+  if (!section) return ''
+  const typeLabel = SECTION_TYPE_LABEL[section.type || 'shelf'] || 'Место'
+  const parent = section.parent_section_id
+    ? allSections.find(s => String(s.id) === String(section.parent_section_id))
+    : null
+  return parent ? `${parent.name} / ${typeLabel} ${section.name}` : `${typeLabel} ${section.name}`
 }
 
 function defaultSizeState(category) {
@@ -225,6 +235,27 @@ const css = `
   background: var(--bg-secondary); padding: 6px 12px;
   border-radius: 8px;
 }
+.bulk-placement {
+  display: grid;
+  gap: 10px;
+  margin: 0 0 14px;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-card);
+  background: var(--white);
+}
+.bulk-placement-title {
+  display: flex; align-items: center; gap: 8px;
+  font-size: 13px; font-weight: 700; color: var(--text);
+}
+.bulk-placement-grid {
+  display: grid;
+  grid-template-columns: minmax(180px, 260px) minmax(220px, 360px);
+  gap: 10px;
+  align-items: end;
+}
+.bulk-placement-field { min-width: 0; }
+.bulk-placement-note { font-size: 12px; color: var(--muted); }
 
 .bulk-merge-info {
   display: flex; align-items: center; gap: 8px;
@@ -527,6 +558,8 @@ const css = `
   .bulk-toast {
     bottom: calc(140px + env(safe-area-inset-bottom, 0px));
   }
+  .bulk-placement { margin-left: 0; margin-right: 0; }
+  .bulk-placement-grid { grid-template-columns: 1fr; }
 }
 `
 
@@ -544,6 +577,11 @@ export default function BulkUploadPage() {
   const [targetMode, setTargetMode] = useState('warehouse')
   const [projects, setProjects] = useState([])
   const [projectId, setProjectId] = useState('')
+  const [warehouses, setWarehouses] = useState([])
+  const [placementWarehouseId, setPlacementWarehouseId] = useState('')
+  const [placementSections, setPlacementSections] = useState([])
+  const [placementSectionId, setPlacementSectionId] = useState('')
+  const [placementLoading, setPlacementLoading] = useState(false)
 
   useEffect(() => {
     projectUnitsApi.allProjects()
@@ -554,6 +592,35 @@ export default function BulkUploadPage() {
       })
       .catch(() => setProjects([]))
   }, [])
+
+  useEffect(() => {
+    if (!projectIntakeMode) return
+    warehousesApi.list()
+      .then(r => setWarehouses(r.warehouses || []))
+      .catch(() => setWarehouses([]))
+  }, [projectIntakeMode])
+
+  useEffect(() => {
+    setPlacementSections([])
+    setPlacementSectionId('')
+    if (!projectIntakeMode || !placementWarehouseId) {
+      setPlacementLoading(false)
+      return
+    }
+    let cancelled = false
+    setPlacementLoading(true)
+    warehousesApi.cells(placementWarehouseId)
+      .then(r => {
+        if (!cancelled) setPlacementSections(r.sections || [])
+      })
+      .catch(() => {
+        if (!cancelled) setPlacementSections([])
+      })
+      .finally(() => {
+        if (!cancelled) setPlacementLoading(false)
+      })
+    return () => { cancelled = true }
+  }, [projectIntakeMode, placementWarehouseId])
 
   // Тоггл «Сделать белый фон» — общий ключ localStorage с другими модалками.
   // Каждое распознанное фото перед сохранением прогоняется через rembg-sidecar.
@@ -897,6 +964,12 @@ export default function BulkUploadPage() {
     return { total: items.length, ready, recognizing, failed, saved }
   }, [items])
   const selectedProject = projects.find(p => String(p.id) === String(projectId))
+  const selectedWarehouse = warehouses.find(w => String(w.id) === String(placementWarehouseId))
+  const storageSections = placementSections.filter(s => ['shelf', 'hanger', 'place'].includes(s.type || 'shelf'))
+  const selectedPlacementSection = storageSections.find(s => String(s.id) === String(placementSectionId))
+  const placementLabel = projectIntakeMode
+    ? [selectedWarehouse?.name, sectionStorageLabel(selectedPlacementSection, placementSections)].filter(Boolean).join(' · ')
+    : ''
   const existingCount = items.filter(x => x.status === 'ready' && x.existingUnit).length
   const newCount = items.filter(x => x.status === 'ready' && !x.existingUnit && x.name.trim().length >= 1).length
 
@@ -949,6 +1022,8 @@ export default function BulkUploadPage() {
             fd.append('valuation', it.valuation ? String(it.valuation) : '')
             fd.append('source', projectName ? `Принято от проекта: ${projectName}` : 'Принято от проекта')
             fd.append('comment', 'Без предыдущей выдачи')
+            if (placementWarehouseId) fd.append('warehouse_id', placementWarehouseId)
+            if (placementSectionId) fd.append('section_id', placementSectionId)
             for (const f of it.files) fd.append('photos', f)
             const { unit } = await projectUnitsApi.intakeToWarehousePhotosBulk(fd)
             updateItem(it.temp_id, { status: 'saved', unit_id: unit?.id })
@@ -1126,6 +1201,53 @@ export default function BulkUploadPage() {
           )}
         </div>
 
+        {projectIntakeMode && (
+          <div className="bulk-placement">
+            <div className="bulk-placement-title">
+              <MapPin size={16} />
+              Размещение новых единиц
+            </div>
+            <div className="bulk-placement-grid">
+              <div className="bulk-placement-field">
+                <div className="bulk-field-label">Склад</div>
+                <select
+                  className="bulk-select"
+                  value={placementWarehouseId}
+                  onChange={e => {
+                    setPlacementWarehouseId(e.target.value)
+                    setPlacementSectionId('')
+                  }}
+                  disabled={submitting || warehouses.length === 0}
+                >
+                  <option value="">Без склада</option>
+                  {warehouses.map(warehouse => (
+                    <option key={warehouse.id} value={warehouse.id}>{warehouse.name}</option>
+                  ))}
+                </select>
+              </div>
+              <div className="bulk-placement-field">
+                <div className="bulk-field-label">Полка / вешалка / место</div>
+                <select
+                  className="bulk-select"
+                  value={placementSectionId}
+                  onChange={e => setPlacementSectionId(e.target.value)}
+                  disabled={submitting || !placementWarehouseId || placementLoading || storageSections.length === 0}
+                >
+                  <option value="">Без полки</option>
+                  {storageSections.map(section => (
+                    <option key={section.id} value={section.id}>
+                      {sectionStorageLabel(section, placementSections)}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            </div>
+            {placementWarehouseId && !placementLoading && storageSections.length === 0 && (
+              <div className="bulk-placement-note">На выбранном складе пока нет полок, вешалок или мест.</div>
+            )}
+          </div>
+        )}
+
         {autoMerged > 0 && !autoMergedDismissed && (
           <div className="bulk-merge-info">
             <Check size={16} />
@@ -1189,6 +1311,7 @@ export default function BulkUploadPage() {
                     Будет создано <b>{newCount}</b> {pluralize(newCount, ['единица', 'единицы', 'единиц'])}
                     {existingCount > 0 ? <> · выбрано из базы <b>{existingCount}</b></> : null}
                     {(targetMode === 'project' || projectIntakeMode) && selectedProject ? <> · {selectedProject.name}</> : null}
+                    {placementLabel ? <> · {placementLabel}</> : null}
                   </>}
             </div>
             <Button
