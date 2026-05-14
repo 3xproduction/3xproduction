@@ -17,6 +17,19 @@ if ($SkipFrontend) { $gateArgs += "-SkipFrontend" }
 & powershell @gateArgs
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
+$GitBash = "C:\Program Files\Git\bin\bash.exe"
+if (Test-Path -LiteralPath $GitBash) {
+  $Bash = $GitBash
+}
+else {
+  $BashCommand = Get-Command bash -ErrorAction SilentlyContinue
+  if (-not $BashCommand) {
+    Write-Error "Git Bash is required for deploy scripts."
+    exit 1
+  }
+  $Bash = $BashCommand.Source
+}
+
 Write-Host "Gate passed. Deploying staging version $Version..."
-& bash (Join-Path $PSScriptRoot "deploy-staging.sh") $Version
+& $Bash (Join-Path $PSScriptRoot "deploy-staging.sh") $Version
 exit $LASTEXITCODE
