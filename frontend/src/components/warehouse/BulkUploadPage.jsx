@@ -10,7 +10,7 @@
 // Что заполняется AI: name, category, period, description.
 // НЕ заполняется AI: valuation, dimensions.
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { useLocation, useNavigate } from 'react-router-dom'
 import { Camera, Trash2, AlertCircle, Check, Loader2, GitMerge, X, Sparkles } from 'lucide-react'
 import WarehouseLayout from './WarehouseLayout'
 import Button from '../shared/Button'
@@ -532,8 +532,10 @@ const css = `
 
 export default function BulkUploadPage() {
   const navigate = useNavigate()
+  const location = useLocation()
   const fileInputRef = useRef()
   const toast = useToast()
+  const projectIntakeMode = location.pathname === '/project-intake'
 
   // items: [{ temp_id, files: File[], status, name, category, qty, period, description, ... }]
   const [items, setItems] = useState([])
@@ -900,7 +902,7 @@ export default function BulkUploadPage() {
 
   const canSave = !submitting
     && stats.recognizing === 0
-    && (targetMode !== 'project' || Boolean(projectId))
+    && ((targetMode !== 'project' && !projectIntakeMode) || Boolean(projectId))
     && items.some(x => x.status === 'ready' && (x.existingUnit || x.name.trim().length >= 1))
 
   async function handleSave() {
@@ -921,13 +923,35 @@ export default function BulkUploadPage() {
               fd.append('type', 'stock')
               await unitsApi.uploadPhotoBulk(it.existingUnit.id, fd)
             }
-            if (targetMode === 'project') {
+            if (projectIntakeMode) {
+              await projectUnitsApi.recordProjectIntakeBulk(
+                it.existingUnit.id,
+                projectId,
+                'Принято от проекта без предыдущей выдачи'
+              )
+            } else if (targetMode === 'project') {
               if (!movedExistingIds.has(it.existingUnit.id)) {
                 await projectUnitsApi.moveToProjectBulk([it.existingUnit.id], projectId)
                 movedExistingIds.add(it.existingUnit.id)
               }
             }
             updateItem(it.temp_id, { status: 'saved', unit_id: it.existingUnit.id })
+          } else if (projectIntakeMode) {
+            const fd = new FormData()
+            const projectName = selectedProject?.name || ''
+            fd.append('project_id', projectId)
+            fd.append('name', it.name.trim())
+            fd.append('category', it.category || 'other')
+            fd.append('qty', String(Math.max(1, Number(it.qty) || 1)))
+            fd.append('description', it.description?.trim() || '')
+            fd.append('period', it.period?.trim() || '')
+            fd.append('dimensions', it.dimensions?.trim() || '')
+            fd.append('valuation', it.valuation ? String(it.valuation) : '')
+            fd.append('source', projectName ? `Принято от проекта: ${projectName}` : 'Принято от проекта')
+            fd.append('comment', 'Без предыдущей выдачи')
+            for (const f of it.files) fd.append('photos', f)
+            const { unit } = await projectUnitsApi.intakeToWarehousePhotosBulk(fd)
+            updateItem(it.temp_id, { status: 'saved', unit_id: unit?.id })
           } else if (targetMode === 'project') {
             const fd = new FormData()
             fd.append('project_id', projectId)
@@ -981,14 +1005,16 @@ export default function BulkUploadPage() {
       && !items.some(x => x.status === 'error')) {
       if (successHandledRef.current) return
       successHandledRef.current = true
-      toast?.('Склад успешно пополнен', 'success')
-      const target = targetMode === 'project'
-        ? `/production/project-warehouse?tab=colleagues&project_id=${encodeURIComponent(projectId)}`
-        : '/units'
+      toast?.(projectIntakeMode ? 'Принято от проекта' : 'Склад успешно пополнен', 'success')
+      const target = projectIntakeMode
+        ? '/units'
+        : targetMode === 'project'
+          ? `/production/project-warehouse?tab=colleagues&project_id=${encodeURIComponent(projectId)}`
+          : '/units'
       const t = setTimeout(() => navigate(target), 1200)
       return () => clearTimeout(t)
     }
-  }, [items, submitting, navigate, targetMode, projectId, toast])
+  }, [items, submitting, navigate, targetMode, projectId, toast, projectIntakeMode])
 
   const mergeFromItem = mergeFromId ? items.find(x => x.temp_id === mergeFromId) : null
 
@@ -1007,13 +1033,22 @@ export default function BulkUploadPage() {
       <div className="bulk-page">
         <div className="bulk-head">
           <button className="bulk-back" onClick={() => navigate(-1)} aria-label="Назад">←</button>
-          <h1 className="bulk-title">Пакетное пополнение</h1>
+          <h1 className="bulk-title">{projectIntakeMode ? 'Приём от проекта' : 'Пакетное пополнение'}</h1>
         </div>
         <div className="bulk-sub">
-          Каждое фото — отдельная карточка. AI попытается автоматически объединить
-          одинаковые предметы по названию. Если AI не справился — перетащите карточку
-          на главную (на десктопе) или используйте кнопку <b>«Объединить»</b> на самой
-          карточке (на телефоне). Сумма и размеры заполняются вручную потом.
+          {projectIntakeMode ? (
+            <>
+              Выберите проект, который передал вещи на склад. Каждое фото станет карточкой
+              складской единицы, а в истории сохранится приём от проекта без предыдущей выдачи.
+            </>
+          ) : (
+            <>
+              Каждое фото — отдельная карточка. AI попытается автоматически объединить
+              одинаковые предметы по названию. Если AI не справился — перетащите карточку
+              на главную (на десктопе) или используйте кнопку <b>«Объединить»</b> на самой
+              карточке (на телефоне). Сумма и размеры заполняются вручную потом.
+            </>
+          )}
         </div>
 
         <div className="bulk-actions">
@@ -1031,39 +1066,41 @@ export default function BulkUploadPage() {
             <Sparkles size={14} color={whiteBg ? 'var(--accent)' : 'var(--muted)'} strokeWidth={1.6} />
             <span>Белый фон</span>
           </label>
-          <div style={{
-            display: 'inline-flex', alignItems: 'center', gap: 6, height: 44,
-            padding: 4, border: '1px solid var(--border)', borderRadius: 'var(--radius-btn)',
-            background: 'var(--white)',
-          }}>
-            <button
-              type="button"
-              onClick={() => setTargetMode('warehouse')}
-              disabled={submitting}
-              style={{
-                height: 34, padding: '0 10px', border: 0, borderRadius: 7,
-                background: targetMode === 'warehouse' ? 'var(--ink-950)' : 'transparent',
-                color: targetMode === 'warehouse' ? '#fff' : 'var(--text)',
-                cursor: submitting ? 'default' : 'pointer', fontWeight: 600,
-              }}
-            >
-              Основной склад
-            </button>
-            <button
-              type="button"
-              onClick={() => setTargetMode('project')}
-              disabled={submitting}
-              style={{
-                height: 34, padding: '0 10px', border: 0, borderRadius: 7,
-                background: targetMode === 'project' ? 'var(--ink-950)' : 'transparent',
-                color: targetMode === 'project' ? '#fff' : 'var(--text)',
-                cursor: submitting ? 'default' : 'pointer', fontWeight: 600,
-              }}
-            >
-              Склад проекта
-            </button>
-          </div>
-          {targetMode === 'project' && (
+          {!projectIntakeMode && (
+            <div style={{
+              display: 'inline-flex', alignItems: 'center', gap: 6, height: 44,
+              padding: 4, border: '1px solid var(--border)', borderRadius: 'var(--radius-btn)',
+              background: 'var(--white)',
+            }}>
+              <button
+                type="button"
+                onClick={() => setTargetMode('warehouse')}
+                disabled={submitting}
+                style={{
+                  height: 34, padding: '0 10px', border: 0, borderRadius: 7,
+                  background: targetMode === 'warehouse' ? 'var(--ink-950)' : 'transparent',
+                  color: targetMode === 'warehouse' ? '#fff' : 'var(--text)',
+                  cursor: submitting ? 'default' : 'pointer', fontWeight: 600,
+                }}
+              >
+                Основной склад
+              </button>
+              <button
+                type="button"
+                onClick={() => setTargetMode('project')}
+                disabled={submitting}
+                style={{
+                  height: 34, padding: '0 10px', border: 0, borderRadius: 7,
+                  background: targetMode === 'project' ? 'var(--ink-950)' : 'transparent',
+                  color: targetMode === 'project' ? '#fff' : 'var(--text)',
+                  cursor: submitting ? 'default' : 'pointer', fontWeight: 600,
+                }}
+              >
+                Склад проекта
+              </button>
+            </div>
+          )}
+          {(targetMode === 'project' || projectIntakeMode) && (
             <select
               value={projectId}
               onChange={e => setProjectId(e.target.value)}
@@ -1110,7 +1147,9 @@ export default function BulkUploadPage() {
         {items.length === 0 ? (
           <div className="bulk-empty">
             <b>Пока пусто</b>
-            Тапните «Выбрать фото» — можно сразу несколько штук. Каждая карточка появится отдельно.
+            {projectIntakeMode
+              ? 'Выберите проект-источник и добавьте фото вещей, которые он передаёт на склад.'
+              : 'Тапните «Выбрать фото» — можно сразу несколько штук. Каждая карточка появится отдельно.'}
           </div>
         ) : (
           <div className="bulk-grid">
@@ -1149,7 +1188,7 @@ export default function BulkUploadPage() {
                 : <>
                     Будет создано <b>{newCount}</b> {pluralize(newCount, ['единица', 'единицы', 'единиц'])}
                     {existingCount > 0 ? <> · выбрано из базы <b>{existingCount}</b></> : null}
-                    {targetMode === 'project' && selectedProject ? <> · {selectedProject.name}</> : null}
+                    {(targetMode === 'project' || projectIntakeMode) && selectedProject ? <> · {selectedProject.name}</> : null}
                   </>}
             </div>
             <Button
@@ -1158,7 +1197,7 @@ export default function BulkUploadPage() {
               disabled={!canSave}
               onClick={handleSave}
             >
-              Сохранить
+              {projectIntakeMode ? 'Принять на склад' : 'Сохранить'}
             </Button>
           </div>
         )}

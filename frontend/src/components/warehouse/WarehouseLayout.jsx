@@ -872,6 +872,11 @@ export default function WarehouseLayout({ children }) {
                     <Images size={16} /> Пакетное пополнение
                   </button>
                   {canWalkin && (
+                    <button className="wl-qa-item" onClick={() => quick('/project-intake')}>
+                      <Package size={16} /> Принять от проекта
+                    </button>
+                  )}
+                  {canWalkin && (
                     <button className="wl-qa-item" onClick={() => quick('/walkin/new')}>
                       <Zap size={16} /> Быстрая выдача
                     </button>
@@ -1054,6 +1059,12 @@ export default function WarehouseLayout({ children }) {
                 <div className="wl-qa-sheet-icon"><Images size={18} /></div>
                 Пакетное пополнение
               </button>
+              {canWalkin && (
+                <button className="wl-qa-sheet-item" onClick={() => quick('/project-intake')}>
+                  <div className="wl-qa-sheet-icon"><Package size={18} /></div>
+                  Принять от проекта
+                </button>
+              )}
               {canWalkin && (
                 <button className="wl-qa-sheet-item" onClick={() => quick('/walkin/new')}>
                   <div className="wl-qa-sheet-icon"><Zap size={18} /></div>

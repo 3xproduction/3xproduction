@@ -47,6 +47,7 @@ const PROJECT_WRITER_ROLES = new Set([
 ])
 
 const WAREHOUSE_DIRECTOR_ROLES = new Set(['warehouse_director', 'warehouse_deputy'])
+const PROJECT_INTAKE_ROLES = new Set(['warehouse_director', 'warehouse_deputy'])
 // Р РѕР»Рё, РєРѕС‚РѕСЂС‹Рј СЂР°Р·СЂРµС€РµРЅРѕ РїРµСЂРµРјРµС‰Р°С‚СЊ РµРґРёРЅРёС†С‹ СЃ С†РµРЅС‚СЂР°Р»СЊРЅРѕРіРѕ СЃРєР»Р°РґР° РЅР° СЃРєР»Р°Рґ РїСЂРѕРµРєС‚Р°.
 // Р’РєР»СЋС‡Р°РµС‚ РєР»Р°РґРѕРІС‰РёРєРѕРІ (staff) вЂ” РїРѕ С‚СЂРµР±РѕРІР°РЅРёСЋ Р·Р°РєР°Р·С‡РёРєР°.
 const MOVE_TO_PROJECT_ROLES = new Set([
@@ -334,6 +335,136 @@ router.post('/create-for-project-photo', verifyJWT, upload.fields([
     res.status(500).json({ error: 'Server error' })
   } finally {
     client.release()
+  }
+})
+
+// POST /project-units/intake-to-warehouse-photo
+// Director/deputy creates a regular warehouse unit from a project handoff
+// when there was no previous issuance in the database.
+router.post('/intake-to-warehouse-photo', verifyJWT, upload.fields([
+  { name: 'photo', maxCount: 1 },
+  { name: 'photos', maxCount: 10 },
+]), async (req, res) => {
+  if (!PROJECT_INTAKE_ROLES.has(req.user.role)) return res.status(403).json({ error: 'Forbidden' })
+  const { project_id, name, category, description, qty, condition, period, dimensions, valuation, source, comment } = req.body || {}
+  if (!project_id) return res.status(400).json({ error: 'project_id required' })
+  if (!name || !category) return res.status(400).json({ error: 'Name and category required' })
+  const photoFiles = [
+    ...((req.files && req.files.photo) || []),
+    ...((req.files && req.files.photos) || []),
+  ]
+  if (!photoFiles.length) return res.status(400).json({ error: 'Photo required' })
+
+  const { rows: proj } = await db.query(`SELECT id, name FROM projects WHERE id = $1`, [project_id])
+  if (!proj.length) return res.status(404).json({ error: 'Project not found' })
+
+  const client = await db.getClient()
+  try {
+    await client.query('BEGIN')
+
+    const catPrefix = String(category || 'XX').slice(0, 3).toUpperCase()
+    const serial = `${catPrefix}-${crypto.randomUUID().slice(0, 8).toUpperCase()}`
+    const safeQty = Number.isFinite(Number(qty)) && Number(qty) > 0 ? Number(qty) : 1
+    const projectSource = source
+      ? String(source).slice(0, 120)
+      : `Project intake: ${proj[0].name}`.slice(0, 120)
+
+    const { rows: ins } = await client.query(
+      `INSERT INTO units (name, category, serial, qty, description, condition, period, dimensions, valuation, source,
+                          status, is_project_kept, project_id, created_by, created_via)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,'on_stock',false,NULL,$11,'project_intake')
+       RETURNING *`,
+      [
+        String(name).trim().slice(0, 200),
+        String(category).trim(),
+        serial,
+        safeQty,
+        description ? String(description).slice(0, 1000) : null,
+        condition ? String(condition).slice(0, 120) : null,
+        period ? String(period).slice(0, 80) : null,
+        dimensions ? String(dimensions).slice(0, 200) : null,
+        valuation ? Number(valuation) : null,
+        projectSource,
+        req.user.id,
+      ]
+    )
+    const unit = ins[0]
+
+    const photos = []
+    for (const file of photoFiles) {
+      const { url, thumbUrl } = await uploadImageWithThumb(file.buffer, file.originalname || 'photo.jpg', 'units')
+      photos.push({ url, thumbUrl })
+      await client.query(
+        `INSERT INTO unit_photos (unit_id, url, thumb_url, type) VALUES ($1,$2,$3,'stock')`,
+        [unit.id, url, thumbUrl]
+      )
+    }
+
+    await client.query(
+      `INSERT INTO unit_history (unit_id, action, user_id, project_id, notes)
+       VALUES ($1,$2,$3,$4,$5)`,
+      [
+        unit.id,
+        '\u041f\u0440\u0438\u043d\u044f\u0442\u043e \u043e\u0442 \u043f\u0440\u043e\u0435\u043a\u0442\u0430',
+        req.user.id,
+        project_id,
+        comment ? String(comment).slice(0, 500) : null,
+      ]
+    )
+
+    await client.query('COMMIT')
+    res.json({
+      ok: true,
+      unit: {
+        ...unit,
+        photo_url: photos[0]?.url || null,
+        photo_thumb_url: photos[0]?.thumbUrl || null,
+      },
+      project: proj[0],
+    })
+  } catch (err) {
+    await client.query('ROLLBACK').catch(() => {})
+    console.error('project-unit intake-to-warehouse-photo:', err)
+    res.status(500).json({ error: 'Server error' })
+  } finally {
+    client.release()
+  }
+})
+
+// POST /project-units/:id/record-intake
+// Adds an audit entry when a project handoff is matched to an existing unit.
+router.post('/:id/record-intake', verifyJWT, async (req, res) => {
+  if (!PROJECT_INTAKE_ROLES.has(req.user.role)) return res.status(403).json({ error: 'Forbidden' })
+  const { project_id, comment } = req.body || {}
+  if (!project_id) return res.status(400).json({ error: 'project_id required' })
+  try {
+    const { rows: proj } = await db.query(`SELECT id, name FROM projects WHERE id = $1`, [project_id])
+    if (!proj.length) return res.status(404).json({ error: 'Project not found' })
+    const { rows } = await db.query(
+      `SELECT id, status, is_project_kept, is_admin_stock FROM units WHERE id = $1`,
+      [req.params.id]
+    )
+    if (!rows.length) return res.status(404).json({ error: 'Unit not found' })
+    const unit = rows[0]
+    if (unit.is_admin_stock) return res.status(400).json({ error: 'Admin stock is not supported here' })
+    if (unit.is_project_kept || unit.status !== 'on_stock') {
+      return res.status(400).json({ error: 'Only common on-stock units can be matched' })
+    }
+    await db.query(
+      `INSERT INTO unit_history (unit_id, action, user_id, project_id, notes)
+       VALUES ($1,$2,$3,$4,$5)`,
+      [
+        req.params.id,
+        '\u041f\u0440\u0438\u043d\u044f\u0442\u043e \u043e\u0442 \u043f\u0440\u043e\u0435\u043a\u0442\u0430',
+        req.user.id,
+        project_id,
+        comment ? String(comment).slice(0, 500) : null,
+      ]
+    )
+    res.json({ ok: true, project: proj[0] })
+  } catch (err) {
+    console.error('project-unit record-intake:', err)
+    res.status(500).json({ error: 'Server error' })
   }
 })
 

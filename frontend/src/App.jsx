@@ -224,6 +224,7 @@ function App() {
         <Route path="/dashboard"               element={<WarehouseRoute><DashboardPage /></WarehouseRoute>} />
         <Route path="/units"                   element={<WarehouseRoute><UnitsPage /></WarehouseRoute>} />
         <Route path="/units/bulk"              element={<WarehouseRoute><BulkUploadPage /></WarehouseRoute>} />
+        <Route path="/project-intake"          element={<WarehouseRoute><BulkUploadPage /></WarehouseRoute>} />
         <Route path="/units/:id"               element={<UnitRedirect />} />
         <Route path="/admin-stock"             element={<WarehouseRoute><AdminStockPage /></WarehouseRoute>} />
         <Route path="/cells"                                     element={<WarehouseRoute><CellsIndex /></WarehouseRoute>} />
