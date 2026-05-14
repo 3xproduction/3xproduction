@@ -2,6 +2,7 @@
   [Parameter(Mandatory = $true, Position = 0)]
   [string]$Version,
   [switch]$RunClaude,
+  [switch]$SkipClaude,
   [switch]$SkipFrontend
 )
 
@@ -11,6 +12,7 @@ Set-Location $Root
 
 $gateArgs = @("-ExecutionPolicy", "Bypass", "-File", (Join-Path $PSScriptRoot "pre-deploy-check.ps1"))
 if ($RunClaude) { $gateArgs += "-RunClaude" }
+if ($SkipClaude) { $gateArgs += "-SkipClaude" }
 if ($SkipFrontend) { $gateArgs += "-SkipFrontend" }
 & powershell @gateArgs
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
