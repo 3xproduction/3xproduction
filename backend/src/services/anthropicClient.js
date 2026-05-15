@@ -17,6 +17,17 @@ function createAnthropicClient(options = {}) {
   const baseURL = (process.env.ANTHROPIC_BASE_URL || process.env.ANTHROPIC_PROXY_URL || DEFAULT_ANTHROPIC_BASE_URL).trim()
   if (baseURL) config.baseURL = baseURL
 
+  if (!createAnthropicClient._logged) {
+    createAnthropicClient._logged = true
+    let host = baseURL
+    try { host = new URL(baseURL).host } catch { /* keep raw */ }
+    console.log('[anthropic] effective baseURL host=%s envBASE=%s envPROXY=%s hasKey=%s',
+      host,
+      process.env.ANTHROPIC_BASE_URL ? 'set' : 'unset',
+      process.env.ANTHROPIC_PROXY_URL ? 'set' : 'unset',
+      !!process.env.ANTHROPIC_API_KEY)
+  }
+
   return new Anthropic(config)
 }
 
