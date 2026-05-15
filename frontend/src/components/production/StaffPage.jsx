@@ -225,7 +225,12 @@ export default function StaffPage() {
                     <div style={{ fontWeight: 500, fontSize: 14 }}>{u.name}</div>
                     <div style={{ fontSize: 12, color: 'var(--muted)', marginTop: 2, display: 'flex', gap: 8, flexWrap: 'wrap' }}>
                       <span>{roleDef.label || u.role}</span>
-                      {u.project_name && <span>· {u.project_name}</span>}
+                      {(() => {
+                        const projs = (u.project_names && u.project_names.length)
+                          ? u.project_names
+                          : (u.project_name ? [u.project_name] : [])
+                        return projs.length > 0 ? <span>· {projs.join(', ')}</span> : null
+                      })()}
                     </div>
                   </div>
 

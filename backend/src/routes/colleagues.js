@@ -8,6 +8,7 @@ const db = require('../db')
 const { verifyJWT } = require('../middleware/auth')
 const { createNotification } = require('../services/notifications')
 const { unitMissingFields, canSeeMissingUnitData } = require('../utils/unitMissingFields')
+const { getUserProjectIds } = require('../utils/userProjects')
 
 // Роли, которые могут ВЫДАВАТЬ единицы чужому проекту (responder в заявке).
 // Делим по категориям: реквизит vs костюмы.
@@ -64,11 +65,15 @@ function canRespondToLoanRequest(user, request) {
 router.get('/projects', verifyJWT, async (req, res) => {
   try {
     const myPid = req.user.project_id
+    // «Чужие» = все проекты, кроме ВСЕХ проектов пользователя (scoped
+    // multi-project): primary ∪ user_projects. Иначе второй проект
+    // costume_designer (напр. «Шеф-8») висел в «Складах коллег».
+    const myIds = await getUserProjectIds(req.user.id)
     const [{ rows: projects }, { rows: ownC }, { rows: whC }, { rows: loanC }] = await Promise.all([
       db.query(
         `SELECT id, name FROM projects
-         WHERE ($1::uuid IS NULL OR id != $1::uuid)
-         ORDER BY name`, [myPid]),
+         WHERE NOT (id = ANY($1::uuid[]))
+         ORDER BY name`, [myIds]),
       db.query(
         // Когда myPid = NULL (warehouse_director/deputy/staff/producer без
         // своего проекта) — фильтр должен быть no-op. Старый COALESCE-вариант
@@ -128,7 +133,8 @@ router.get('/projects', verifyJWT, async (req, res) => {
 router.get('/projects/:id/units', verifyJWT, async (req, res) => {
   try {
     const myPid = req.user.project_id
-    if (String(myPid) === String(req.params.id)) {
+    const myIds = await getUserProjectIds(req.user.id)
+    if (myIds.some(id => String(id) === String(req.params.id))) {
       return res.status(400).json({ error: 'Use /project-units for own project' })
     }
     const canSeePendingRequestDetails = PENDING_REQUEST_DETAIL_ROLES.has(req.user.role)

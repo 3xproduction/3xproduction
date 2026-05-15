@@ -541,7 +541,12 @@ router.patch('/phone', verifyJWT, async (req, res) => {
 router.get('/users', verifyJWT, checkRole('producer'), async (req, res) => {
   try {
     const { rows } = await db.query(`
-      SELECT u.id, u.name, u.email, u.role, p.name AS project_name
+      SELECT u.id, u.name, u.email, u.role, p.name AS project_name,
+        (SELECT array_agg(DISTINCT pr.name)
+           FROM projects pr
+          WHERE pr.id = u.project_id
+             OR pr.id IN (SELECT up.project_id FROM user_projects up WHERE up.user_id = u.id)
+        ) AS project_names
       FROM users u
       LEFT JOIN projects p ON p.id = u.project_id
       ORDER BY u.role, u.name
