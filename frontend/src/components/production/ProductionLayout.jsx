@@ -715,6 +715,7 @@ export default function ProductionLayout({ children }) {
   const [projectCreated, setProjectCreated] = useState(false)
 
   const [showInvite, setShowInvite]     = useState(false)
+  const [inviteProjectId, setInviteProjectId] = useState('')
   const [inviteRole, setInviteRole]     = useState('project_director')
   const [inviteLink, setInviteLink]     = useState('')
   const [inviteLoading, setInviteLoading] = useState(false)
@@ -788,6 +789,14 @@ export default function ProductionLayout({ children }) {
     return proj?.id || user?.project_id || null
   }
 
+  // При открытии модалки инвайта — предзаполнить проект текущим выбранным.
+  useEffect(() => {
+    if (showInvite) {
+      setInviteProjectId(getSelectedProjectId() || projectsList[0]?.id || '')
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [showInvite])
+
   async function handleCreateProject() {
     if (!newProjectName.trim()) return
     setCreatingProject(true)
@@ -804,7 +813,7 @@ export default function ProductionLayout({ children }) {
   async function handleGenerateInvite() {
     setInviteLoading(true)
     try {
-      const pid = getSelectedProjectId()
+      const pid = inviteProjectId || getSelectedProjectId()
       if (!pid) { alert('Выберите проект'); setInviteLoading(false); return }
       const d = await invitesApi.generate({ role: inviteRole, project_id: pid })
       setInviteLink(`${window.location.origin}/invite/${d.invite.token}`)
@@ -1214,6 +1223,14 @@ export default function ProductionLayout({ children }) {
           <div style={{ background: 'var(--white)', borderRadius: 'var(--radius-card)', padding: 24, maxWidth: 420, width: '100%' }}
             onClick={e => e.stopPropagation()}>
             <div style={{ fontWeight: 600, fontSize: 16, marginBottom: 16 }}>Пригласить участника</div>
+            <div style={{ fontSize: 12, fontWeight: 500, marginBottom: 4, color: 'var(--muted)' }}>Проект</div>
+            <select value={inviteProjectId} onChange={e => setInviteProjectId(e.target.value)}
+              style={{ width: '100%', height: 38, padding: '0 10px', border: '1px solid var(--border)', borderRadius: 'var(--radius-btn)', fontSize: 13, background: 'var(--white)', marginBottom: 12 }}>
+              {projectsList.length === 0 && <option value="">Проектов нет</option>}
+              {projectsList.map(p => (
+                <option key={p.id} value={p.id}>{p.name}</option>
+              ))}
+            </select>
             <div style={{ fontSize: 12, fontWeight: 500, marginBottom: 4, color: 'var(--muted)' }}>Роль</div>
             <select value={inviteRole} onChange={e => setInviteRole(e.target.value)}
               style={{ width: '100%', height: 38, padding: '0 10px', border: '1px solid var(--border)', borderRadius: 'var(--radius-btn)', fontSize: 13, background: 'var(--white)', marginBottom: 12 }}>
