@@ -11,13 +11,13 @@ const { uploadFile, uploadImageWithThumb } = require('../services/r2')
 const { createNotification } = require('../services/notifications')
 const { unitMissingFields, canSeeMissingUnitData } = require('../utils/unitMissingFields')
 
-// Р РѕР»Рё, РєРѕС‚РѕСЂС‹Рµ РјРѕРіСѓС‚ РРќРР¦РРР РћР’РђРўР¬ Рё РџРћР”РўР’Р•Р Р–Р”РђРўР¬ РІРѕР·РІСЂР°С‚ СЃ Р»СЋР±РѕРіРѕ СЃРєР»Р°РґР° РїСЂРѕРµРєС‚Р°.
-// РџРѕ С‚СЂРµР±РѕРІР°РЅРёСЋ Р·Р°РєР°Р·С‡РёРєР°: warehouse_director, warehouse_deputy, warehouse_staff, producer.
+// Роли, которые могут ИНИЦИИРОВАТЬ и ПОДТВЕРЖДАТЬ возврат с любого склада проекта.
+// По требованию заказчика: warehouse_director, warehouse_deputy, warehouse_staff, producer.
 const RETURN_REQUESTER_ROLES = new Set([
   'warehouse_director', 'warehouse_deputy', 'warehouse_staff', 'producer',
 ])
-// Р РѕР»Рё РїСЂРѕРµРєС‚Р°, РєРѕС‚РѕСЂС‹Рј РёРґС‘С‚ СѓРІРµРґРѕРјР»РµРЅРёРµ Рѕ РЅРµРѕР±С…РѕРґРёРјРѕСЃС‚Рё РІРµСЂРЅСѓС‚СЊ РµРґРёРЅРёС†Сѓ.
-// РќР°Р±РѕСЂ РїРѕРІС‚РѕСЂСЏРµС‚ Р»РѕРіРёРєСѓ responderRolesForCategory РёР· colleagues.js.
+// Роли проекта, которым идёт уведомление о необходимости вернуть единицу.
+// Набор повторяет логику responderRolesForCategory из colleagues.js.
 const PROPS_RESPONDER_ROLES = [
   'project_director', 'production_designer', 'art_director_assistant',
   'props_master', 'props_assistant',
@@ -72,18 +72,18 @@ async function createCellInSection(client, sectionId) {
   }
   throw new Error('Could not allocate cell code')
 }
-// Р РѕР»Рё, РєРѕС‚РѕСЂС‹Рј СЂР°Р·СЂРµС€РµРЅРѕ РїРµСЂРµРјРµС‰Р°С‚СЊ РµРґРёРЅРёС†С‹ СЃ С†РµРЅС‚СЂР°Р»СЊРЅРѕРіРѕ СЃРєР»Р°РґР° РЅР° СЃРєР»Р°Рґ РїСЂРѕРµРєС‚Р°.
-// Р’РєР»СЋС‡Р°РµС‚ РєР»Р°РґРѕРІС‰РёРєРѕРІ (staff) вЂ” РїРѕ С‚СЂРµР±РѕРІР°РЅРёСЋ Р·Р°РєР°Р·С‡РёРєР°.
+// Роли, которым разрешено перемещать единицы с центрального склада на склад проекта.
+// Включает кладовщиков (staff) — по требованию заказчика.
 const MOVE_TO_PROJECT_ROLES = new Set([
   'warehouse_director', 'warehouse_deputy', 'warehouse_staff',
 ])
-// Р РѕР»Рё, РєРѕС‚РѕСЂС‹Рµ РјРѕРіСѓС‚ Р·Р°Р±СЂР°С‚СЊ РµРґРёРЅРёС†Сѓ СЃ Р»СЋР±РѕРіРѕ СЃРєР»Р°РґР° РїСЂРѕРµРєС‚Р° РЅР° РѕР±С‰РёР№ СЃРєР»Р°Рґ
-// РЅРµР·Р°РІРёСЃРёРјРѕ РѕС‚ СЃРІРѕРµР№ project_id (РґРёСЂРµРєС‚РѕСЂСЃРєРёР№ СѓСЂРѕРІРµРЅСЊ РєРѕРЅС‚СЂРѕР»СЏ РЅР°Рґ СЃРєР»Р°РґРѕРј).
+// Роли, которые могут забрать единицу с любого склада проекта на общий склад
+// независимо от своей project_id (директорский уровень контроля над складом).
 const CROSS_PROJECT_TRANSFER_ROLES = new Set([
   'warehouse_director', 'warehouse_deputy', 'producer',
 ])
-// Р РѕР»Рё, РєРѕС‚РѕСЂС‹Рј СЂР°Р·СЂРµС€РµРЅРѕ СЃРјРѕС‚СЂРµС‚СЊ СЃРєР»Р°Рґ Р»СЋР±РѕРіРѕ РїСЂРѕРµРєС‚Р° (selector РІ ProjectWarehousePage).
-// Р”РёСЂРµРєС‚РѕСЂ/Р·Р°Рј СЃРєР»Р°РґР° + РїСЂРѕРґСЋСЃРµСЂ.
+// Роли, которым разрешено смотреть склад любого проекта (selector в ProjectWarehousePage).
+// Директор/зам склада + продюсер.
 const ANY_PROJECT_VIEWER_ROLES = new Set([
   'warehouse_director', 'warehouse_deputy', 'producer',
 ])
@@ -102,13 +102,13 @@ function normalizeProjectUnitSource(source) {
 }
 
 // GET /project-units?project_id=&category=&source=
-// РљР°С‚Р°Р»РѕРі СЃРєР»Р°РґР° РїСЂРѕРµРєС‚Р° вЂ” РѕР±СЉРµРґРёРЅСЏРµС‚ С‚СЂРё РёСЃС‚РѕС‡РЅРёРєР°:
-//   1. own            вЂ” СЃРѕР±СЃС‚РІРµРЅРЅС‹Рµ (is_project_kept=true, project_id=me)
-//   2. from_warehouse вЂ” РІР·СЏС‚С‹Рµ СЃ РѕР±С‰РµРіРѕ СЃРєР»Р°РґР° РїРѕ Р°РєС‚РёРІРЅРѕР№ РІС‹РґР°С‡Рµ РЅР° РїСЂРѕРµРєС‚
-//   3. from_project   вЂ” РѕРґРѕР»Р¶РµРЅРЅС‹Рµ Сѓ РґСЂСѓРіРѕРіРѕ РїСЂРѕРµРєС‚Р° (on_loan_to_project_id=me)
-// РљР°Р¶РґР°СЏ СЃС‚СЂРѕРєР° РёРјРµРµС‚ РїРѕР»Рµ `source` Рё РјРµС‚Р°РґР°РЅРЅС‹Рµ (issuance_id/loan_request_id Рё С‚.Рґ.).
-// РџР°СЂР°РјРµС‚СЂ source (РѕРїС†.) вЂ” С„РёР»СЊС‚СЂ: 'own' | 'from_warehouse' | 'from_project'.
-// Warehouse-РґРёСЂРµРєС‚РѕСЂР° РјРѕРіСѓС‚ СЃРјРѕС‚СЂРµС‚СЊ Р»СЋР±РѕР№ РїСЂРѕРµРєС‚ С‡РµСЂРµР· ?project_id=.
+// Каталог склада проекта — объединяет три источника:
+//   1. own            — собственные (is_project_kept=true, project_id=me)
+//   2. from_warehouse — взятые с общего склада по активной выдаче на проект
+//   3. from_project   — одолженные у другого проекта (on_loan_to_project_id=me)
+// Каждая строка имеет поле `source` и метаданные (issuance_id/loan_request_id и т.д.).
+// Параметр source (опц.) — фильтр: 'own' | 'from_warehouse' | 'from_project'.
+// Warehouse-директора могут смотреть любой проект через ?project_id=.
 router.get('/', verifyJWT, async (req, res) => {
   try {
     const requestedProject = req.query.project_id
@@ -139,7 +139,7 @@ router.get('/', verifyJWT, async (req, res) => {
     const params = [projectIds, req.user.project_id || null, canSeePendingRequestDetails]
     let q = `
       WITH sources AS (
-        -- 1. РЎРІРѕРё РµРґРёРЅРёС†С‹ РїСЂРѕРµРєС‚Р°
+        -- 1. Свои единицы проекта
         SELECT u.id AS unit_id,
                'own'::text AS source,
                NULL::text AS loan_from_project_name,
@@ -156,7 +156,7 @@ router.get('/', verifyJWT, async (req, res) => {
 
         UNION ALL
 
-        -- 2. Р’С‹РґР°РЅРѕ СЃ РѕР±С‰РµРіРѕ СЃРєР»Р°РґР° РЅР° СЌС‚РѕС‚ РїСЂРѕРµРєС‚ (С„РёР·РёС‡РµСЃРєРё РЅР° СЂСѓРєР°С…).
+        -- 2. Выдано с общего склада на этот проект (физически на руках).
         -- requests.project_id wins; receiver.project_id is only a fallback for legacy/walk-in rows.
         SELECT fw.unit_id, 'from_warehouse',
                NULL, NULL, NULL,
@@ -178,7 +178,7 @@ router.get('/', verifyJWT, async (req, res) => {
 
         UNION ALL
 
-        -- 3. РћРґРѕР»Р¶РµРЅРѕ Сѓ РґСЂСѓРіРѕРіРѕ РїСЂРѕРµРєС‚Р°
+        -- 3. Одолжено у другого проекта
         SELECT u.id, 'from_project',
                fp.name, lr.id, lr.deadline,
                NULL, NULL, NULL,
@@ -294,7 +294,7 @@ router.get('/purchased-by-projects', verifyJWT,
     }
   })
 
-// POST /project-units вЂ” create a project-kept unit (no approval).
+// POST /project-units — create a project-kept unit (no approval).
 router.post('/', verifyJWT, async (req, res) => {
   if (!canWriteToProject(req.user)) return res.status(403).json({ error: 'Forbidden' })
   if (!req.user.project_id) return res.status(400).json({ error: 'User has no project' })
@@ -336,7 +336,7 @@ router.post('/', verifyJWT, async (req, res) => {
       ]
     )
     await db.query(
-      `INSERT INTO unit_history (unit_id, action, user_id) VALUES ($1,'РЎРѕР·РґР°РЅРѕ РЅР° СЃРєР»Р°РґРµ РїСЂРѕРµРєС‚Р°',$2)`,
+      `INSERT INTO unit_history (unit_id, action, user_id) VALUES ($1,'Создано на складе проекта',$2)`,
       [rows[0].id, req.user.id]
     )
     res.json({ unit: rows[0] })
@@ -346,7 +346,7 @@ router.post('/', verifyJWT, async (req, res) => {
   }
 })
 
-// POST /project-units/upload-receipt вЂ” upload receipt image, returns URL.
+// POST /project-units/upload-receipt — upload receipt image, returns URL.
 router.post('/upload-receipt', verifyJWT, upload.single('receipt'), async (req, res) => {
   if (!canWriteToProject(req.user)) return res.status(403).json({ error: 'Forbidden' })
   if (!req.file) return res.status(400).json({ error: 'No file' })
@@ -359,7 +359,7 @@ router.post('/upload-receipt', verifyJWT, upload.single('receipt'), async (req, 
   }
 })
 
-// POST /project-units/create-for-project-photo вЂ” warehouse creates a project-kept unit
+// POST /project-units/create-for-project-photo — warehouse creates a project-kept unit
 // from an AI-recognized photo when the central warehouse search found no match.
 router.post('/create-for-project-photo', verifyJWT, upload.fields([
   { name: 'photo', maxCount: 1 },
@@ -376,7 +376,7 @@ router.post('/create-for-project-photo', verifyJWT, upload.fields([
   if (!photoFiles.length) return res.status(400).json({ error: 'Photo required' })
 
   const { rows: proj } = await db.query(`SELECT id, name FROM projects WHERE id = $1`, [project_id])
-  if (!proj.length) return res.status(404).json({ error: 'РџСЂРѕРµРєС‚ РЅРµ РЅР°Р№РґРµРЅ' })
+  if (!proj.length) return res.status(404).json({ error: 'Проект не найден' })
 
   const client = await db.getClient()
   try {
@@ -419,7 +419,7 @@ router.post('/create-for-project-photo', verifyJWT, upload.fields([
     }
     await client.query(
       `INSERT INTO unit_history (unit_id, action, user_id, project_id)
-       VALUES ($1,'РЎРѕР·РґР°РЅРѕ РЅР° СЃРєР»Р°РґРµ РїСЂРѕРµРєС‚Р° РїРѕ С„РѕС‚Рѕ',$2,$3)`,
+       VALUES ($1,'Создано на складе проекта по фото',$2,$3)`,
       [unit.id, req.user.id, project_id]
     )
 
@@ -640,7 +640,7 @@ router.post('/:id/record-intake', verifyJWT, async (req, res) => {
   }
 })
 
-// PUT /project-units/:id вЂ” edit a project-kept unit.
+// PUT /project-units/:id — edit a project-kept unit.
 router.put('/:id', verifyJWT, async (req, res) => {
   if (!canWriteToProject(req.user) && !WAREHOUSE_DIRECTOR_ROLES.has(req.user.role)) {
     return res.status(403).json({ error: 'Forbidden' })
@@ -678,7 +678,7 @@ router.put('/:id', verifyJWT, async (req, res) => {
   }
 })
 
-// DELETE /project-units/:id вЂ” soft delete = write-off.
+// DELETE /project-units/:id — soft delete = write-off.
 router.delete('/:id', verifyJWT, async (req, res) => {
   if (!canWriteToProject(req.user)) return res.status(403).json({ error: 'Forbidden' })
   try {
@@ -691,7 +691,7 @@ router.delete('/:id', verifyJWT, async (req, res) => {
     }
     await db.query(`UPDATE units SET status='written_off' WHERE id=$1`, [req.params.id])
     await db.query(
-      `INSERT INTO unit_history (unit_id, action, user_id, notes) VALUES ($1,'РЎРїРёСЃР°РЅРѕ СЃРѕ СЃРєР»Р°РґР° РїСЂРѕРµРєС‚Р°',$2,$3)`,
+      `INSERT INTO unit_history (unit_id, action, user_id, notes) VALUES ($1,'Списано со склада проекта',$2,$3)`,
       [req.params.id, req.user.id, req.body?.reason || null]
     )
     res.json({ ok: true })
@@ -701,10 +701,10 @@ router.delete('/:id', verifyJWT, async (req, res) => {
   }
 })
 
-// POST /project-units/:id/transfer-to-warehouse вЂ” immediate transfer (approvals removed).
-// Р•РґРёРЅРёС†Р° СЃСЂР°Р·Сѓ СѓС…РѕРґРёС‚ РёР· СЃРєР»Р°РґР° РїСЂРѕРµРєС‚Р° РІ РѕР±С‰РёР№ СЃРєР»Р°Рґ Р±РµР· pending-СЌС‚Р°РїР°. Р•СЃР»Рё
-// СѓРєР°Р·Р°РЅС‹ warehouse_id Рё cell_id вЂ” СЃСЂР°Р·Сѓ СЂР°СЃРєР»Р°РґС‹РІР°РµС‚СЃСЏ РЅР° РїРѕР»РєСѓ; РёРЅР°С‡Рµ Р»РµР¶РёС‚
-// Р±РµР· РјРµСЃС‚Р° Рё РґРёСЂРµРєС‚РѕСЂ/Р·Р°Рј СЃРєР»Р°РґР° СЂР°СЃСЃС‚Р°РІР»СЏСЋС‚ РІСЂСѓС‡РЅСѓСЋ РёР· UnitsPage.
+// POST /project-units/:id/transfer-to-warehouse — immediate transfer (approvals removed).
+// Единица сразу уходит из склада проекта в общий склад без pending-этапа. Если
+// указаны warehouse_id и cell_id — сразу раскладывается на полку; иначе лежит
+// без места и директор/зам склада расставляют вручную из UnitsPage.
 router.post('/:id/transfer-to-warehouse', verifyJWT, async (req, res) => {
   if (!canWriteToProject(req.user) && !CROSS_PROJECT_TRANSFER_ROLES.has(req.user.role)) {
     return res.status(403).json({ error: 'Forbidden' })
@@ -721,13 +721,13 @@ router.post('/:id/transfer-to-warehouse', verifyJWT, async (req, res) => {
     const { warehouse_id, cell_id } = req.body || {}
     const comment = (req.body?.comment || '').toString().slice(0, 500)
 
-    // Р’Р°Р»РёРґР°С†РёСЏ РєР°С‚РµРіРѕСЂРёРё/С‚РёРїР° СЃРµРєС†РёРё РѕС‚РєР»СЋС‡РµРЅР° вЂ” РјРµСЃС‚Р° Р±РµР·Р»РёРјРёС‚РЅС‹Рµ.
+    // Валидация категории/типа секции отключена — места безлимитные.
     if (cell_id) {
       const { rows: secRows } = await db.query(
         `SELECT c.id FROM cells c WHERE c.id = $1`,
         [cell_id]
       )
-      if (!secRows.length) return res.status(400).json({ error: 'РЇС‡РµР№РєР° РЅРµ РЅР°Р№РґРµРЅР°' })
+      if (!secRows.length) return res.status(400).json({ error: 'Ячейка не найдена' })
     }
 
     await db.query(
@@ -740,7 +740,7 @@ router.post('/:id/transfer-to-warehouse', verifyJWT, async (req, res) => {
     )
     await db.query(
       `INSERT INTO unit_history (unit_id, action, user_id, project_id, notes)
-       VALUES ($1,'РџРµСЂРµРґР°РЅРѕ РЅР° РѕР±С‰РёР№ СЃРєР»Р°Рґ',$2,$3,$4)`,
+       VALUES ($1,'Передано на общий склад',$2,$3,$4)`,
       [req.params.id, req.user.id, rows[0].project_id || null, comment || null]
     )
     res.json({ ok: true })
@@ -750,7 +750,7 @@ router.post('/:id/transfer-to-warehouse', verifyJWT, async (req, res) => {
   }
 })
 
-// POST /project-units/:id/return-to-project вЂ” warehouse staff sends a warehouse unit
+// POST /project-units/:id/return-to-project — warehouse staff sends a warehouse unit
 // into a project inventory (used when the project temporarily wants it on hand).
 router.post('/:id/return-to-project', verifyJWT, async (req, res) => {
   if (!MOVE_TO_PROJECT_ROLES.has(req.user.role)) return res.status(403).json({ error: 'Forbidden' })
@@ -758,13 +758,13 @@ router.post('/:id/return-to-project', verifyJWT, async (req, res) => {
   if (!project_id) return res.status(400).json({ error: 'project_id required' })
   try {
     const { rows: proj } = await db.query(`SELECT id FROM projects WHERE id = $1`, [project_id])
-    if (!proj.length) return res.status(404).json({ error: 'РџСЂРѕРµРєС‚ РЅРµ РЅР°Р№РґРµРЅ' })
+    if (!proj.length) return res.status(404).json({ error: 'Проект не найден' })
     const { rows } = await db.query(`SELECT * FROM units WHERE id = $1`, [req.params.id])
     if (!rows.length) return res.status(404).json({ error: 'Not found' })
     const u = rows[0]
-    if (u.is_project_kept) return res.status(400).json({ error: 'Р•РґРёРЅРёС†Р° СѓР¶Рµ РЅР° СЃРєР»Р°РґРµ РїСЂРѕРµРєС‚Р°' })
+    if (u.is_project_kept) return res.status(400).json({ error: 'Единица уже на складе проекта' })
     if (u.status !== 'on_stock') {
-      return res.status(400).json({ error: 'РџРµСЂРµРјРµС‰Р°С‚СЊ РјРѕР¶РЅРѕ С‚РѕР»СЊРєРѕ РµРґРёРЅРёС†С‹ СЃРѕ СЃС‚Р°С‚СѓСЃРѕРј В«РЅР° СЃРєР»Р°РґРµВ»' })
+      return res.status(400).json({ error: 'Перемещать можно только единицы со статусом «на складе»' })
     }
     await db.query(
       `UPDATE units SET is_project_kept=true, project_id=$2, pending_transfer=false,
@@ -773,7 +773,7 @@ router.post('/:id/return-to-project', verifyJWT, async (req, res) => {
       [req.params.id, project_id]
     )
     await db.query(
-      `INSERT INTO unit_history (unit_id, action, user_id, project_id) VALUES ($1,'РџРµСЂРµРјРµС‰РµРЅРѕ РЅР° СЃРєР»Р°Рґ РїСЂРѕРµРєС‚Р°',$2,$3)`,
+      `INSERT INTO unit_history (unit_id, action, user_id, project_id) VALUES ($1,'Перемещено на склад проекта',$2,$3)`,
       [req.params.id, req.user.id, project_id]
     )
     res.json({ ok: true })
@@ -783,10 +783,10 @@ router.post('/:id/return-to-project', verifyJWT, async (req, res) => {
   }
 })
 
-// POST /project-units/move-to-project вЂ” batch-РїРµСЂРµРјРµС‰РµРЅРёРµ РЅРµСЃРєРѕР»СЊРєРёС… РµРґРёРЅРёС†
-// СЃ С†РµРЅС‚СЂР°Р»СЊРЅРѕРіРѕ СЃРєР»Р°РґР° РЅР° СЃРєР»Р°Рґ РїСЂРѕРµРєС‚Р°. РўРµР»Рѕ: { unit_ids: [], project_id }.
-// РџРѕРґС…РѕРґСЏС‰РёРµ РµРґРёРЅРёС†С‹ (status='on_stock', РЅРµ РЅР° СЃРєР»Р°РґРµ РїСЂРѕРµРєС‚Р°) РїРµСЂРµРјРµС‰Р°СЋС‚СЃСЏ;
-// РѕСЃС‚Р°Р»СЊРЅС‹Рµ РІРѕР·РІСЂР°С‰Р°СЋС‚СЃСЏ РІ errors[] СЃ РїРѕРЅСЏС‚РЅРѕР№ РїСЂРёС‡РёРЅРѕР№ вЂ” UI РїРѕРєР°Р¶РµС‚ С‚РѕСЃС‚С‹.
+// POST /project-units/move-to-project — batch-перемещение нескольких единиц
+// с центрального склада на склад проекта. Тело: { unit_ids: [], project_id }.
+// Подходящие единицы (status='on_stock', не на складе проекта) перемещаются;
+// остальные возвращаются в errors[] с понятной причиной — UI покажет тосты.
 router.post('/move-to-project', verifyJWT, async (req, res) => {
   if (!MOVE_TO_PROJECT_ROLES.has(req.user.role)) return res.status(403).json({ error: 'Forbidden' })
   const { unit_ids, project_id } = req.body || {}
@@ -798,16 +798,16 @@ router.post('/move-to-project', verifyJWT, async (req, res) => {
   const ids = []
   for (const rawId of unit_ids) {
     if (typeof rawId !== 'string' || !UUID_RE.test(rawId)) {
-      errors.push({ id: String(rawId || ''), reason: 'РЅРµРєРѕСЂСЂРµРєС‚РЅС‹Р№ id' })
+      errors.push({ id: String(rawId || ''), reason: 'некорректный id' })
       continue
     }
     ids.push(rawId)
   }
   if (ids.length === 0) return res.status(400).json({ error: 'unit_ids empty' })
 
-  // РџСЂРѕРІРµСЂСЏРµРј СЃСѓС‰РµСЃС‚РІРѕРІР°РЅРёРµ РїСЂРѕРµРєС‚Р° вЂ” РёРЅР°С‡Рµ СЃР»РѕРІРёРј FK violation РІ РјР°СЃСЃРѕРІРѕРј UPDATE.
+  // Проверяем существование проекта — иначе словим FK violation в массовом UPDATE.
   const { rows: proj } = await db.query(`SELECT id, name FROM projects WHERE id = $1`, [project_id])
-  if (!proj.length) return res.status(404).json({ error: 'РџСЂРѕРµРєС‚ РЅРµ РЅР°Р№РґРµРЅ' })
+  if (!proj.length) return res.status(404).json({ error: 'Проект не найден' })
 
   const client = await db.getClient()
   const moved = []
@@ -820,16 +820,16 @@ router.post('/move-to-project', verifyJWT, async (req, res) => {
     const seen = new Map(units.map(u => [u.id, u]))
 
     const reasonByStatus = {
-      issued: 'РІС‹РґР°РЅР°', overdue: 'РїСЂРѕСЃСЂРѕС‡РµРЅР°', debt: 'РІ РґРѕР»РіРµ',
-      written_off: 'СЃРїРёСЃР°РЅР°', pending: 'Р¶РґС‘С‚ СЃРѕРіР»Р°СЃРѕРІР°РЅРёСЏ',
+      issued: 'выдана', overdue: 'просрочена', debt: 'в долге',
+      written_off: 'списана', pending: 'ждёт согласования',
     }
 
     for (const id of ids) {
       const u = seen.get(id)
-      if (!u) { errors.push({ id, reason: 'РЅРµ РЅР°Р№РґРµРЅР°' }); continue }
-      if (u.is_project_kept) { errors.push({ id, name: u.name, reason: 'СѓР¶Рµ РЅР° СЃРєР»Р°РґРµ РїСЂРѕРµРєС‚Р°' }); continue }
+      if (!u) { errors.push({ id, reason: 'не найдена' }); continue }
+      if (u.is_project_kept) { errors.push({ id, name: u.name, reason: 'уже на складе проекта' }); continue }
       if (u.status !== 'on_stock') {
-        errors.push({ id, name: u.name, reason: reasonByStatus[u.status] || `СЃС‚Р°С‚СѓСЃ ${u.status}` })
+        errors.push({ id, name: u.name, reason: reasonByStatus[u.status] || `статус ${u.status}` })
         continue
       }
       moved.push(u)
@@ -843,10 +843,10 @@ router.post('/move-to-project', verifyJWT, async (req, res) => {
          WHERE id = ANY($1::uuid[])`,
         [movedIds, project_id]
       )
-      // Р’СЃС‚Р°РІР»СЏРµРј РёСЃС‚РѕСЂРёСЋ РѕРґРЅРѕР№ РјСѓР»СЊС‚Рё-VALUES вЂ” Р±РµР· С†РёРєР»Р° РѕС‚РґРµР»СЊРЅС‹С… INSERT'РѕРІ.
+      // Вставляем историю одной мульти-VALUES — без цикла отдельных INSERT'ов.
       const userParamIdx = movedIds.length + 1
       const projectParamIdx = movedIds.length + 2
-      const valuesSql = movedIds.map((_, i) => `($${i + 1},'РџРµСЂРµРјРµС‰РµРЅРѕ РЅР° СЃРєР»Р°Рґ РїСЂРѕРµРєС‚Р°',$${userParamIdx},$${projectParamIdx})`).join(',')
+      const valuesSql = movedIds.map((_, i) => `($${i + 1},'Перемещено на склад проекта',$${userParamIdx},$${projectParamIdx})`).join(',')
       await client.query(
         `INSERT INTO unit_history (unit_id, action, user_id, project_id) VALUES ${valuesSql}`,
         [...movedIds, req.user.id, project_id]
@@ -869,12 +869,12 @@ router.post('/move-to-project', verifyJWT, async (req, res) => {
   }
 })
 
-// GET /project-units/projects вЂ” СЃРїРёСЃРѕРє РІСЃРµС… РїСЂРѕРµРєС‚РѕРІ РґР»СЏ СЃРµР»РµРєС‚РѕСЂР° РІ ProjectWarehousePage
-// Рё РґР»СЏ РјРѕРґР°Р»РєРё В«РџРµСЂРµРјРµСЃС‚РёС‚СЊ РЅР° СЃРєР»Р°Рґ РїСЂРѕРµРєС‚Р°В» РІ РєР°С‚Р°Р»РѕРіРµ СЃРєР»Р°РґР°.
-// Р”РѕСЃС‚СѓРїРЅРѕ warehouse_director / warehouse_deputy / producer / warehouse_staff
-// (staff РЅСѓР¶РµРЅ СЃРїРёСЃРѕРє РґР»СЏ batch-РїРµСЂРµРјРµС‰РµРЅРёСЏ, РёРЅР°С‡Рµ СЃРµР»РµРєС‚РѕСЂ РїСѓСЃС‚).
-// available_count СЃС‡РёС‚Р°РµС‚СЃСЏ С‚СЂРµРјСЏ РЅРµР·Р°РІРёСЃРёРјС‹РјРё Р·Р°РїСЂРѕСЃР°РјРё Рё СЃСѓРјРјРёСЂСѓРµС‚СЃСЏ РІ JS
-// (РЅР°РґС‘Р¶РЅРµРµ С‡РµРј PG-LATERAL, СЃРј. РєРѕРјРјРµРЅС‚Р°СЂРёР№ РІ /colleagues/projects).
+// GET /project-units/projects — список всех проектов для селектора в ProjectWarehousePage
+// и для модалки «Переместить на склад проекта» в каталоге склада.
+// Доступно warehouse_director / warehouse_deputy / producer / warehouse_staff
+// (staff нужен список для batch-перемещения, иначе селектор пуст).
+// available_count считается тремя независимыми запросами и суммируется в JS
+// (надёжнее чем PG-LATERAL, см. комментарий в /colleagues/projects).
 router.get('/projects', verifyJWT, async (req, res) => {
   const allowed = ANY_PROJECT_VIEWER_ROLES.has(req.user.role) || MOVE_TO_PROJECT_ROLES.has(req.user.role)
   if (!allowed) {
@@ -924,7 +924,7 @@ router.get('/projects', verifyJWT, async (req, res) => {
   }
 })
 
-// GET /project-units/pending-transfers вЂ” list units awaiting director acceptance.
+// GET /project-units/pending-transfers — list units awaiting director acceptance.
 // Only warehouse directors / deputies see this.
 router.get('/pending-transfers', verifyJWT, async (req, res) => {
   if (!WAREHOUSE_DIRECTOR_ROLES.has(req.user.role)) return res.status(403).json({ error: 'Forbidden' })
@@ -946,13 +946,13 @@ router.get('/pending-transfers', verifyJWT, async (req, res) => {
   }
 })
 
-// в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
-// Р”РІСѓС…СЌС‚Р°РїРЅС‹Р№ Р·Р°РїСЂРѕСЃ РІРѕР·РІСЂР°С‚Р° РµРґРёРЅРёС†С‹ СЃРѕ СЃРєР»Р°РґР° РїСЂРѕРµРєС‚Р° РЅР° РѕР±С‰РёР№ СЃРєР»Р°Рґ.
-// в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
+// ──────────────────────────────────────────────────────────────────────────
+// Двухэтапный запрос возврата единицы со склада проекта на общий склад.
+// ──────────────────────────────────────────────────────────────────────────
 
-// POST /project-units/:id/request-return вЂ” РґРёСЂРµРєС‚РѕСЂ СЃРєР»Р°РґР°/Р·Р°Рј/СЃРѕС‚СЂСѓРґРЅРёРє СЃРєР»Р°РґР°/
-// РїСЂРѕРґСЋСЃРµСЂ РёРЅРёС†РёРёСЂСѓРµС‚ РІРѕР·РІСЂР°С‚. РЎРѕР·РґР°С‘С‚СЃСЏ Р·Р°РїСЂРѕСЃ СЃ РґРµРґР»Р°Р№РЅРѕРј +3 РґРЅСЏ Рё СѓРІРµРґРѕРјР»РµРЅРёРµ
-// РѕС‚РІРµС‚СЃС‚РІРµРЅРЅС‹Рј РёР· РїСЂРѕРµРєС‚Р°-РІР»Р°РґРµР»СЊС†Р°.
+// POST /project-units/:id/request-return — директор склада/зам/сотрудник склада/
+// продюсер инициирует возврат. Создаётся запрос с дедлайном +3 дня и уведомление
+// ответственным из проекта-владельца.
 router.post('/:id/request-return', verifyJWT, async (req, res) => {
   if (!RETURN_REQUESTER_ROLES.has(req.user.role)) {
     return res.status(403).json({ error: 'Forbidden' })
@@ -962,15 +962,15 @@ router.post('/:id/request-return', verifyJWT, async (req, res) => {
       `SELECT * FROM units WHERE id = $1 AND is_project_kept = true AND status = 'on_stock'`,
       [req.params.id]
     )
-    if (!rows.length) return res.status(404).json({ error: 'Р•РґРёРЅРёС†Р° РЅРµ РЅР°Р№РґРµРЅР° РёР»Рё РЅРµ РЅР° РїСЂРѕРµРєС‚Рµ' })
+    if (!rows.length) return res.status(404).json({ error: 'Единица не найдена или не на проекте' })
     const unit = rows[0]
 
-    // РџСЂРѕРІРµСЂРєР° СѓР¶Рµ СЃСѓС‰РµСЃС‚РІСѓСЋС‰РµРіРѕ pending-Р·Р°РїСЂРѕСЃР°, С‡С‚РѕР±С‹ РЅРµ РїР»РѕРґРёС‚СЊ РґСѓР±Р»Рё.
+    // Проверка уже существующего pending-запроса, чтобы не плодить дубли.
     const { rows: dup } = await db.query(
       `SELECT id FROM warehouse_return_requests WHERE unit_id = $1 AND status = 'pending'`,
       [req.params.id]
     )
-    if (dup.length) return res.status(400).json({ error: 'Р—Р°РїСЂРѕСЃ РІРѕР·РІСЂР°С‚Р° СѓР¶Рµ РѕС‚РїСЂР°РІР»РµРЅ' })
+    if (dup.length) return res.status(400).json({ error: 'Запрос возврата уже отправлен' })
 
     const comment = (req.body?.comment || '').toString().slice(0, 500) || null
     const { rows: created } = await db.query(
@@ -982,14 +982,14 @@ router.post('/:id/request-return', verifyJWT, async (req, res) => {
     )
     const reqRow = created[0]
 
-    // РЈРІРµРґРѕРјР»РµРЅРёРµ РѕС‚РІРµС‚СЃС‚РІРµРЅРЅС‹Рј РїРѕ РєР°С‚РµРіРѕСЂРёРё + РґРёСЂРµРєС‚РѕСЂСѓ РїСЂРѕРµРєС‚Р°.
+    // Уведомление ответственным по категории + директору проекта.
     const roles = responderRoles(unit.category)
     const { rows: targets } = await db.query(
       `SELECT id FROM users WHERE project_id = $1 AND role = ANY($2)`,
       [unit.project_id, roles]
     )
     const dl = reqRow.deadline ? new Date(reqRow.deadline).toLocaleDateString('ru-RU') : ''
-    const text = `РќСѓР¶РЅРѕ РІРµСЂРЅСѓС‚СЊ В«${unit.name}В» РЅР° РѕСЃРЅРѕРІРЅРѕР№ СЃРєР»Р°Рґ РґРѕ ${dl}`
+    const text = `Нужно вернуть «${unit.name}» на основной склад до ${dl}`
     for (const t of targets) {
       await createNotification({
         user_id: t.id,
@@ -1002,7 +1002,7 @@ router.post('/:id/request-return', verifyJWT, async (req, res) => {
 
     await db.query(
       `INSERT INTO unit_history (unit_id, action, user_id, project_id, notes)
-       VALUES ($1,'Р—Р°РїСЂРѕСЃ РІРѕР·РІСЂР°С‚Р° РЅР° РѕСЃРЅРѕРІРЅРѕР№ СЃРєР»Р°Рґ',$2,$3,$4)`,
+       VALUES ($1,'Запрос возврата на основной склад',$2,$3,$4)`,
       [unit.id, req.user.id, unit.project_id, comment]
     )
 
@@ -1014,9 +1014,9 @@ router.post('/:id/request-return', verifyJWT, async (req, res) => {
 })
 
 // GET /project-units/return-requests?direction=incoming|outgoing
-// - outgoing (РїРѕ СѓРјРѕР»С‡Р°РЅРёСЋ РґР»СЏ warehouse/producer) вЂ” Р·Р°РїСЂРѕСЃС‹, РіРґРµ СЏ РёС… РёРЅРёС†РёРёСЂРѕРІР°Р»
-//   РёР»Рё СЏ РёР· СЂРѕР»Рё warehouse/producer (РІРёР¶Сѓ РІСЃРµ pending).
-// - incoming вЂ” РґР»СЏ СЃРѕС‚СЂСѓРґРЅРёРєРѕРІ РїСЂРѕРµРєС‚Р°, РіРґРµ РёС… РїСЂРѕРµРєС‚ СЏРІР»СЏРµС‚СЃСЏ РїСЂРѕРµРєС‚РѕРј-РІР»Р°РґРµР»СЊС†РµРј.
+// - outgoing (по умолчанию для warehouse/producer) — запросы, где я их инициировал
+//   или я из роли warehouse/producer (вижу все pending).
+// - incoming — для сотрудников проекта, где их проект является проектом-владельцем.
 router.get('/return-requests', verifyJWT, async (req, res) => {
   const direction = req.query.direction || 'outgoing'
   try {
@@ -1026,7 +1026,7 @@ router.get('/return-requests', verifyJWT, async (req, res) => {
       where = `r.from_project_id = $1`
       params = [req.user.project_id]
     } else {
-      // outgoing: РґР»СЏ warehouse-СЂРѕР»РµР№ Рё РїСЂРѕРґСЋСЃРµСЂР° РїРѕРєР°Р·С‹РІР°РµРј РІСЃРµ pending; РґР»СЏ РѕСЃС‚Р°Р»СЊРЅС‹С… вЂ” С‚РѕР»СЊРєРѕ СЃРІРѕРё.
+      // outgoing: для warehouse-ролей и продюсера показываем все pending; для остальных — только свои.
       if (RETURN_REQUESTER_ROLES.has(req.user.role)) {
         where = `1=1`
         params = []
@@ -1065,7 +1065,7 @@ router.get('/return-requests', verifyJWT, async (req, res) => {
   }
 })
 
-// POST /project-units/return-requests/:id/confirm вЂ” warehouse/producer closes
+// POST /project-units/return-requests/:id/confirm — warehouse/producer closes
 // the return only after the item is physically accepted back to the main stock.
 router.post('/return-requests/:id/confirm', verifyJWT, async (req, res) => {
   const client = await db.getClient()
@@ -1077,12 +1077,12 @@ router.post('/return-requests/:id/confirm', verifyJWT, async (req, res) => {
     )
     if (!rows.length) {
       await client.query('ROLLBACK')
-      return res.status(404).json({ error: 'Р—Р°РїСЂРѕСЃ РЅРµ РЅР°Р№РґРµРЅ' })
+      return res.status(404).json({ error: 'Запрос не найден' })
     }
     const r = rows[0]
     if (r.status !== 'pending') {
       await client.query('ROLLBACK')
-      return res.status(409).json({ error: 'Р—Р°РїСЂРѕСЃ СѓР¶Рµ РѕР±СЂР°Р±РѕС‚Р°РЅ', currentStatus: r.status })
+      return res.status(409).json({ error: 'Запрос уже обработан', currentStatus: r.status })
     }
     const isRequesterRole = RETURN_REQUESTER_ROLES.has(req.user.role)
     if (!isRequesterRole) {
@@ -1107,19 +1107,19 @@ router.post('/return-requests/:id/confirm', verifyJWT, async (req, res) => {
     )
     if (done.rowCount !== 1) {
       await client.query('ROLLBACK')
-      return res.status(409).json({ error: 'Р—Р°РїСЂРѕСЃ СѓР¶Рµ РѕР±СЂР°Р±РѕС‚Р°РЅ' })
+      return res.status(409).json({ error: 'Запрос уже обработан' })
     }
     await client.query(
       `INSERT INTO unit_history (unit_id, action, user_id, project_id)
-       VALUES ($1,'Р’РѕР·РІСЂР°С‚ РЅР° РѕСЃРЅРѕРІРЅРѕР№ СЃРєР»Р°Рґ РїРѕРґС‚РІРµСЂР¶РґС‘РЅ',$2,$3)`,
+       VALUES ($1,'Возврат на основной склад подтверждён',$2,$3)`,
       [r.unit_id, req.user.id, r.from_project_id]
     )
     await client.query('COMMIT')
-    // РЈРІРµРґРѕРјР»РµРЅРёРµ РёРЅРёС†РёР°С‚РѕСЂСѓ Рё РѕС‚РІРµС‚СЃС‚РІРµРЅРЅС‹Рј, С‡С‚Рѕ РІРѕР·РІСЂР°С‚ Р·Р°РєСЂС‹С‚.
+    // Уведомление инициатору и ответственным, что возврат закрыт.
     await createNotification({
       user_id: r.requested_by,
       type: 'warehouse_return_confirmed',
-      text: 'Р’РѕР·РІСЂР°С‚ РµРґРёРЅРёС†С‹ РЅР° РѕСЃРЅРѕРІРЅРѕР№ СЃРєР»Р°Рґ РїРѕРґС‚РІРµСЂР¶РґС‘РЅ',
+      text: 'Возврат единицы на основной склад подтверждён',
       entity_id: r.id,
       entity_type: 'warehouse_return_request',
     }).catch(() => {})
@@ -1133,14 +1133,14 @@ router.post('/return-requests/:id/confirm', verifyJWT, async (req, res) => {
   }
 })
 
-// POST /project-units/return-requests/:id/cancel вЂ” РёРЅРёС†РёР°С‚РѕСЂ (РёР»Рё warehouse) РѕС‚РјРµРЅСЏРµС‚.
+// POST /project-units/return-requests/:id/cancel — инициатор (или warehouse) отменяет.
 router.post('/return-requests/:id/cancel', verifyJWT, async (req, res) => {
   try {
     const { rows } = await db.query(
       `SELECT * FROM warehouse_return_requests WHERE id = $1 AND status = 'pending'`,
       [req.params.id]
     )
-    if (!rows.length) return res.status(404).json({ error: 'Р—Р°РїСЂРѕСЃ РЅРµ РЅР°Р№РґРµРЅ' })
+    if (!rows.length) return res.status(404).json({ error: 'Запрос не найден' })
     const r = rows[0]
     const isAuthor = String(r.requested_by) === String(req.user.id)
     const isWarehouse = RETURN_REQUESTER_ROLES.has(req.user.role)
@@ -1157,7 +1157,7 @@ router.post('/return-requests/:id/cancel', verifyJWT, async (req, res) => {
   }
 })
 
-// POST /project-units/:id/accept-transfer  вЂ” director accepts the transfer.
+// POST /project-units/:id/accept-transfer  — director accepts the transfer.
 // Body: { warehouse_id, cell_id }  (cell validated against matrix on the units route separately).
 router.post('/:id/accept-transfer', verifyJWT, async (req, res) => {
   if (!WAREHOUSE_DIRECTOR_ROLES.has(req.user.role)) return res.status(403).json({ error: 'Forbidden' })
@@ -1169,13 +1169,13 @@ router.post('/:id/accept-transfer', verifyJWT, async (req, res) => {
     )
     if (!rows.length) return res.status(404).json({ error: 'Not found' })
 
-    // Р’Р°Р»РёРґР°С†РёСЏ СЃСѓС‰РµСЃС‚РІРѕРІР°РЅРёСЏ СЏС‡РµР№РєРё. РњР°С‚СЂРёС†Р° В«РєР°С‚РµРіРѕСЂРёСЏ в†” С‚РёРї СЃРµРєС†РёРёВ»
-    // РѕС‚РєР»СЋС‡РµРЅР° вЂ” РјРµСЃС‚Р° Р±РµР·Р»РёРјРёС‚РЅС‹Рµ, Р»СЋР±Р°СЏ РµРґРёРЅРёС†Р° РєР»Р°РґС‘С‚СЃСЏ РІ Р»СЋР±СѓСЋ СЏС‡РµР№РєСѓ.
+    // Валидация существования ячейки. Матрица «категория ↔ тип секции»
+    // отключена — места безлимитные, любая единица кладётся в любую ячейку.
     const { rows: secRows } = await db.query(
       `SELECT c.id FROM cells c WHERE c.id = $1`,
       [cell_id]
     )
-    if (!secRows.length) return res.status(400).json({ error: 'РЇС‡РµР№РєР° РЅРµ РЅР°Р№РґРµРЅР°' })
+    if (!secRows.length) return res.status(400).json({ error: 'Ячейка не найдена' })
 
     // Accept: unit becomes regular warehouse unit, bound to cell, project badge removed.
     await db.query(
@@ -1187,7 +1187,7 @@ router.post('/:id/accept-transfer', verifyJWT, async (req, res) => {
     )
     await db.query(
       `INSERT INTO unit_history (unit_id, action, user_id)
-       VALUES ($1,'РџСЂРёРЅСЏС‚Рѕ РЅР° РѕР±С‰РёР№ СЃРєР»Р°Рґ РёР· РїСЂРѕРµРєС‚Р°',$2)`,
+       VALUES ($1,'Принято на общий склад из проекта',$2)`,
       [req.params.id, req.user.id]
     )
     res.json({ ok: true })
@@ -1197,7 +1197,7 @@ router.post('/:id/accept-transfer', verifyJWT, async (req, res) => {
   }
 })
 
-// POST /project-units/:id/reject-transfer вЂ” director returns the unit back to the project.
+// POST /project-units/:id/reject-transfer — director returns the unit back to the project.
 router.post('/:id/reject-transfer', verifyJWT, async (req, res) => {
   if (!WAREHOUSE_DIRECTOR_ROLES.has(req.user.role)) return res.status(403).json({ error: 'Forbidden' })
   try {
@@ -1208,7 +1208,7 @@ router.post('/:id/reject-transfer', verifyJWT, async (req, res) => {
     await db.query(`UPDATE units SET pending_transfer=false WHERE id=$1`, [req.params.id])
     await db.query(
       `INSERT INTO unit_history (unit_id, action, user_id, notes)
-       VALUES ($1,'РћС‚РєР»РѕРЅРµРЅРѕ РїСЂРё РїРµСЂРµРґР°С‡Рµ РЅР° РѕР±С‰РёР№ СЃРєР»Р°Рґ',$2,$3)`,
+       VALUES ($1,'Отклонено при передаче на общий склад',$2,$3)`,
       [req.params.id, req.user.id, (req.body?.reason || '').toString().slice(0, 500) || null]
     )
     res.json({ ok: true })
