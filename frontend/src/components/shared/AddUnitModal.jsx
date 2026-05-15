@@ -19,6 +19,7 @@ const EMPTY_FORM = {
   // project-mode fields
   purchase_mode: 'purchased', // 'purchased' | 'own'
   purchase_price: '', purchase_date: new Date().toISOString().slice(0, 10), vendor: '',
+  project_location: '', // постоянное место хранения на складе проекта (зал/кабинет)
 }
 
 function compressImage(file, maxSize = 1568, quality = 0.85) {
@@ -268,6 +269,7 @@ export default function AddUnitModal({
           vendor:         form.purchase_mode === 'purchased' && !hideProjectPurchaseProof ? (form.vendor || null) : null,
           receipt_url:    receiptUrl,
           valuation: form.purchase_mode === 'purchased' && purchasePrice ? purchasePrice : null,
+          project_location: isProjectMode ? (form.project_location || null) : null,
         }
         data = isAdminMode ? await adminUnitsApi.create(payload) : await projectUnitsApi.create(payload)
         unitId = data.unit?.id
@@ -571,6 +573,8 @@ export default function AddUnitModal({
                 )}
                 <FL>Временное понятие</FL>
                 <FI value={form.period} onChange={v => setForm(f => ({ ...f, period: v }))} placeholder="Советское, XVIII век, современное..." />
+                <FL>Место хранения (зал/кабинет)</FL>
+                <FI value={form.project_location} onChange={v => setForm(f => ({ ...f, project_location: v }))} placeholder="Зал 217, кабинет 513..." />
               </>
             )}
           </>

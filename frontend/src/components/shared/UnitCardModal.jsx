@@ -867,6 +867,7 @@ export default function UnitCardModal({ unitId, onClose, onChanged, debt, writeo
                     {sectionLabel    && <Row label={sectionTypeRu || 'Секция'} value={unit.section_name} />}
                     {positionLabel   && <Row label="Положение" value={positionLabel} />}
                     {pavLabel        && <Row label="Павильон" value={pavLabel} />}
+                    {unit.project_location && <Row label="Место хранения" value={unit.project_location} />}
                     {editAll ? (
                       <>
                         <FormRow label="Количество">

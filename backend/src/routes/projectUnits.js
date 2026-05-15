@@ -113,16 +113,30 @@ router.get('/', verifyJWT, async (req, res) => {
   try {
     const requestedProject = req.query.project_id
     const canViewAny = ANY_PROJECT_VIEWER_ROLES.has(req.user.role)
-    const projectId = requestedProject || req.user.project_id
-    if (!projectId) return res.json({ units: [] })
-    if (!canViewAny && String(projectId) !== String(req.user.project_id)) {
-      return res.status(403).json({ error: 'Forbidden' })
-    }
 
+    // Эффективный набор проектов. Директора/продюсер с ?project_id= смотрят
+    // конкретный проект (как раньше). Остальные (вкл. costume_designer с
+    // несколькими проектами) видят свой primary project_id + членства из
+    // user_projects — аддитивная вьюха только для этого склада.
+    let projectIds
+    if (canViewAny && requestedProject) {
+      projectIds = [requestedProject]
+    } else {
+      const { rows: pidRows } = await db.query(
+        `SELECT project_id FROM user_projects WHERE user_id = $1
+         UNION
+         SELECT project_id FROM users WHERE id = $1 AND project_id IS NOT NULL`,
+        [req.user.id]
+      )
+      projectIds = pidRows.map(r => r.project_id)
+    }
+    if (!projectIds.length) return res.json({ units: [] })
+
+    const ownView = !canViewAny || !requestedProject
+      || String(requestedProject) === String(req.user.project_id)
     const canSeePendingRequestDetails =
-      RETURN_REQUESTER_ROLES.has(req.user.role) ||
-      (req.user.project_id && String(projectId) === String(req.user.project_id))
-    const params = [projectId, req.user.project_id || null, canSeePendingRequestDetails]
+      RETURN_REQUESTER_ROLES.has(req.user.role) || ownView
+    const params = [projectIds, req.user.project_id || null, canSeePendingRequestDetails]
     let q = `
       WITH sources AS (
         -- 1. РЎРІРѕРё РµРґРёРЅРёС†С‹ РїСЂРѕРµРєС‚Р°
@@ -137,7 +151,7 @@ router.get('/', verifyJWT, async (req, res) => {
                u.created_at AS sort_at
         FROM units u
         WHERE u.is_project_kept = true
-          AND u.project_id = $1
+          AND u.project_id = ANY($1::uuid[])
           AND u.status != 'written_off'
 
         UNION ALL
@@ -156,7 +170,7 @@ router.get('/', verifyJWT, async (req, res) => {
           JOIN issuances iss ON iss.request_id = req.id
           JOIN users rcv     ON rcv.id = iss.received_by
           WHERE u.status IN ('issued','overdue')
-            AND COALESCE(req.project_id, rcv.project_id) = $1
+            AND COALESCE(req.project_id, rcv.project_id) = ANY($1::uuid[])
             AND u.on_loan_to_project_id IS NULL
             AND NOT EXISTS (SELECT 1 FROM returns r WHERE r.issuance_id = iss.id)
           ORDER BY u.id, iss.issued_at DESC NULLS LAST
@@ -172,7 +186,7 @@ router.get('/', verifyJWT, async (req, res) => {
         FROM units u
         JOIN project_loan_requests lr ON lr.unit_id = u.id AND lr.status = 'accepted'
         JOIN projects fp ON fp.id = lr.from_project_id
-        WHERE u.on_loan_to_project_id = $1
+        WHERE u.on_loan_to_project_id = ANY($1::uuid[])
       )
       SELECT s.source, s.loan_from_project_name, s.loan_request_id, s.loan_deadline,
              s.issuance_id, s.issued_at, s.issued_deadline,
@@ -287,7 +301,7 @@ router.post('/', verifyJWT, async (req, res) => {
 
   const { name, category, description, qty, condition, period,
           purchased, purchase_price, purchase_date, vendor, receipt_url,
-          valuation, serial, source } = req.body
+          valuation, serial, source, project_location } = req.body
 
   if (!name || !category) return res.status(400).json({ error: 'Name and category required' })
   const isCostumeDesigner = req.user.role === 'costume_designer'
@@ -304,8 +318,9 @@ router.post('/', verifyJWT, async (req, res) => {
       `INSERT INTO units
          (name, category, serial, description, qty, condition, period,
           valuation, status, is_project_kept, project_id, created_by,
-          purchased, purchase_price, purchase_date, vendor, receipt_url, source)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,'on_stock',true,$9,$10,$11,$12,$13,$14,$15,$16) RETURNING *`,
+          purchased, purchase_price, purchase_date, vendor, receipt_url, source,
+          project_location)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,'on_stock',true,$9,$10,$11,$12,$13,$14,$15,$16,$17) RETURNING *`,
       [
         name, category, serial || null, description || null,
         qty || 1, condition || null, period || null,
@@ -317,6 +332,7 @@ router.post('/', verifyJWT, async (req, res) => {
         cleanVendor,
         cleanReceiptUrl,
         normalizeProjectUnitSource(source),
+        project_location || null,
       ]
     )
     await db.query(
@@ -639,19 +655,21 @@ router.put('/:id', verifyJWT, async (req, res) => {
       return res.status(403).json({ error: 'Forbidden' })
     }
     const { name, category, serial, description, qty, condition, period,
-            valuation, purchased, purchase_price, purchase_date, vendor, receipt_url } = req.body
+            valuation, purchased, purchase_price, purchase_date, vendor, receipt_url,
+            project_location } = req.body
     const isCostumeDesigner = req.user.role === 'costume_designer'
     const cleanVendor = isCostumeDesigner ? null : (vendor || null)
     const cleanReceiptUrl = isCostumeDesigner ? null : (receipt_url || null)
     const { rows } = await db.query(
       `UPDATE units SET name=$1, category=$2, serial=$3, description=$4, qty=$5,
         condition=$6, period=$7, valuation=$8, purchased=$9,
-        purchase_price=$10, purchase_date=$11, vendor=$12, receipt_url=$13
-       WHERE id=$14 RETURNING *`,
+        purchase_price=$10, purchase_date=$11, vendor=$12, receipt_url=$13,
+        project_location=$14
+       WHERE id=$15 RETURNING *`,
       [name, category, serial || null, description || null, qty || 1,
        condition || null, period || null, valuation || null,
        Boolean(purchased), purchase_price || null, purchase_date || null,
-       cleanVendor, cleanReceiptUrl, req.params.id]
+       cleanVendor, cleanReceiptUrl, project_location || null, req.params.id]
     )
     res.json({ unit: rows[0] })
   } catch (err) {

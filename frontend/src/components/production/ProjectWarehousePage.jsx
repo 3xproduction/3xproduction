@@ -7,7 +7,7 @@
 
 import React, { useState, useEffect } from 'react'
 import { useSearchParams } from 'react-router-dom'
-import { Plus, Send, Trash2, MoreVertical, Package } from 'lucide-react'
+import { Plus, Send, Trash2, MoreVertical, Package, MapPin } from 'lucide-react'
 import ProductionLayout from './ProductionLayout'
 import Badge from '../shared/Badge'
 import Button from '../shared/Button'
@@ -299,6 +299,11 @@ export default function ProjectWarehousePage({ embedded = false }) {
                 background: 'var(--card)', borderRadius: 'var(--radius-btn)', cursor: 'pointer',
               }}>
                 <div style={{ flex: 1, minWidth: 0, fontSize: 13, fontWeight: 500, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{u.name}</div>
+                {(u.project_location || u.period) && (
+                  <span style={{ fontSize: 12, color: 'var(--muted)', flexShrink: 0, display: 'flex', alignItems: 'center', gap: 3 }}>
+                    <MapPin size={10} /> {u.project_location || u.period}
+                  </span>
+                )}
                 <span style={{ fontSize: 12, color: 'var(--muted)', flexShrink: 0 }}>{categoryLabel(u.category)}</span>
                 <SourceBadge unit={u} />
               </div>
@@ -425,6 +430,11 @@ function GridTile({ unit, onOpen, menuOpen, onMenuToggle, onAction, canTransfer 
             <span style={{ fontSize: 11, color: 'var(--muted)' }}>{Math.round(unit.purchase_price)} ₽</span>
           )}
         </div>
+        {(unit.project_location || unit.period) && (
+          <div style={{ display: 'flex', alignItems: 'center', gap: 4, marginTop: 6, fontSize: 11, color: 'var(--muted)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+            <MapPin size={11} style={{ flexShrink: 0 }} /> {unit.project_location || unit.period}
+          </div>
+        )}
         <UnitMissingDataBadge unit={unit} role={userRole} />
       </div>
 
@@ -492,6 +502,11 @@ function RowTile({ unit, onOpen, onAction, canTransfer = true, canDelete = true,
             {unit.serial ? `${unit.serial} · ` : ''}{categoryLabel(unit.category)}
             {unit.purchased && unit.purchase_price ? ` · ${Math.round(unit.purchase_price)} ₽` : ''}
           </div>
+          {(unit.project_location || unit.period) && (
+            <div style={{ fontSize: 12, color: 'var(--muted)', marginTop: 2, display: 'flex', alignItems: 'center', gap: 4 }}>
+              <MapPin size={11} style={{ flexShrink: 0 }} /> {unit.project_location || unit.period}
+            </div>
+          )}
           <UnitMissingDataBadge unit={unit} role={userRole} compact />
         </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexShrink: 0 }} onClick={e => e.stopPropagation()}>
