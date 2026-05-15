@@ -365,6 +365,12 @@ npm.cmd start
 
 Общее правило: `docker push` сам по себе не обновляет Serverless Container; нужна новая revision deploy. Не использовать `latest` для production-релизов без явной команды.
 
+### Роль Claude в ревью (важно)
+
+Claude выступает ревьюером **только если сессия инициирована из Codex** (Codex передаёт review-пакет: `ревью`/`review`/`проверь Codex` → читать `.codex/reviews/CLAUDE_REVIEW_TASK.md` и т.д., писать вердикт в `.codex/reviews/CLAUDE_REVIEW.md`). В этом случае Claude не правит код, только ревью.
+
+Если **сессия начата напрямую в Claude** (обычная рабочая/dev-сессия) — Claude НЕ ревьюер: он исполнитель (пишет код, деплоит по правилам), и review-gate `CLAUDE_REVIEW.md` к нему не применяется (нельзя «ревьюить сам себя» как гейт). Не блокировать деплой ожиданием Claude-вердикта в Claude-инициированной сессии.
+
 ## Git Rules
 
 - Всегда смотреть `git status --short --branch` перед изменениями.
