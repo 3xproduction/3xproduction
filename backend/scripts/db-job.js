@@ -37,11 +37,34 @@ async function readBlock(client) {
         ORDER BY filename DESC LIMIT 6`)).map(r => r.filename),
     projects: await q(`SELECT id,name FROM projects
         WHERE lower(trim(name)) ~ 'шеф|закон|тайг|опасн' ORDER BY name`),
-    varya: await q(`SELECT id,name,role,project_id FROM users
-        WHERE lower(split_part(regexp_replace(trim(name),'\\s+',' ','g'),' ',1))
-        IN ('варя','варвара')`),
+    varya_candidates: await q(`SELECT id,name,role,project_id FROM users
+        WHERE lower(name) LIKE '%бартнов%' OR lower(name) LIKE '%варвар%' ORDER BY name`),
     warehouses_217_513: await q(`SELECT id,name,project_id FROM warehouses
         WHERE name ~ '217|513' ORDER BY name`),
+  }
+}
+
+// Post-commit, read-only verification (outside the apply transaction so it
+// can never affect what was applied). Tolerant: any failure → captured.
+async function verifyBlock(client) {
+  const q = async (sql) => (await client.query(sql)).rows
+  try {
+    return {
+      varya_memberships: await q(`SELECT u.name AS user_name, p.name AS project
+          FROM users u
+          JOIN user_projects up ON up.user_id = u.id
+          JOIN projects p ON p.id = up.project_id
+          WHERE lower(u.name) LIKE '%бартнов%' OR lower(u.name) LIKE '%варвар%'
+          ORDER BY u.name, p.name`),
+      sections_217_513: await q(`SELECT id,name,type,warehouse_id
+          FROM warehouse_sections WHERE name ~ '217|513' ORDER BY name`),
+      units_period_217_513: (await q(`SELECT count(*)::int c FROM units
+          WHERE period ~ '217|513'`))[0].c,
+      units_project_location_set: (await q(`SELECT count(*)::int c FROM units
+          WHERE project_location IS NOT NULL AND project_location <> ''`))[0].c,
+    }
+  } catch (e) {
+    return { verify_error: String(e && e.message || e) }
   }
 }
 
@@ -80,7 +103,8 @@ async function run() {
       RESULT = { status: 'ROLLED_BACK_stock_changed', before, after, candidates: todo }
     } else {
       await client.query('COMMIT')
-      RESULT = { status: 'OK', applied: ran, candidates: todo, before, after }
+      const verify = await verifyBlock(client)
+      RESULT = { status: 'OK', applied: ran, candidates: todo, before, after, verify }
     }
   } catch (err) {
     try { await client.query('ROLLBACK') } catch { /* already aborted */ }
