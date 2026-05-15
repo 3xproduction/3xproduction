@@ -357,6 +357,7 @@ export const projectUnits = {
   update:        (id, body) => request('PUT',    `/project-units/${id}`, body),
   delete:        (id, reason) => request('DELETE', `/project-units/${id}`, reason ? { reason } : undefined),
   uploadReceipt:  (formData) => request('POST',   '/project-units/upload-receipt', formData),
+  purchasedByProjects: ()   => request('GET',   '/project-units/purchased-by-projects'),
   transfer:      (id, comment) => request('POST', `/project-units/${id}/transfer-to-warehouse`, { comment }),
   pendingTransfers: ()      => request('GET',   '/project-units/pending-transfers'),
   // Список всех проектов — для селектора в ProjectWarehousePage (wh-director/deputy/producer).

@@ -6,7 +6,7 @@ const router = require('express').Router()
 const multer = require('multer')
 const crypto = require('crypto')
 const db = require('../db')
-const { verifyJWT } = require('../middleware/auth')
+const { verifyJWT, checkRole } = require('../middleware/auth')
 const { uploadFile, uploadImageWithThumb } = require('../services/r2')
 const { createNotification } = require('../services/notifications')
 const { unitMissingFields, canSeeMissingUnitData } = require('../utils/unitMissingFields')
@@ -228,6 +228,57 @@ router.get('/', verifyJWT, async (req, res) => {
     res.json({ units: [] })
   }
 })
+
+// GET /project-units/purchased-by-projects — для дашборда склада.
+// Единицы, КУПЛЕННЫЕ проектами (purchased=true, project_id задан) —
+// это не «выдано складом», а отдельная категория «Куплено у проектов».
+// Группировка по проектам в формате как «заявки от проектов».
+router.get('/purchased-by-projects', verifyJWT,
+  checkRole('warehouse_director', 'warehouse_deputy', 'warehouse_staff', 'producer'),
+  async (req, res) => {
+    try {
+      const { rows } = await db.query(`
+        SELECT p.id AS project_id, p.name AS project_name,
+               u.id, u.name, u.category, u.qty,
+               u.purchase_price, u.purchase_date, u.created_at,
+               (SELECT url FROM unit_photos
+                  WHERE unit_id = u.id AND type = 'stock'
+                  ORDER BY created_at LIMIT 1) AS photo_url
+        FROM units u
+        JOIN projects p ON p.id = u.project_id
+        WHERE u.purchased = true
+          AND u.project_id IS NOT NULL
+          AND u.status <> 'written_off'
+        ORDER BY p.name, u.created_at DESC
+      `)
+      const byProj = new Map()
+      for (const r of rows) {
+        let proj = byProj.get(r.project_id)
+        if (!proj) {
+          proj = { id: r.project_id, name: r.project_name || 'Без проекта', qty: 0, value: 0, items: [] }
+          byProj.set(r.project_id, proj)
+        }
+        const itemQty = Number(r.qty) || 1
+        proj.qty += itemQty
+        proj.value += Number(r.purchase_price || 0) * itemQty
+        proj.items.push({
+          id: r.id, name: r.name, category: r.category, qty: itemQty,
+          purchase_price: r.purchase_price, purchase_date: r.purchase_date,
+          created_at: r.created_at, photo_url: r.photo_url,
+        })
+      }
+      const projects = Array.from(byProj.values())
+      const totals = {
+        qty: projects.reduce((s, p) => s + p.qty, 0),
+        value: projects.reduce((s, p) => s + p.value, 0),
+        projects: projects.length,
+      }
+      res.json({ totals, projects })
+    } catch (err) {
+      console.error('project-units/purchased-by-projects:', err)
+      res.status(500).json({ error: 'Server error' })
+    }
+  })
 
 // POST /project-units вЂ” create a project-kept unit (no approval).
 router.post('/', verifyJWT, async (req, res) => {

@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { Package, ArrowRightLeft, AlertTriangle, Wallet, ChevronRight, ClipboardCheck, RotateCw, MapPin, TrendingUp } from 'lucide-react'
+import { Package, ArrowRightLeft, AlertTriangle, Wallet, ChevronRight, ClipboardCheck, RotateCw, MapPin, TrendingUp, ShoppingBag } from 'lucide-react'
 import WarehouseLayout from './WarehouseLayout'
 import Button from '../shared/Button'
 import UnitCardModal from '../shared/UnitCardModal'
@@ -223,6 +223,7 @@ export default function DashboardPage() {
   const [activeIssuances, setActiveIssuances] = useState([])
   const [returnReqCount, setReturnReqCount] = useState(0)
   const [returned, setReturned] = useState([])
+  const [purchased, setPurchased] = useState({ totals: { qty: 0, value: 0, projects: 0 }, projects: [] })
   const [receipts, setReceipts] = useState([])
   const [openUnitId, setOpenUnitId] = useState(null)
 
@@ -399,6 +400,15 @@ export default function DashboardPage() {
     })
 
     unitsApi.list({}).then(d => setReceipts((d.units || []).slice(0, 5))).catch(() => {})
+
+    // «Куплено у проектов» — единицы, купленные проектами (purchased=true),
+    // это не «выдано складом», а отдельная категория.
+    projectUnitsApi.purchasedByProjects()
+      .then(d => setPurchased({
+        totals: d.totals || { qty: 0, value: 0, projects: 0 },
+        projects: d.projects || [],
+      }))
+      .catch(() => {})
   }, [])
 
   // ── KPI ──
@@ -412,6 +422,13 @@ export default function DashboardPage() {
       label: 'Выдано', value: fmtNum(stats.issued),
       Icon: ArrowRightLeft, bg: 'var(--bg-secondary)', color: 'var(--ink-900)',
       onClick: () => navigate('/issued?view=issued'),
+    },
+    {
+      label: 'Куплено', value: fmtNum(purchased.totals.qty),
+      Icon: ShoppingBag, bg: 'var(--gold-100)', color: 'var(--gold-600)',
+      sub: purchased.totals.projects > 0
+        ? `${purchased.totals.projects} ${pluralRu(purchased.totals.projects, ['проект', 'проекта', 'проектов'])} · ${fmtMoney(purchased.totals.value)}`
+        : 'проектами',
     },
     {
       label: 'Не вернули', value: fmtNum(notReturned.total),
@@ -684,6 +701,37 @@ export default function DashboardPage() {
                     </div>
                   </div>
                   <ChevronRight size={14} style={{ color: 'var(--subtle)', flexShrink: 0 }} />
+                </div>
+              ))
+            }
+          </div>
+        </div>
+
+        {/* Куплено у проектов — отдельная категория (не «выдано складом») */}
+        <div className="dash-cards">
+          <div className="dash-card" style={{ gridColumn: '1 / -1' }}>
+            <div className="dash-card-head">
+              <span className="dash-card-title">Куплено у проектов</span>
+              <span className="dash-card-link" style={{ cursor: 'default' }}>
+                {purchased.totals.qty} ед. · {fmtMoney(purchased.totals.value)}
+              </span>
+            </div>
+            {(!purchased.projects || purchased.projects.length === 0)
+              ? <div className="dash-card-empty">Проекты пока ничего не покупали</div>
+              : purchased.projects.map(p => (
+                <div key={p.id} className="dash-row">
+                  <div style={{ minWidth: 0, flex: 1 }}>
+                    <div className="dash-row-title">
+                      <span className="dash-row-title-text">{p.name}</span>
+                    </div>
+                    <div className="dash-row-sub">
+                      {(p.items || []).slice(0, 3).map(i => i.name).join(', ')}
+                      {(p.items || []).length > 3 ? ` +${p.items.length - 3}` : ''}
+                    </div>
+                  </div>
+                  <div style={{ fontSize: 12, color: 'var(--muted)', flexShrink: 0, whiteSpace: 'nowrap', textAlign: 'right' }}>
+                    {p.qty} ед.<br />{fmtMoney(p.value)}
+                  </div>
                 </div>
               ))
             }

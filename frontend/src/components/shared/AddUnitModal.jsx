@@ -553,6 +553,26 @@ export default function AddUnitModal({
 
             <FL>Количество</FL>
             <FI type="number" value={form.qty} onChange={v => setForm(f => ({ ...f, qty: v }))} placeholder="1" />
+
+            {isProjectMode && (
+              <>
+                {form.purchase_mode === 'purchased' && (
+                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
+                    <div>
+                      <FL>Цена покупки, ₽ *</FL>
+                      <FI type="number" value={form.purchase_price} onChange={v => setForm(f => ({ ...f, purchase_price: v }))} placeholder="1450" />
+                    </div>
+                    <div>
+                      <FL>Дата покупки</FL>
+                      <input type="date" value={form.purchase_date} onChange={e => setForm(f => ({ ...f, purchase_date: e.target.value }))}
+                        style={{ width: '100%', height: 38, padding: '0 10px', border: '1px solid var(--border)', borderRadius: 'var(--radius-btn)', fontSize: 13, background: 'var(--white)', boxSizing: 'border-box', marginBottom: 12 }} />
+                    </div>
+                  </div>
+                )}
+                <FL>Временное понятие</FL>
+                <FI value={form.period} onChange={v => setForm(f => ({ ...f, period: v }))} placeholder="Советское, XVIII век, современное..." />
+              </>
+            )}
           </>
         )}
 
@@ -635,19 +655,21 @@ export default function AddUnitModal({
               ))}
             </div>
 
-            {form.purchase_mode === 'purchased' && (
+            {form.purchase_mode === 'purchased' && (isAdminMode || !hideProjectPurchaseProof) && (
               <div style={{ background: 'var(--bg)', borderRadius: 'var(--radius-btn)', padding: 12, marginBottom: 12 }}>
-                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10, marginBottom: 10 }}>
-                  <div>
-                    <FL>Цена покупки, ₽</FL>
-                    <FI type="number" value={form.purchase_price} onChange={v => setForm(f => ({ ...f, purchase_price: v }))} placeholder="1450" />
+                {isAdminMode && (
+                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10, marginBottom: 10 }}>
+                    <div>
+                      <FL>Цена покупки, ₽</FL>
+                      <FI type="number" value={form.purchase_price} onChange={v => setForm(f => ({ ...f, purchase_price: v }))} placeholder="1450" />
+                    </div>
+                    <div>
+                      <FL>Дата покупки</FL>
+                      <input type="date" value={form.purchase_date} onChange={e => setForm(f => ({ ...f, purchase_date: e.target.value }))}
+                        style={{ width: '100%', height: 38, padding: '0 10px', border: '1px solid var(--border)', borderRadius: 'var(--radius-btn)', fontSize: 13, background: 'var(--white)', boxSizing: 'border-box' }} />
+                    </div>
                   </div>
-                  <div>
-                    <FL>Дата покупки</FL>
-                    <input type="date" value={form.purchase_date} onChange={e => setForm(f => ({ ...f, purchase_date: e.target.value }))}
-                      style={{ width: '100%', height: 38, padding: '0 10px', border: '1px solid var(--border)', borderRadius: 'var(--radius-btn)', fontSize: 13, background: 'var(--white)', boxSizing: 'border-box' }} />
-                  </div>
-                </div>
+                )}
                 {!hideProjectPurchaseProof && (
                   <>
                     <FL>Магазин / поставщик</FL>
@@ -673,7 +695,7 @@ export default function AddUnitModal({
               </div>
             )}
 
-            {isAdminMode ? (
+            {isAdminMode && (
               <>
                 <FL>Адрес хранения</FL>
                 <select
@@ -686,13 +708,10 @@ export default function AddUnitModal({
                 </select>
                 <FI value={form.period} onChange={v => setForm(f => ({ ...f, period: v }))} placeholder="Например: офис, шкаф реквизита, склад на площадке" />
               </>
-            ) : (
-              <>
-                <FL>Временное понятие</FL>
-                <FI value={form.period} onChange={v => setForm(f => ({ ...f, period: v }))} placeholder="Советское, XVIII век, современное..." />
-              </>
             )}
-
+            {/* Для площадки «Временное понятие» и цена/дата покупки — на шаге
+                «Описание» (шаг 3): период заполняет AI, цену удобнее править
+                рядом с деталями. */}
           </>
         )}
 
@@ -707,8 +726,10 @@ export default function AddUnitModal({
                 && (!form.purchase_price || (!hideProjectPurchaseProof && !receiptFile)))
           const nextDisabled =
             (screen === 'desc' && (!form.name.trim() || !form.category))
+            // Цена покупки переехала на шаг «Описание», поэтому со шага
+            // «Источник» уходим только при наличии чека (если он требуется).
             || (screen === 'source' && isProjectMode && form.purchase_mode === 'purchased'
-                && (!form.purchase_price || (!hideProjectPurchaseProof && !receiptFile)))
+                && !hideProjectPurchaseProof && !receiptFile)
           return (
             <>
               {addError && <div style={{ color: 'var(--red)', fontSize: 13, marginBottom: 12 }}>{addError}</div>}
