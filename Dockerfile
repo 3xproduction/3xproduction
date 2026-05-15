@@ -21,7 +21,9 @@ RUN cd frontend && npx vite build --mode ${BUILD_MODE}
 
 EXPOSE 3000
 
-# Apply pending DB migrations on boot (container is inside the VPC and can
-# reach managed-PG), then start the server. Migration runner is guarded by a
-# transaction advisory lock so concurrent serverless instances are safe.
-CMD ["sh", "-c", "node backend/src/db/migrate.js && node backend/src/index.js"]
+# NOTE: migrations are NOT auto-run on boot. Prod _migrations is out of sync
+# with the migrations/ dir (prod schema predates migration tracking), so a
+# boot-time `migrate` replays non-idempotent old migrations and crashes the
+# container (caused a prod 502). Apply migrations out-of-band via the proper
+# DB path. See backend/src/db/migrate.js.
+CMD ["node", "backend/src/index.js"]
