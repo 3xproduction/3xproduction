@@ -4,14 +4,11 @@
 
 ## Baseline
 
-Этот файл обновлён 2026-05-12 по committed git-истории. Локально `git log --since="2026-05-12 00:00"` пустой; последний committed baseline:
+**Единый источник истины по состоянию проекта — `CODEX.md`** (разделы «Committed Baseline», «Active Deployment Snapshot», «Shipped scope», «Prod-DB изменения»). Здесь baseline НЕ дублируется, чтобы не было рассинхрона: актуальные версии prod/staging, ревизии, что задеплоено и что менялось в prod-БД — всегда смотри в `CODEX.md`. Этот файл (`CLAUDE.md`) содержит только Claude-специфичные правила работы (команды, архитектура, do/don't).
 
-```text
-0589f53 2026-04-23 chore: sync git with running production code
-622c1f5 2026-04-23 feat: PWA + pino logger + prod-mode hardening
-```
+Общие принципы: не использовать dirty worktree как источник shipped-контекста; committed-состояние — через `git show HEAD:<path>`; staging и prod — разные линии тегов (`test-vN` ≠ авто prod `vN`).
 
-Не использовать dirty worktree как источник shipped-контекста. Для committed-состояния смотри `git show HEAD:<path>`.
+> Деплой: ВСЕГДА сначала staging, прод — только по явной отмашке пользователя (каждый раз отдельно). Скрипты деплоя берут `ANTHROPIC_BASE_URL="${ANTHROPIC_BASE_URL:-<прокси>}"` — если в шелле экспортнут `api.anthropic.com`, его НАДО переопределять на прокси (`ANTHROPIC_BASE_URL='https://anthropic-proxy.pavelbelov590.workers.dev'` перед `bash scripts/deploy-*.sh`), иначе прод/стейдж AI падает с гео-403.
 
 ## Project
 
@@ -44,7 +41,7 @@ npm.cmd run build
 backend/src/
   index.js                 Express routes/static, helmet/CORS/rate-limit
   logger.js                pino/pino-http, sensitive redact
-  db/migrations/           committed migrations 001-055
+  db/migrations/           committed migrations 001-066
   routes/                  units, projectUnits, colleagues, handovers, rent, publicRent, search, etc.
 frontend/src/
   App.jsx                  router, warehouse/production worlds
@@ -59,7 +56,7 @@ frontend/src/
 ## Important Areas
 
 - Search: `backend/src/services/searchService.js`, `routes/search.js`, `routes/units.js`; migrations `034-038`; `pg_trgm/unaccent` нельзя считать доступными на Yandex Managed PostgreSQL.
-- Project warehouse: `routes/projectUnits.js`; project-kept units are `is_project_kept=true`; committed `/project-units` lists own project-kept items, not a 3-source UNION.
+- Project warehouse: `routes/projectUnits.js`; project-kept units `is_project_kept=true`. `GET /project-units` — UNION 3 источников (`own` / `from_warehouse` / `from_project`) с фильтром `?source=`. Купленные проектом — `purchased=true`; warehouse-сводка по ним — `GET /project-units/purchased-by-projects` (модуль «Куплено» на дашборде).
 - Colleagues/loans: `routes/colleagues.js`, `project_loan_requests`, `LoanRequestsSection`.
 - Handovers: `routes/handovers.js`, `HandoversPage`, tab in `ProjectWarehouseHub`.
 - Warehouse map: `frontend/src/components/warehouse/cells/*`, `routes/warehouses.js`, migrations `039`, `051`, `054`, `055`.
