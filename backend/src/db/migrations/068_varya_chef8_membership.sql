@@ -14,15 +14,30 @@ DECLARE
   v_pcnt   INT;
   v_ins    INT;
 BEGIN
-  SELECT count(*), min(id) INTO v_ucnt, v_user
+  -- min(uuid) не существует в PostgreSQL → count отдельно, id через LIMIT 1.
+  SELECT count(*) INTO v_ucnt
   FROM users
   WHERE role = 'costume_designer'
     AND lower(split_part(regexp_replace(trim(name), '[[:space:]]+', ' ', 'g'), ' ', 1))
         IN ('варя', 'варвара');
 
-  SELECT count(*), min(id) INTO v_pcnt, v_proj
+  SELECT id INTO v_user
+  FROM users
+  WHERE role = 'costume_designer'
+    AND lower(split_part(regexp_replace(trim(name), '[[:space:]]+', ' ', 'g'), ' ', 1))
+        IN ('варя', 'варвара')
+  ORDER BY created_at, id
+  LIMIT 1;
+
+  SELECT count(*) INTO v_pcnt
   FROM projects
   WHERE lower(trim(name)) = lower('Шеф-8');
+
+  SELECT id INTO v_proj
+  FROM projects
+  WHERE lower(trim(name)) = lower('Шеф-8')
+  ORDER BY created_at DESC, id
+  LIMIT 1;
 
   IF v_ucnt = 1 AND v_pcnt = 1 THEN
     INSERT INTO user_projects (user_id, project_id)
