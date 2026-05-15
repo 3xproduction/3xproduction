@@ -40,11 +40,12 @@ async function run() {
 
     const before = (await client.query(
       `SELECT
-         count(*) FILTER (WHERE is_project_kept AND project_id=$1)::int src_kept,
-         count(*) FILTER (WHERE is_project_kept AND project_id=$2)::int dst_kept,
-         count(*) FILTER (WHERE project_id=$1)::int src_total,
-         (SELECT count(*) FROM units)::int units_total,
-         (SELECT COALESCE(sum(qty),0) FROM units)::int qty_sum`,
+         count(*) FILTER (WHERE is_project_kept AND project_id=$1)::int AS src_kept,
+         count(*) FILTER (WHERE is_project_kept AND project_id=$2)::int AS dst_kept,
+         count(*) FILTER (WHERE project_id=$1)::int AS src_total,
+         count(*)::int AS units_total,
+         COALESCE(sum(qty),0)::int AS qty_sum
+       FROM units`,
       [srcId, dstId])).rows[0]
 
     const moved = (await client.query(
@@ -61,10 +62,11 @@ async function run() {
 
     const after = (await client.query(
       `SELECT
-         count(*) FILTER (WHERE is_project_kept AND project_id=$1)::int src_kept,
-         count(*) FILTER (WHERE is_project_kept AND project_id=$2)::int dst_kept,
-         (SELECT count(*) FROM units)::int units_total,
-         (SELECT COALESCE(sum(qty),0) FROM units)::int qty_sum`,
+         count(*) FILTER (WHERE is_project_kept AND project_id=$1)::int AS src_kept,
+         count(*) FILTER (WHERE is_project_kept AND project_id=$2)::int AS dst_kept,
+         count(*)::int AS units_total,
+         COALESCE(sum(qty),0)::int AS qty_sum
+       FROM units`,
       [srcId, dstId])).rows[0]
 
     // Сохранность общего стока: total и qty не должны измениться (мы только
