@@ -5,7 +5,7 @@ import WarehouseLayout from './WarehouseLayout'
 import Button from '../shared/Button'
 import UnitCardModal from '../shared/UnitCardModal'
 import { useToast } from '../shared/Toast'
-import { units as unitsApi, requests as requestsApi, issuances as issuancesApi, projectUnits as projectUnitsApi, rent as rentApi, debts as debtsApi, writeoffs as writeoffsApi } from '../../services/api'
+import { units as unitsApi, requests as requestsApi, issuances as issuancesApi, projectUnits as projectUnitsApi, rent as rentApi, debts as debtsApi, writeoffs as writeoffsApi, issued as issuedApi } from '../../services/api'
 import { useAuth } from '../../hooks/useAuth'
 import { pluralRu } from '../../utils/pluralRu'
 import { unitQty, sumUnitQty } from '../../utils/unitQty'
@@ -267,14 +267,17 @@ export default function DashboardPage() {
       const assetsValue = us
         .filter(u => u.status === 'on_stock' || u.status === 'issued')
         .reduce((s, u) => s + (Number(u.valuation) || 0) * unitQty(u), 0)
-      setStats({
+      // `issued` намеренно НЕ трогаем здесь — он принадлежит источнику
+      // «Движения» (byProjects('issued')) или fallback'у ниже, чтобы цифра
+      // на главной всегда совпадала с разделом «Движение».
+      setStats(s => ({
+        ...s,
         on_stock: sumUnitQty(us.filter(u => u.status === 'on_stock')),
-        issued:   sumUnitQty(commonUnits.filter(u => u.status === 'issued')),
         overdue:  sumUnitQty(commonUnits.filter(u => u.status === 'overdue')),
         pending:  sumUnitQty(commonUnits.filter(u => u.status === 'pending')),
         no_cell:  sumUnitQty(commonUnits.filter(isCommonStockWithoutPlace)),
         assets_value: assetsValue,
-      })
+      }))
     }).catch(() => {})
 
     Promise.all([
@@ -308,25 +311,65 @@ export default function DashboardPage() {
       setRevenue(sum)
     }).catch(() => {})
 
-    Promise.all([
+    // Счётчик «Выдано» и список «Выданы» берём из того же источника, что и
+    // раздел «Движение» → вкладка «Выданы» (GET /issued/by-projects?view=issued),
+    // чтобы цифра и список на главной всегда совпадали с «Движением».
+    // Для ролей без доступа к этому эндпоинту (напр. warehouse_staff) —
+    // тихий фолбэк на старый расчёт.
+    const fallbackActive = () => Promise.all([
       issuancesApi.active().then(d => d.issuances || []).catch(() => []),
       rentApi.list({ status: 'active', type: 'out' }).then(d => d.deals || []).catch(() => []),
     ]).then(([iss, deals]) => {
       const normalizedDeals = deals.map(d => ({
-        id: 'rd_' + d.id,
-        _isRent: true,
-        receiver_name: d.counterparty_name,
-        project_name: 'Партнёрская',
-        unit_ids: d.unit_ids || [],
-        deadline: d.period_end,
-        return_requested_at: null,
-        _rentId: d.id,
+        id: 'rd_' + d.id, _isRent: true, receiver_name: d.counterparty_name,
+        project_name: 'Партнёрская', unit_ids: d.unit_ids || [],
+        deadline: d.period_end, return_requested_at: null, _rentId: d.id,
       }))
-      const combined = [...iss, ...normalizedDeals]
+      const all = [...iss, ...normalizedDeals]
+      const issuedQty = all.reduce((n, x) => n + (x.unit_ids || []).length, 0)
+      setStats(s => ({ ...s, issued: issuedQty }))
+      const combined = all
         .sort((a, b) => new Date(a.deadline || 0) - new Date(b.deadline || 0))
         .slice(0, 4)
       setActiveIssuances(combined)
     })
+
+    issuedApi.byProjects('issued').then(r => {
+      const projects = r?.projects || []
+      // Счётчик «Выдано» = totals.qty из «Движения» (issued+overdue, без
+      // запрошенных возвратов и без уже вернувшихся).
+      if (r?.totals && typeof r.totals.qty === 'number') {
+        setStats(s => ({ ...s, issued: r.totals.qty }))
+      }
+      // Список — одна строка на выдачу/сделку, как раньше, но набор строго
+      // совпадает с «Движением».
+      const byKey = new Map()
+      for (const p of projects) {
+        const isRent = p.kind === 'rent'
+        for (const person of p.people || []) {
+          for (const it of person.items || []) {
+            const key = isRent ? 'rd_' + it.deal_id : 'is_' + it.issuance_id
+            let row = byKey.get(key)
+            if (!row) {
+              row = isRent
+                ? { id: 'rd_' + it.deal_id, _isRent: true, _rentId: it.deal_id,
+                    receiver_name: person.name, project_name: 'Партнёрская',
+                    unit_ids: [], deadline: it.deadline, return_requested_at: it.return_requested_at }
+                : { id: it.issuance_id, _isRent: false,
+                    receiver_name: person.name,
+                    project_name: p.kind === 'no_project' ? null : p.name,
+                    unit_ids: [], deadline: it.deadline, return_requested_at: it.return_requested_at }
+              byKey.set(key, row)
+            }
+            if (it.unit_id) row.unit_ids.push(it.unit_id)
+          }
+        }
+      }
+      const combined = Array.from(byKey.values())
+        .sort((a, b) => new Date(a.deadline || 0) - new Date(b.deadline || 0))
+        .slice(0, 4)
+      setActiveIssuances(combined)
+    }).catch(() => { fallbackActive() })
 
     Promise.all([
       projectUnitsApi.listReturnRequests('outgoing', 'confirmed').then(d => d.requests || []).catch(() => []),

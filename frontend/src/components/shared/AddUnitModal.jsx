@@ -3,7 +3,7 @@
 // (например, с карты склада — поверх самой карты, а не каталога).
 
 import { useState, useEffect, useRef } from 'react'
-import { ArrowLeft, Camera, Film, Sparkles, Receipt, Gift } from 'lucide-react'
+import { Camera, Film, Sparkles, Receipt, Gift, AlertTriangle } from 'lucide-react'
 import Button from './Button'
 import { ALL_CATEGORIES, categoryLabel } from '../../constants/categories'
 import { CLOTHING_SIZES_INT, CLOTHING_SIZES_RU, SHOE_SIZES, IS_SIZED_CAT, IS_SHOES_CAT } from '../../constants/clothingSizes'
@@ -11,6 +11,7 @@ import { units as unitsApi, warehouses as warehousesApi, projectUnits as project
 import { useAuth } from '../../hooks/useAuth'
 import { useToast } from './Toast'
 import { removeBgWhite, preloadBgModel, describeBgError, describeBgSkipped } from '../../utils/removeBg'
+import { findSimilarUnits } from '../../utils/similarUnits'
 
 const EMPTY_FORM = {
   name: '', category: ALL_CATEGORIES[0], dimensions: '', description: '',
@@ -59,7 +60,15 @@ export default function AddUnitModal({
   const isDirector = ['warehouse_director', 'warehouse_deputy'].includes(user?.role)
   const canSeeSource = ['warehouse_director', 'warehouse_deputy', 'producer'].includes(user?.role)
 
+  // Порядок экранов визарда. Для площадки (project) — источник идёт ПЕРВЫМ
+  // шагом, остальные в той же последовательности. Админка и обычный склад
+  // не меняются.
+  const SCREENS = isProjectMode
+    ? ['source', 'photos', 'desc']
+    : (isAdminMode ? ['photos', 'desc', 'source'] : ['photos', 'desc', 'place'])
+
   const [addStep, setAddStep] = useState(1)
+  const screen = SCREENS[addStep - 1]
   const [form, setForm] = useState(EMPTY_FORM)
   const [photos, setPhotos] = useState([])
   const [sizeType, setSizeType] = useState('clothing')
@@ -72,6 +81,10 @@ export default function AddUnitModal({
   const [cells, setCells] = useState([])
   const [receiptFile, setReceiptFile] = useState(null)
   const [receiptPreview, setReceiptPreview] = useState('')
+  // Похожие единицы с общего склада — предупреждение о возможном дубле
+  // (только для площадки при «С общего склада»).
+  const [similar, setSimilar] = useState([])
+  const [similarLoading, setSimilarLoading] = useState(false)
   const fileRef = useRef()
   const camRef = useRef()
   const videoRef = useRef()
@@ -107,6 +120,8 @@ export default function AddUnitModal({
     setSizeRegion('ru')
     setReceiptFile(null)
     setReceiptPreview('')
+    setSimilar([])
+    setSimilarLoading(false)
     if (!isDetachedStockMode || isAdminMode) {
       warehousesApi.list().then(d => setWarehouses(d.warehouses || [])).catch(() => {})
     }
@@ -178,22 +193,32 @@ export default function AddUnitModal({
         return
       }
       if (result?.name || result?.category || result?.description) {
+        const nextCat = ALL_CATEGORIES.includes(result.category) ? result.category : form.category
         setForm(f => {
-          const nextCat = ALL_CATEGORIES.includes(result.category) ? result.category : f.category
-          if (nextCat !== f.category) {
+          const cat = ALL_CATEGORIES.includes(result.category) ? result.category : f.category
+          if (cat !== f.category) {
             // Синхронизируем тип размерной сетки с распознанной категорией.
-            setSizeType(IS_SHOES_CAT(nextCat) ? 'shoe' : 'clothing')
+            setSizeType(IS_SHOES_CAT(cat) ? 'shoe' : 'clothing')
             setSizeRegion('ru')
           }
           return {
             ...f,
             name: result.name || f.name,
-            category: nextCat,
+            category: cat,
             period: result.period || f.period,
             description: result.description || f.description,
           }
         })
         toast?.('AI заполнил поля — проверьте и отредактируйте', 'success')
+        // Для площадки при «С общего склада» — показать похожие единицы
+        // (проверка на дубль), по принципу пакетного пополнения.
+        if (isProjectMode && form.purchase_mode === 'own' && result.name) {
+          setSimilarLoading(true)
+          findSimilarUnits({ name: result.name, category: nextCat })
+            .then(list => setSimilar(list))
+            .catch(() => setSimilar([]))
+            .finally(() => setSimilarLoading(false))
+        }
       } else {
         toast?.('AI нужна ещё попытка или заполните вручную', 'error')
       }
@@ -201,7 +226,7 @@ export default function AddUnitModal({
       toast?.(err.message || 'AI нужна ещё попытка или заполните вручную', 'error')
     } finally {
       setRecognizing(false)
-      setAddStep(2)
+      setAddStep(s => Math.min(s + 1, SCREENS.length))
     }
   }
 
@@ -318,8 +343,8 @@ export default function AddUnitModal({
           ))}
         </div>
 
-        {/* STEP 1 — Photos */}
-        {addStep === 1 && (
+        {/* Photos screen */}
+        {screen === 'photos' && (
           <>
             {recognizing || bgProgress ? (
               <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', padding: '48px 0', gap: 16 }}>
@@ -426,39 +451,43 @@ export default function AddUnitModal({
                 <input ref={fileRef} type="file" accept="image/*,video/mp4,video/webm,video/quicktime" multiple style={{ display: 'none' }} onChange={onFilesSelected} />
                 <input ref={camRef} type="file" accept="image/*" capture="environment" style={{ display: 'none' }} onChange={onFilesSelected} />
                 <input ref={videoRef} type="file" accept="video/*" capture="environment" style={{ display: 'none' }} onChange={onFilesSelected} />
-
-                <div style={{ display: 'flex', gap: 8 }}>
-                  <Button variant="secondary" fullWidth onClick={onClose}>Отмена</Button>
-                  <Button fullWidth disabled={photos.filter(f => !isVideoFile(f)).length < 1} onClick={handlePhotosReady}>
-                    {photos.filter(f => !isVideoFile(f)).length < 1 ? 'Добавь фото' : 'Готово'}
-                  </Button>
-                </div>
               </>
             )}
           </>
         )}
 
-        {addStep > 1 && (
-          <button
-            type="button"
-            onClick={() => setAddStep(addStep - 1)}
-            style={{
-              height: 32, padding: '0 10px', marginBottom: 14,
-              display: 'inline-flex', alignItems: 'center', gap: 6,
-              border: '1px solid var(--border)', borderRadius: 'var(--radius-btn)',
-              background: 'var(--white)', color: 'var(--text)', cursor: 'pointer',
-              fontSize: 13, fontWeight: 500,
-            }}
-          >
-            <ArrowLeft size={14} /> Назад
-          </button>
-        )}
-
-        {/* STEP 2 — Description */}
-        {addStep === 2 && (
+        {/* Description screen */}
+        {screen === 'desc' && (
           <>
             <div style={{ fontWeight: 600, fontSize: 16, marginBottom: 6 }}>Описание единицы</div>
             <div style={{ fontSize: 13, color: 'var(--muted)', marginBottom: 16 }}>Проверьте и отредактируйте</div>
+
+            {isProjectMode && form.purchase_mode === 'own' && (similarLoading || similar.length > 0) && (
+              <div style={{
+                background: 'var(--gold-100, #FFF7E0)', border: '1px solid var(--gold-500, #C9A55C)',
+                borderRadius: 'var(--radius-card)', padding: 12, marginBottom: 16,
+              }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 13, fontWeight: 600, color: 'var(--gold-600, #C9A55C)', marginBottom: similar.length > 0 ? 10 : 0 }}>
+                  <AlertTriangle size={15} />
+                  {similarLoading ? 'Проверяю, нет ли такого на общем складе…' : 'Похоже, такое уже есть на общем складе — проверьте, не дубль ли это'}
+                </div>
+                {similar.length > 0 && (
+                  <div style={{ display: 'flex', gap: 8, overflowX: 'auto' }}>
+                    {similar.map(u => (
+                      <div key={u.id} style={{ width: 92, flexShrink: 0 }}>
+                        <div style={{ width: 92, height: 92, borderRadius: 'var(--radius-btn)', overflow: 'hidden', border: '1px solid var(--border)', background: 'var(--bg)' }}>
+                          {u.photo_url
+                            ? <img src={u.photo_url} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+                            : <div style={{ width: '100%', height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 11, color: 'var(--muted)' }}>нет фото</div>}
+                        </div>
+                        <div style={{ fontSize: 11, color: 'var(--text)', marginTop: 4, lineHeight: 1.25, overflow: 'hidden', display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical' }}>{u.name}</div>
+                        <div style={{ fontSize: 10, color: 'var(--muted)' }}>{u._photo_match_label}</div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
 
             <div style={{ display: 'flex', gap: 8, marginBottom: 16 }}>
               {photos.map((f, i) => (
@@ -524,16 +553,11 @@ export default function AddUnitModal({
 
             <FL>Количество</FL>
             <FI type="number" value={form.qty} onChange={v => setForm(f => ({ ...f, qty: v }))} placeholder="1" />
-
-            <div style={{ display: 'flex', gap: 8 }}>
-              <Button variant="secondary" fullWidth onClick={() => setAddStep(1)}>Назад</Button>
-              <Button fullWidth disabled={!form.name.trim() || !form.category} onClick={() => setAddStep(3)}>Готово</Button>
-            </div>
           </>
         )}
 
-        {/* STEP 3 — Source, cost, warehouse / project source */}
-        {addStep === 3 && !isDetachedStockMode && (
+        {/* Placement screen (обычный склад) */}
+        {screen === 'place' && !isDetachedStockMode && (
           <>
             <div style={{ fontWeight: 600, fontSize: 16, marginBottom: 6 }}>Размещение</div>
             <div style={{ fontSize: 13, color: 'var(--muted)', marginBottom: 16 }}>Источник и место хранения</div>
@@ -580,19 +604,11 @@ export default function AddUnitModal({
               </div>
             </div>
 
-            {addError && <div style={{ color: 'var(--red)', fontSize: 13, marginBottom: 12 }}>{addError}</div>}
-
-            <div style={{ display: 'flex', gap: 8 }}>
-              <Button variant="secondary" fullWidth onClick={() => setAddStep(2)}>Назад</Button>
-              <Button fullWidth disabled={(isDirector && !form.valuation) || adding} onClick={handleAdd}>
-                {adding ? 'Сохранение...' : 'Добавить'}
-              </Button>
-            </div>
           </>
         )}
 
-        {/* STEP 3 — detached stock mode: purchase / kept */}
-        {addStep === 3 && isDetachedStockMode && (
+        {/* Source screen (площадка / админка) */}
+        {screen === 'source' && isDetachedStockMode && (
           <>
             <div style={{ fontWeight: 600, fontSize: 16, marginBottom: 6 }}>Источник</div>
             <div style={{ fontSize: 13, color: 'var(--muted)', marginBottom: 16 }}>
@@ -677,18 +693,46 @@ export default function AddUnitModal({
               </>
             )}
 
-            {addError && <div style={{ color: 'var(--red)', fontSize: 13, marginBottom: 12 }}>{addError}</div>}
-
-            <div style={{ display: 'flex', gap: 8 }}>
-              <Button variant="secondary" fullWidth onClick={() => setAddStep(2)}>Назад</Button>
-              <Button fullWidth disabled={adding ||
-                (form.purchase_mode === 'purchased' && isProjectMode && (!form.purchase_price || (!hideProjectPurchaseProof && !receiptFile)))}
-                onClick={handleAdd}>
-                {adding ? 'Сохранение...' : 'Добавить'}
-              </Button>
-            </div>
           </>
         )}
+
+        {/* Shared bottom action bar — навигация зависит от позиции экрана */}
+        {!recognizing && !bgProgress && (() => {
+          const isFirstScreen = addStep === 1
+          const isLastScreen = addStep === SCREENS.length
+          const photosCount = photos.filter(f => !isVideoFile(f)).length
+          const submitDisabled = adding
+            || (!isDetachedStockMode && isDirector && !form.valuation)
+            || (isProjectMode && form.purchase_mode === 'purchased'
+                && (!form.purchase_price || (!hideProjectPurchaseProof && !receiptFile)))
+          const nextDisabled =
+            (screen === 'desc' && (!form.name.trim() || !form.category))
+            || (screen === 'source' && isProjectMode && form.purchase_mode === 'purchased'
+                && (!form.purchase_price || (!hideProjectPurchaseProof && !receiptFile)))
+          return (
+            <>
+              {addError && <div style={{ color: 'var(--red)', fontSize: 13, marginBottom: 12 }}>{addError}</div>}
+              <div style={{ display: 'flex', gap: 8 }}>
+                <Button variant="secondary" fullWidth onClick={isFirstScreen ? onClose : () => setAddStep(addStep - 1)}>
+                  {isFirstScreen ? 'Отмена' : 'Назад'}
+                </Button>
+                {screen === 'photos' ? (
+                  <Button fullWidth disabled={photosCount < 1} onClick={handlePhotosReady}>
+                    {photosCount < 1 ? 'Добавь фото' : 'Готово'}
+                  </Button>
+                ) : isLastScreen ? (
+                  <Button fullWidth disabled={submitDisabled} onClick={handleAdd}>
+                    {adding ? 'Сохранение...' : 'Добавить'}
+                  </Button>
+                ) : (
+                  <Button fullWidth disabled={nextDisabled} onClick={() => setAddStep(addStep + 1)}>
+                    Далее
+                  </Button>
+                )}
+              </div>
+            </>
+          )
+        })()}
       </div>
     </div>
   )
