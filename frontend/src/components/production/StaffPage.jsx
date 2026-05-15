@@ -4,7 +4,7 @@ import { UserPlus, Copy, Check, X } from 'lucide-react'
 import ProductionLayout from './ProductionLayout'
 import Button from '../shared/Button'
 import Badge from '../shared/Badge'
-import { auth as authApi, invites as invitesApi } from '../../services/api'
+import { auth as authApi, invites as invitesApi, projects as projectsApi } from '../../services/api'
 import { useAuth } from '../../hooks/useAuth'
 import { useToast } from '../shared/Toast'
 import { ROLES } from '../../constants/roles'
@@ -46,6 +46,8 @@ export default function StaffPage() {
   const [inviteLink, setInviteLink] = useState('')
   const [copied, setCopied] = useState(false)
   const [inviteError, setInviteError] = useState('')
+  const [projectsList, setProjectsList] = useState([])
+  const [inviteProjectId, setInviteProjectId] = useState('')
   const inviteRoles = getInviteRoleOptions(user?.role)
 
   useEffect(() => {
@@ -54,6 +56,24 @@ export default function StaffPage() {
       .catch(() => {})
       .finally(() => setLoading(false))
   }, [])
+
+  useEffect(() => {
+    projectsApi.list().then(d => {
+      const HIDDEN = ['3xmedia', 'тестовый проект']
+      setProjectsList((d.projects || []).filter(p => !HIDDEN.includes((p.name || '').toLowerCase())))
+    }).catch(() => {})
+  }, [])
+
+  // Если модалку открыли раньше, чем подгрузились проекты — проставить дефолт.
+  useEffect(() => {
+    if (!showInvite || inviteProjectId || !projectsList.length) return
+    setInviteProjectId(
+      user?.project_id && projectsList.some(p => String(p.id) === String(user.project_id))
+        ? user.project_id
+        : projectsList[0].id
+    )
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [showInvite, projectsList])
 
   async function handleImpersonate(userId, role) {
     setSwitching(userId)
@@ -79,6 +99,11 @@ export default function StaffPage() {
 
   function openInvite() {
     setInviteRole(inviteRoles[0] || '')
+    setInviteProjectId(
+      user?.project_id && projectsList.some(p => String(p.id) === String(user.project_id))
+        ? user.project_id
+        : (projectsList[0]?.id || '')
+    )
     setInviteLink('')
     setCopied(false)
     setInviteError('')
@@ -87,11 +112,12 @@ export default function StaffPage() {
 
   async function handleGenerate() {
     if (!inviteRole) return
+    if (!inviteProjectId) { setInviteError('Выберите проект'); return }
     setGenerating(true)
     try {
       const data = await invitesApi.generate({
         role: inviteRole,
-        project_id: user?.project_id || null,
+        project_id: inviteProjectId,
         upload_rights: {},
       })
       const token = data?.invite?.token
@@ -231,6 +257,18 @@ export default function StaffPage() {
             </div>
 
             <div style={{ marginBottom: 16 }}>
+              <div style={{ fontSize: 13, fontWeight: 500, marginBottom: 6 }}>Проект</div>
+              <select value={inviteProjectId}
+                onChange={e => { setInviteProjectId(e.target.value); setInviteLink('') }}
+                style={{ width: '100%', height: 40, padding: '0 12px', border: '1px solid var(--border)', borderRadius: 'var(--radius-btn)', background: 'var(--white)', fontSize: 13, cursor: 'pointer' }}>
+                {projectsList.length === 0 && <option value="">Проектов нет</option>}
+                {projectsList.map(p => (
+                  <option key={p.id} value={p.id}>{p.name}</option>
+                ))}
+              </select>
+            </div>
+
+            <div style={{ marginBottom: 16 }}>
               <div style={{ fontSize: 13, fontWeight: 500, marginBottom: 6 }}>Роль</div>
               <select value={inviteRole}
                 onChange={e => { setInviteRole(e.target.value); setInviteLink('') }}
@@ -248,7 +286,7 @@ export default function StaffPage() {
             )}
 
             {!inviteLink ? (
-              <Button fullWidth disabled={!inviteRole || generating} onClick={handleGenerate}>
+              <Button fullWidth disabled={!inviteRole || !inviteProjectId || generating} onClick={handleGenerate}>
                 {generating ? 'Генерация...' : 'Создать ссылку'}
               </Button>
             ) : (
