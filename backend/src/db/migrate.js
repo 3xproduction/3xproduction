@@ -18,18 +18,25 @@ async function migrate() {
     const dir = path.join(__dirname, 'migrations')
     const files = fs.readdirSync(dir).filter(f => f.endsWith('.sql')).sort()
 
-    for (const file of files) {
-      const { rows } = await client.query(
-        'SELECT id FROM _migrations WHERE filename = $1', [file]
-      )
-      if (rows.length > 0) {
-        console.log(`  skip: ${file}`)
-        continue
-      }
+    // Migrations run on container start (Dockerfile CMD). Serverless can boot
+    // several instances at once, so the check+apply+record runs inside a
+    // transaction guarded by a transaction-scoped advisory lock. xact locks
+    // auto-release on COMMIT/ROLLBACK and are safe through PgBouncer.
+    const LOCK_KEY = 320677 // arbitrary fixed key for the migration runner
 
+    for (const file of files) {
       const sql = fs.readFileSync(path.join(dir, file), 'utf8')
       await client.query('BEGIN')
       try {
+        await client.query('SELECT pg_advisory_xact_lock($1)', [LOCK_KEY])
+        const { rows } = await client.query(
+          'SELECT id FROM _migrations WHERE filename = $1', [file]
+        )
+        if (rows.length > 0) {
+          await client.query('ROLLBACK')
+          console.log(`  skip: ${file}`)
+          continue
+        }
         await client.query(sql)
         await client.query('INSERT INTO _migrations (filename) VALUES ($1)', [file])
         await client.query('COMMIT')

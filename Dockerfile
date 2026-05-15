@@ -21,4 +21,7 @@ RUN cd frontend && npx vite build --mode ${BUILD_MODE}
 
 EXPOSE 3000
 
-CMD ["node", "backend/src/index.js"]
+# Apply pending DB migrations on boot (container is inside the VPC and can
+# reach managed-PG), then start the server. Migration runner is guarded by a
+# transaction advisory lock so concurrent serverless instances are safe.
+CMD ["sh", "-c", "node backend/src/db/migrate.js && node backend/src/index.js"]
