@@ -44,8 +44,8 @@ const SCHEMA_CHECKS = [
   ['table', 'requests'], ['table', 'issuances'], ['table', 'debts'],
   ['table', 'project_loan_requests'], ['table', 'warehouse_return_requests'],
   ['table', 'handovers'], ['table', 'writeoffs'], ['table', 'search_synonyms'],
-  ['table', 'unit_photos'], ['table', 'public_users'], ['table', 'casting_actors'],
-  ['col', 'units.period'], ['col', 'units.is_misplaced'],
+  ['table', 'unit_photos'], ['table', 'public_users'], ['table', 'casting_cards'],
+  ['col', 'units.period'], ['col', 'units.misplaced'],
   ['col', 'units.is_admin_stock'], ['col', 'unit_photos.thumb_url'],
   ['col', 'units.pending_transfer'], ['col', 'users.phone'],
 ]
