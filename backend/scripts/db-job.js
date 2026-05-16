@@ -39,8 +39,22 @@ async function readBlock(client) {
         WHERE lower(trim(name)) ~ 'шеф|закон|тайг|опасн' ORDER BY name`),
     varya_candidates: await q(`SELECT id,name,role,project_id FROM users
         WHERE lower(name) LIKE '%бартнов%' OR lower(name) LIKE '%варвар%' ORDER BY name`),
-    warehouses_217_513: await q(`SELECT id,name,project_id FROM warehouses
-        WHERE name ~ '217|513' ORDER BY name`),
+    warehouses_217_513: await q(`SELECT w.id,w.name,w.project_id,p.name AS project_name
+        FROM warehouses w LEFT JOIN projects p ON p.id=w.project_id
+        WHERE w.name ~ '217|513' ORDER BY w.name`),
+    sections_217_513: await q(`SELECT s.id,s.name,s.type,
+        (CASE WHEN EXISTS(SELECT 1 FROM information_schema.columns
+           WHERE table_name='warehouse_sections' AND column_name='project_id')
+         THEN s.project_id END) AS project_id
+        FROM warehouse_sections s
+        WHERE s.name ~ '217|513' ORDER BY s.name`),
+    units_in_217_513: (await q(`SELECT count(*)::int c FROM units u
+        LEFT JOIN warehouses w ON w.id=u.warehouse_id
+        LEFT JOIN cells c ON c.id=u.cell_id
+        LEFT JOIN warehouse_sections s ON s.id=c.section_id
+        LEFT JOIN warehouse_sections h ON h.id=s.parent_section_id
+        WHERE lower(concat_ws(' ',w.name,h.name,s.name,c.custom_name,c.code))
+              ~ '(^|[^0-9])(217|513)([^0-9]|$)'`))[0].c,
   }
 }
 

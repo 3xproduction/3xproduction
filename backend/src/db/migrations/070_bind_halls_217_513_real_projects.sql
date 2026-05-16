@@ -65,6 +65,30 @@ BEGIN
        AND w.project_id IS DISTINCT FROM v_zakon;
   END IF;
 
+  -- (2b) Если 217/513 — это warehouse_sections (зал/hall), а не warehouses:
+  -- секции исторически НЕ несли project_id (см. 065). Добавляем идемпотентно
+  -- и привязываем зал-секцию к нужному проекту. Аддитивно и безопасно.
+  ALTER TABLE warehouse_sections ADD COLUMN IF NOT EXISTS project_id
+    UUID REFERENCES projects(id) ON DELETE SET NULL;
+
+  IF v_opasny IS NOT NULL THEN
+    UPDATE warehouse_sections s SET project_id = v_opasny
+     WHERE s.name ~ '(^|[^0-9])217([^0-9]|$)'
+       AND s.project_id IS DISTINCT FROM v_opasny;
+  END IF;
+  IF v_chef IS NOT NULL THEN
+    UPDATE warehouse_sections s SET project_id = v_chef
+     WHERE s.name ~ '(^|[^0-9])513([^0-9]|$)'
+       AND (lower(s.name) LIKE '%шеф%')
+       AND s.project_id IS DISTINCT FROM v_chef;
+  END IF;
+  IF v_zakon IS NOT NULL THEN
+    UPDATE warehouse_sections s SET project_id = v_zakon
+     WHERE s.name ~ '(^|[^0-9])513([^0-9]|$)'
+       AND (lower(s.name) LIKE '%закон%' AND lower(s.name) LIKE '%тайг%')
+       AND s.project_id IS DISTINCT FROM v_zakon;
+  END IF;
+
   -- (3) Переотнести on_stock-единицы, физически лежащие в зале 217/513, на
   -- склад нужного реального проекта (как 066, но с правильными проектами).
   WITH located_units AS (
