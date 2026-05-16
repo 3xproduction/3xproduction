@@ -1,14 +1,41 @@
 # CLAUDE.md
 
-> Новая Claude/Codex-сессия: один раз прочитай `CODEX.md` в корне проекта, затем `C:\Users\Editor08\wiki\schema\index.md` и только профильные wiki-страницы по задаче. Если контекст уже загружен, не перечитывай `CLAUDE.md`, `CODEX.md` и wiki на каждое ревью.
+> Новая сессия: прочитай `C:\Users\Editor08\wiki\schema\index.md` и только профильные страницы из `C:\Users\Editor08\wiki\wiki\` по задаче. Если контекст уже загружен — не перечитывай CLAUDE.md и wiki целиком на каждую мелкую правку.
 
-## Baseline
+## Источник истины
 
-**Единый источник истины по состоянию проекта — `CODEX.md`** (разделы «Committed Baseline», «Active Deployment Snapshot», «Shipped scope», «Prod-DB изменения»). Здесь baseline НЕ дублируется, чтобы не было рассинхрона: актуальные версии prod/staging, ревизии, что задеплоено и что менялось в prod-БД — всегда смотри в `CODEX.md`. Этот файл (`CLAUDE.md`) содержит только Claude-специфичные правила работы (команды, архитектура, do/don't).
+**Единый источник истины — этот `CLAUDE.md` + `C:\Users\Editor08\wiki\`.** `CODEX.md` удалён (был вторым конфликтующим доком и отставал от реальности на несколько версий).
 
-Общие принципы: не использовать dirty worktree как источник shipped-контекста; committed-состояние — через `git show HEAD:<path>`; staging и prod — разные линии тегов (`test-vN` ≠ авто prod `vN`).
+**Состояние деплоя (версии/ревизии prod и staging) НЕ берётся из доков** — любой снапшот в файлах = «не позднее чем». Точное состояние всегда сверять живым облаком:
 
-> Деплой: ВСЕГДА сначала staging, прод — только по явной отмашке пользователя (каждый раз отдельно). Скрипты деплоя берут `ANTHROPIC_BASE_URL="${ANTHROPIC_BASE_URL:-<прокси>}"` — если в шелле экспортнут `api.anthropic.com`, его НАДО переопределять на прокси (`ANTHROPIC_BASE_URL='https://anthropic-proxy.pavelbelov590.workers.dev'` перед `bash scripts/deploy-*.sh`), иначе прод/стейдж AI падает с гео-403.
+```bash
+yc serverless container revision list --container-name xproduction        # prod
+yc serverless container revision list --container-name xproduction-test   # staging
+```
+
+Общие принципы: dirty worktree — не источник shipped-истины; committed-состояние — через `git show HEAD:<path>`; staging и prod — разные линии тегов (`test-vN` ≠ авто prod `vN`).
+
+## Deploy (простой, без ритуала)
+
+Лёгкая модель — одна команда, без обязательного review-gate:
+
+```bash
+bash scripts/deploy-staging.sh <ver>   # → :test-v<ver>, build --no-cache + push + revision + smoke
+bash scripts/deploy-prod.sh   <ver>    # → :v<ver>, то же + интерактивное yes-подтверждение
+```
+
+- **Прокси Anthropic ЖЁСТКО зашит в обоих скриптах.** Контейнер в РФ-egress: прямой `api.anthropic.com` гео-блок (403) роняет все AI-фичи. Ничего экспортить/переопределять перед деплоем НЕ нужно — ритуал убран.
+- **test → prod:** ВСЕГДА сначала staging; прод — только по явной отмашке пользователя, каждый раз отдельно (не переносится на следующий деплой).
+- **Review-gate удалён полностью** (Codex/Claude review-сабсистема, `.codex/`, `*review*.ps1`, `gate`, guarded-обёртки — всё снято за неактуальностью). Claude в этом проекте ВСЕГДА исполнитель (пишет код, деплоит), не ревьюер. Никакого вердикта/пакета ждать не нужно.
+- `docker push` сам по себе ничего не деплоит — нужна `revision deploy` (это делает скрипт). `npm run deploy:staging -- <ver>` / `deploy:prod -- <ver>` — обёртки над теми же `.sh`.
+- Деплой-детали (env, секреты Lockbox, smoke, откат) — `C:\Users\Editor08\wiki\wiki\deployment.md`.
+
+## Миграции и prod-БД (корень прошлых 502)
+
+- **НИКОГДА не запускать миграции на старте контейнера (boot-migrate).** Прод подняли ДО трекинга миграций → прод-`_migrations` неполная → boot-migrate переигрывает неидемпотентные 001–066 → крэш → prod 502. Dockerfile CMD = только `node backend/src/index.js`.
+- Новые миграции (`>=067`) применяются ВНЕ деплоя изолированным одноразовым job — `backend/scripts/db-job.js` (in-VPC, только `>=067`, одна транзакция, ROLLBACK при изменении остатков).
+- Фундаментальный фикс (разовая сверка prod-`_migrations`: пометить 001–066 applied без выполнения) — `backend/scripts/reconcile-migrations.js`, режимы `audit`/`apply`, только tracking-таблица, guard по бизнес-счётчикам. **Отложен** до поднятого Docker (делать безопасным in-VPC job-контейнером, НЕ toggle-ингом public-IP).
+- Prod-БД/YC/Object Storage/Container Registry — любые изменения только по явному OK + обязательный бэкап прод-БД заранее. Toggle public-IP прод-PG рискован (cold-start 502 на проде/стейдже в окне реконфига) — путь через изолированный in-VPC job предпочтительнее public-IP.
 
 ## Project
 
@@ -41,7 +68,7 @@ npm.cmd run build
 backend/src/
   index.js                 Express routes/static, helmet/CORS/rate-limit
   logger.js                pino/pino-http, sensitive redact
-  db/migrations/           committed migrations 001-066
+  db/migrations/           committed migrations 001-069 (069 — последняя на ветке)
   routes/                  units, projectUnits, colleagues, handovers, rent, publicRent, search, etc.
 frontend/src/
   App.jsx                  router, warehouse/production worlds

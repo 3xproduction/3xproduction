@@ -3,12 +3,7 @@
   "scripts": {
     "build": "cd backend && npm install && cd ../frontend && npm install --include=dev && npm run build",
     "start": "cd backend && node src/index.js",
-    "review": "powershell -ExecutionPolicy Bypass -File scripts/codex-review.ps1",
-    "review:auto": "powershell -ExecutionPolicy Bypass -File scripts/claude-review.ps1",
-    "review:fast": "powershell -ExecutionPolicy Bypass -File scripts/claude-fast-review.ps1",
-    "review:claude": "powershell -ExecutionPolicy Bypass -File scripts/claude-review.ps1",
-    "gate": "powershell -ExecutionPolicy Bypass -File scripts/pre-deploy-check.ps1",
-    "deploy:staging:guarded": "powershell -ExecutionPolicy Bypass -File scripts/deploy-staging-guarded.ps1",
-    "deploy:prod:guarded": "powershell -ExecutionPolicy Bypass -File scripts/deploy-prod-guarded.ps1"
+    "deploy:staging": "\"C:\\Program Files\\Git\\bin\\bash.exe\" scripts/deploy-staging.sh",
+    "deploy:prod": "\"C:\\Program Files\\Git\\bin\\bash.exe\" scripts/deploy-prod.sh"
   }
 }

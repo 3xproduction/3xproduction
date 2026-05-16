@@ -60,19 +60,10 @@ bash scripts/with-prod-pg-access.sh "
 - На этапе `docker push` — проверить `yc container registry configure-docker`, перезапустить.
 - На этапе `revision deploy` — старая ревизия продолжает обслуживать трафик. Откатить новую через YC Console (см. wiki/deployment.md).
 
-## Codex/Claude review gate
+## Review-gate удалён
 
-Перед деплоем можно прогонять независимое ревью Claude Code.
-
-| Команда | Назначение |
-|---|---|
-| `npm.cmd run review` | Создать `.codex/reviews/REVIEW_PACKET.md` для Claude. |
-| `npm.cmd run review:fast -- -Task "..." -Focus "file1,file2"` | Быстрое ревью маленькой задачи: компактный prompt, stdin-запуск Claude CLI, timeout 10 минут. |
-| `npm.cmd run review:auto` / `npm.cmd run review:claude` | Headless Claude CLI через общий runner, stdin, async stdout/stderr и timeout 30 минут; сохраняет `.codex/reviews/CLAUDE_REVIEW.md`. |
-| `npm.cmd run gate` | Frontend lint/build + проверка свежего `Verdict: PASS` от Claude. |
-| `npm.cmd run deploy:staging:guarded -- 2.66` | Gate, затем staging deploy версии `:test-v2.66`. |
-
-Для маленьких задач сначала использовать fast-режим. Он не заставляет Claude перечитывать `CLAUDE.md`, `CODEX.md`, wiki и весь dirty worktree.
-Всегда передавайте `-Focus` для реальной задачи: если его не указать, скрипт берёт только первые 12 dirty-файлов из `git diff --name-only`, а в большом WIP это может быть не тот набор.
-
-Ручной fallback: после `npm.cmd run review` открыть Claude Code в корне проекта и написать `ревью`. Правило в `CLAUDE.md` заставит Claude прочитать пакет и записать результат в `.codex/reviews/CLAUDE_REVIEW.md`.
+Codex/Claude review-сабсистема (`.codex/`, `*review*.ps1`, `pre-deploy-check.ps1`,
+guarded-обёртки, npm `review*`/`gate`/`deploy:*:guarded`) снята за неактуальностью.
+Claude в этом проекте — исполнитель, не ревьюер. Деплой = напрямую `bash
+scripts/deploy-staging.sh <ver>` (или `npm.cmd run deploy:staging -- <ver>`),
+без обязательной проверки. Единый источник истины — `CLAUDE.md` + `C:\Users\Editor08\wiki\`.

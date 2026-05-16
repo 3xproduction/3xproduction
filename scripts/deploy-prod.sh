@@ -44,12 +44,12 @@ if [[ -n "$(git status --porcelain)" ]]; then
   exit 1
 fi
 
-ANTHROPIC_ENV_ARGS=()
-ANTHROPIC_BASE_URL="${ANTHROPIC_BASE_URL:-https://anthropic-proxy.pavelbelov590.workers.dev}"
-ANTHROPIC_ENV_ARGS+=(--environment "ANTHROPIC_BASE_URL=${ANTHROPIC_BASE_URL}")
-if [[ -n "${ANTHROPIC_PROXY_URL:-}" ]]; then
-  ANTHROPIC_ENV_ARGS+=(--environment "ANTHROPIC_PROXY_URL=${ANTHROPIC_PROXY_URL}")
-fi
+# Контейнер крутится в YC с РФ-egress: прямой api.anthropic.com гео-блокируется
+# (403 Request not allowed) и роняет ВСЕ AI-фичи. Прокси ЖЁСТКО зашит и НЕ
+# читается из шелла: иначе экспортнутый агентом ANTHROPIC_BASE_URL=
+# api.anthropic.com молча уезжает в прод. Другого валидного значения нет —
+# деплой запускается одной командой, без ритуала с переопределением переменной.
+ANTHROPIC_ENV_ARGS=(--environment "ANTHROPIC_BASE_URL=https://anthropic-proxy.pavelbelov590.workers.dev")
 
 echo ""
 echo "==================================================="
