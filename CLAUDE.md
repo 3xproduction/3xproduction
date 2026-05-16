@@ -32,10 +32,15 @@ bash scripts/deploy-prod.sh   <ver>    # → :v<ver>, то же + интерак
 
 ## Миграции и prod-БД (корень прошлых 502)
 
-- **НИКОГДА не запускать миграции на старте контейнера (boot-migrate).** Прод подняли ДО трекинга миграций → прод-`_migrations` неполная → boot-migrate переигрывает неидемпотентные 001–066 → крэш → prod 502. Dockerfile CMD = только `node backend/src/index.js`.
-- Новые миграции (`>=067`) применяются ВНЕ деплоя изолированным одноразовым job — `backend/scripts/db-job.js` (in-VPC, только `>=067`, одна транзакция, ROLLBACK при изменении остатков).
-- Фундаментальный фикс (разовая сверка prod-`_migrations`: пометить 001–066 applied без выполнения) — `backend/scripts/reconcile-migrations.js`, режимы `audit`/`apply`, только tracking-таблица, guard по бизнес-счётчикам. **Отложен** до поднятого Docker (делать безопасным in-VPC job-контейнером, НЕ toggle-ингом public-IP).
-- Prod-БД/YC/Object Storage/Container Registry — любые изменения только по явному OK + обязательный бэкап прод-БД заранее. Toggle public-IP прод-PG рискован (cold-start 502 на проде/стейдже в окне реконфига) — путь через изолированный in-VPC job предпочтительнее public-IP.
+- **НИКОГДА не запускать миграции на старте контейнера (boot-migrate).** Это политика. (Раньше прод подняли ДО трекинга миграций → прод-`_migrations` была неполная → boot-migrate переигрывал неидемпотентные 001–066 → prod 502.) Dockerfile CMD = только `node backend/src/index.js`.
+- **Прод-`_migrations` сверена (2026-05-16):** 001–066 помечены applied (data-уровень починен, `reconcile-migrations.js`). Класс «boot-migrate 502» устранён по данным, но политика «миграции вне деплоя» сохраняется. **Не повторять reconcile.**
+- Коммитнутые миграции: **001–072**. Новые миграции (`>=067`) применяются ВНЕ деплоя безопасным in-VPC одноразовым job:
+  1. `docker build -f Dockerfile.dbjob -t cr.yandex/crp71f1brhdu87cfbr2i/3xproduction:dbjobNN .` + `docker push` (минимальный образ, без фронта — быстро).
+  2. `yc serverless container create --name xproduction-dbjob` (+`allow-unauthenticated-invoke`), `revision deploy` с `--image dbjobNN --network-id enpib623e5laqanui28p --secret DATABASE_URL=<prod|staging-secrets>`.
+  3. `curl` URL контейнера → JSON: `backend/scripts/db-job.js` применяет все `>=67` отсутствующие в `_migrations` в ОДНОЙ транзакции, ROLLBACK при изменении `units_total/qty_sum/written_off`; печатает before/after.
+  4. `yc serverless container delete --name xproduction-dbjob`.
+  - **In-VPC = БЕЗ public-IP toggling** (через `--network-id`). public-IP путь медленный/флапает + рискует cold-start 502 — не использовать, если есть Docker.
+- Prod-БД/YC/Object Storage/Container Registry — любые изменения только по явному OK + **обязательный свежий бэкап прод-БД заранее** (`yc managed-postgresql cluster backup postgresql467 --async`, дождаться `done`). Бизнес-данные миграциями не трогать (только tracking/идемпотентные правки под guard).
 
 ## Project
 
@@ -68,7 +73,7 @@ npm.cmd run build
 backend/src/
   index.js                 Express routes/static, helmet/CORS/rate-limit
   logger.js                pino/pino-http, sensitive redact
-  db/migrations/           committed migrations 001-069 (069 — последняя на ветке)
+  db/migrations/           committed migrations 001-072 (072 — последняя)
   routes/                  units, projectUnits, colleagues, handovers, rent, publicRent, search, etc.
 frontend/src/
   App.jsx                  router, warehouse/production worlds
@@ -86,7 +91,9 @@ frontend/src/
 - Project warehouse: `routes/projectUnits.js`; project-kept units `is_project_kept=true`. `GET /project-units` — UNION 3 источников (`own` / `from_warehouse` / `from_project`) с фильтром `?source=`. Купленные проектом — `purchased=true`; warehouse-сводка по ним — `GET /project-units/purchased-by-projects` (модуль «Куплено» на дашборде).
 - Colleagues/loans: `routes/colleagues.js`, `project_loan_requests`, `LoanRequestsSection`.
 - Handovers: `routes/handovers.js`, `HandoversPage`, tab in `ProjectWarehouseHub`.
-- Warehouse map: `frontend/src/components/warehouse/cells/*`, `routes/warehouses.js`, migrations `039`, `051`, `054`, `055`.
+- Warehouse map: `frontend/src/components/warehouse/cells/*`, `routes/warehouses.js`, migrations `039`, `051`, `054`, `055`. Зал = `warehouse_sections type='hall'`; дочерние секции (`shelf/hanger/place`) через `parent_section_id`; зал-вью показывает дочерние секции, не ячейки напрямую.
+- **Зал ↔ проекты (M2M):** канонично — таблица `section_projects(section_id, project_id)` (миграция `072`, как `user_projects`): один зал может обслуживать несколько проектов. Текущее: 217→Опасный-2, **513→{Шеф-8, Закон тайги-3}**. `warehouse_sections.project_id` (миграция `070`) — легаси, **никаким кодом не потребляется** (организационная метка); реальная привязка единиц к проекту — через `units.project_id`+`is_project_kept`. Будущая логика «ячейка на художника по костюмам» должна опираться на `section_projects`.
+- Project-kept единицы обычно без места (`cell_id=NULL`) → видны в складе проекта, но НЕ в зале. Разовое исключение (`071`): 21 ед. «Опасный-2» помещены в секцию «Временная вешалка» зала 217 (cell_id задан, `is_project_kept` сохранён) → видны и в зале 217, и в складе проекта.
 - Public rent: `routes/publicRent.js`, `routes/rent.js`, `PublicWarehousePage`, `PublicUnitCardModal`.
 - PWA/logging: `frontend/public/manifest.webmanifest`, `sw.js`, `frontend/src/main.jsx`, `backend/src/logger.js`.
 
