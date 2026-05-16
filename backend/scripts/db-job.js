@@ -25,7 +25,13 @@ let RESULT = { status: 'pending' }
 
 async function readBlock(client) {
   const q = async (sql) => (await client.query(sql)).rows
+  const spExists = (await q(`SELECT to_regclass('public.section_projects') t`))[0].t
   return {
+    section_projects: spExists ? await q(`SELECT ws.name AS section, p.name AS project
+        FROM section_projects sp
+        JOIN warehouse_sections ws ON ws.id = sp.section_id
+        JOIN projects p ON p.id = sp.project_id
+        ORDER BY ws.name, p.name`) : null,
     stock: (await q(`SELECT count(*)::int units_total,
         count(*) FILTER (WHERE is_project_kept)::int project_kept,
         count(*) FILTER (WHERE status='written_off')::int written_off,
