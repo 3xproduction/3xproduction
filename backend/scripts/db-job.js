@@ -43,9 +43,7 @@ async function readBlock(client) {
         FROM warehouses w LEFT JOIN projects p ON p.id=w.project_id
         WHERE w.name ~ '217|513' ORDER BY w.name`),
     sections_217_513: await q(`SELECT s.id,s.name,s.type,
-        (CASE WHEN EXISTS(SELECT 1 FROM information_schema.columns
-           WHERE table_name='warehouse_sections' AND column_name='project_id')
-         THEN s.project_id END) AS project_id
+        (to_jsonb(s) ->> 'project_id') AS project_id
         FROM warehouse_sections s
         WHERE s.name ~ '217|513' ORDER BY s.name`),
     units_in_217_513: (await q(`SELECT count(*)::int c FROM units u
